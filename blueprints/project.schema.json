@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Storyroom project v1",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "title",
+    "profile",
+    "format",
+    "brief",
+    "people",
+    "assets",
+    "scenes",
+    "voiceover",
+    "srt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "enum": [
+        "investigative",
+        "courtroom",
+        "interview",
+        "memorial"
+      ]
+    },
+    "format": {
+      "enum": [
+        "landscape",
+        "portrait"
+      ]
+    },
+    "brief": {
+      "type": "string"
+    },
+    "people": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "role",
+          "aliases"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "kind",
+          "source",
+          "people",
+          "verified",
+          "rights"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "video",
+              "image"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "rights": {
+            "enum": [
+              "unreviewed",
+              "permission",
+              "licensed",
+              "public_domain",
+              "reviewed_other"
+            ]
+          }
+        }
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "frame_in",
+          "frame_out",
+          "narration",
+          "focus",
+          "asset_id",
+          "approved"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "frame_in": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "frame_out": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "narration": {
+            "type": "string"
+          },
+          "focus": {
+            "type": "string"
+          },
+          "asset_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "voiceover": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "srt": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  }
+}
