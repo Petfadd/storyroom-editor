@@ -130,6 +130,9 @@ def check(p,final=False):
   if not s['focus'].strip():errors.append(pre+'set the story focus.')
   if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
   if final and (a['rights']=='unreviewed' or not a['notes'].strip()):errors.append(pre+'document the rights/reuse decision and notes before final export.')
+ flow=p.get('picture_flow') or {}
+ from picture_flow import outstanding_notes
+ notes.extend(outstanding_notes(flow))
  if not final and any(not s['approved'] for s in p['scenes']):notes.append('Review export only. Scene approval and rights review are required for final delivery.')
  return {'errors':errors,'notes':notes,'can_export':not errors,'final':final}
 
@@ -154,6 +157,9 @@ def public(p):
  try:d['automatic_status']=json.loads(status_path.read_text()) if status_path.exists() else {'status':'idle','detail':''}
  except (OSError,ValueError):d['automatic_status']={'status':'idle','detail':''}
  d['inputs_ready']=bool(p.get('srt') and p.get('voiceover') and p.get('production_script') and p.get('assets'))
+ d['picture_flow']=p.get('picture_flow') or None
+ d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
+ d['flow_summary']=(p.get('picture_flow') or {}).get('summary') or {}
  return d
 
 @app.get('/')
@@ -439,6 +445,8 @@ def build(pid):
   from edl import signature
   p['assembly_signature']=signature(p)
   p['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
+  from picture_flow import apply_flow
+  p['picture_flow']=apply_flow(p,folder(pid))
   if p.get('picture_policy')=='clips_only':
    from automatic import validate_assembly
    decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
@@ -455,11 +463,12 @@ def edit_scene(pid,sid):
   if 'asset_id' in d:
    if d['asset_id'] is not None and not any(a['id']==d['asset_id'] for a in p['assets']):raise BadRequest('Asset does not belong to this production.')
    s['asset_id']=d['asset_id']
+  moved_in_point=False
   if 'in_s' in d:
    try:n=float(d['in_s'])
    except (TypeError,ValueError):raise BadRequest('Source in-point must be a number.')
    if not math.isfinite(n) or n<0:raise BadRequest('Source in-point must be a nonnegative finite number.')
-   s['in_s']=n
+   moved_in_point=abs(n-float(s.get('in_s') or 0))>.001;s['in_s']=n
   if d.get('motion') in ['auto','push','pull','pan-left','pan-right','rise','reveal']:
    if d['motion']!='auto' and d['motion']!=s.get('motion'):s.pop('script_camera',None)
    s['motion']=d['motion']
@@ -470,6 +479,7 @@ def edit_scene(pid,sid):
   if p.get('transition_policy')=='clean_cuts_only':s['transition']='cut';s['transition_handle_frames']=0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
+  if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
   save(p);return jsonify(public(p))
 
 @app.post('/api/projects/<pid>/scenes/<sid>/split')
@@ -567,6 +577,16 @@ def download_cut_audit(pid):
  if request.args.get('format')=='json':return jsonify(result)
  output=io.StringIO();fields=list(result['rows'][0]) if result['rows'] else ['scene','status'];writer=csv.DictWriter(output,fieldnames=fields);writer.writeheader();writer.writerows(result['rows'])
  return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="cut-audit.csv"'})
+
+@app.get('/api/projects/<pid>/flow-audit')
+def download_flow_audit(pid):
+ from picture_flow import csv_rows,apply_flow
+ import csv,io
+ from flask import Response
+ p=load(pid);report=p.get('picture_flow') or apply_flow(copy.deepcopy(p),folder(pid),snap=False)
+ if request.args.get('format')=='json':return jsonify(report)
+ rows=csv_rows(report);output=io.StringIO();writer=csv.writer(output);writer.writerows(rows)
+ return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="flow-audit.csv"'})
 
 def thumbnail_key(scene,asset,path):
  path=Path(path);stat=path.stat();key=hashlib.sha256(json.dumps([asset['id'],asset['path'],stat.st_size,stat.st_mtime_ns,round(scene['in_s']*1000000)]).encode()).hexdigest()[:24]

@@ -12,6 +12,7 @@ A local Flask application that builds an SRT-driven video storyboard from upload
 - Clips-only picture; no generated stills or blank slots.
 - Clean cuts only; no dissolves or transition handles.
 - Six-slot cooldown against repeating the same shot or overlapping source interval.
+- Cut conformance: every picture beat is kept inside one decoded shot of its source, and cuts are eased into the narrator's breaths (see below).
 - Original narration and SRT timing are preserved.
 - Source audio is muted; added captions are off.
 - Document/validator checks are separate from semantic identity or rights verification.
@@ -35,6 +36,28 @@ Open `http://localhost:8003`.
 
 The server binds to `0.0.0.0:8003`. It creates a `projects/` directory beside `app.py` for local project data.
 
+## Narration and footage flow
+
+After a storyboard is built, `picture_flow.py` runs two passes and stores the result in
+`project.json` and `reviews/Narration_pauses.json`:
+
+1. **Picture flow.** Every beat is checked against the decoded shot index of its own
+   source (`reviews/Full_source_analysis.json`). A beat whose requested interval merely
+   *crosses* a shot change is slid to the nearest moment that holds the whole beat inside
+   one continuous shot; a beat that returns to the take the previous beat was running is
+   joined to it rather than jump-cutting in place.
+2. **Narration flow.** Silences in the uploaded narration are decoded with `ffmpeg
+   silencedetect`, and each picture change may move by at most 0.35 s to land inside a
+   breath. Duration, SRT wording and the narration audio are never altered; a block that
+   ends up straddling a cut is owned by exactly one scene so nothing is spoken twice.
+
+Beats that cannot be placed cleanly are reported, never faked: nothing is trimmed,
+stretched, looped or frozen. The report is available at
+`GET /api/projects/<id>/flow-audit` (JSON, or CSV with `?download=1`) and is summarised in
+the setup panel and the shot inspector. Any in-point you edit by hand overrides the
+automatic conform for that beat. These checks describe continuity and cut placement only;
+they say nothing about who or what a frame shows.
+
 ## Validate a production package
 
 ```sh
@@ -53,6 +76,7 @@ The third argument may instead be a JSON map of original filename to duration in
 | `document_plan.py`, `edl.py`, `production.py`, `conform.py` | Production-script / EDL parsing and source binding |
 | `approval.py`, `reviewed_library.py`, `import_status.py` | Automatic approval and upload-progress helpers |
 | `cut_audit.py`, `validate_production_package.py` | Timing/source checks |
+| `picture_flow.py` | Shot-continuity conform and narration-breath cut easing |
 | `static/` | Editor and studio UI |
 | `templates/` | Single-page editor shell |
 | `blueprints/` | Style profiles, project schema and editorial rules |
