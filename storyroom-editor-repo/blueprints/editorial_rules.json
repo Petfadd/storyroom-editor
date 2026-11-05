@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "purpose": "Reusable editorial standards, not copied case decisions",
+  "verification": "User-attested identity/context, with source recorded; never automatic factual or face verification",
+  "named_people": "Use matching registered names; unverified wide context requires explicit disclosure and no substituted identity",
+  "review_export": "Requires assignments, verification, physical ranges, valid handles, focus, brief and narration timing",
+  "final_export": "Additionally requires per-scene editorial approval and rights/reuse notes",
+  "audio": "One continuous original voiceover; source-video audio muted in this initial workspace",
+  "captions": "Clean MP4, original separate SRT; no burn-in",
+  "motion": "Distinct deterministic proposals; review each scene; native action for live video",
+  "transitions": "Clean cuts by default; optional 4-frame dissolve pairs with genuine continuation handles; no adjacent dissolve pairs",
+  "repetition": "No overlapping selected video intervals, including handles; different reports may contain identical underlying footage, not globally certified",
+  "framing": "Unstretched foreground and blurred background; prepared image canvas protects headroom",
+  "scope": "Local trusted-user workspace; no multi-user authentication or cloud storage built in",
+  "approval_invalidation": "Brief, identity-register or narration changes reset scene approval; asset edits reset affected scene approvals."
+}
