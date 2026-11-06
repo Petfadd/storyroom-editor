@@ -31,14 +31,18 @@ def timecode_ms(value,label):
  return int(total*1000)
 
 def normalize_rows(rows):
- aliases={'beat':'beat_id','scene':'beat_id','local_file':'source_file','media_filename':'source_file','timeline_out_ms_excl':'timeline_out_ms','source_in_ms_planned':'source_in_ms','source_out_ms_excl_planned':'source_out_ms','narration':'narration_text','required_visual':'visible_content','match_rationale':'match_reason'}
+ aliases={'beat':'beat_id','scene':'beat_id','local_file':'source_file','media_filename':'source_file','media':'media_file','file':'media_file','source':'media_file','source_file_name':'media_file','media_file_name':'media_file','in':'source_in','out':'source_out','source_in_time':'source_in','source_out_time':'source_out','timeline_out_ms_excl':'timeline_out_ms','source_in_ms_planned':'source_in_ms','source_out_ms_excl_planned':'source_out_ms','narration':'narration_text','required_visual':'visible_content','match_rationale':'match_reason'}
  converted=[]
  for i,raw in enumerate(rows,1):
   if not isinstance(raw,dict):raise ValueError(f'Row {i}: expected a beat object.')
-  if None in raw:raise ValueError(f'Row {i}: too many CSV cells. Quote fields containing commas, including SRT arrays.')
+  if None in raw:raise ValueError(f'Row {i}: too many CSV cells. Quote any field that contains a comma (timecodes may be written 00:00:05.400 instead).')
   row={str(k).strip().lower().replace(' ','_'):v for k,v in raw.items()}
-  if all(k in row for k in ['block','start','end','beat','media_file','source_in','source_out']):
-   row.update(map_type='srt_block',parent_beat_id=str(integer(row['beat'],f'Row {i}: parent beat')),beat_id='SRT-'+str(row['block']).zfill(3),srt_blocks=[integer(row['block'],f'Row {i}: block')],timeline_in=row['start'],timeline_out=row['end'],source_file=row['media_file'],source_out_excl=row['source_out'],visual_status=row.get('status',''))
+  for old,new in aliases.items():
+   if old in row:
+    if new in row and row[new] not in [None,'',row[old]]:raise ValueError(f'Row {i}: conflicting {old} / {new} columns.')
+    row.setdefault(new,row[old])
+  if all(k in row for k in ['block','start','end','beat','source_in','source_out']) and ('media_file' in row or 'source_file' in row):
+   row.update(map_type='srt_block',parent_beat_id=str(integer(row['beat'],f'Row {i}: parent beat')),beat_id='SRT-'+str(row['block']).zfill(3),srt_blocks=[integer(row['block'],f'Row {i}: block')],timeline_in=row['start'],timeline_out=row['end'],source_file=row.get('media_file') or row.get('source_file'),source_out_excl=row['source_out'],visual_status=row.get('status',''))
    row.pop('beat',None) # parent beat is deliberately not a unique picture-row identifier.
    if i==1:row.setdefault('import_notes',[]).append('SRT block map: one scene per block; parent_beat_id links production instructions. Source times come from this map, not inferred filename order.')
   for key in ['import_notes','import_blockers']:
@@ -47,11 +51,7 @@ def normalize_rows(rows):
     try:row[key]=json.loads(value) if value else []
     except ValueError:row[key]=[value]
    if key in row and (not isinstance(row[key],list) or any(not isinstance(v,str) for v in row[key])):raise ValueError(f'Row {i}: {key} must be a list of notes.')
-  for old,new in aliases.items():
-   if old in row:
-    if new in row and row[new] not in [None,'',row[old]]:raise ValueError(f'Row {i}: conflicting {old} / {new} columns.')
-    row.setdefault(new,row[old])
-  for old,new in [('timeline_in','timeline_in_ms'),('timeline_out','timeline_out_ms'),('source_in','source_in_ms'),('source_out_excl','source_out_ms')]:
+  for old,new in [('timeline_in','timeline_in_ms'),('timeline_out','timeline_out_ms'),('source_in','source_in_ms'),('source_out_excl','source_out_ms'),('source_out','source_out_ms')]:
    if old in row and row[old] not in [None,'']:
     number=timecode_ms(row[old],f'Row {i}: {old}')
     if new in row and row[new] not in [None,''] and integer(row[new],new)!=number:raise ValueError(f'Row {i}: conflicting {old} / {new} values.')
@@ -75,10 +75,27 @@ def normalize_rows(rows):
   converted.append(row)
  return converted
 
+TIMECODE=re.compile(r'(?<![\w"”])(\d{1,2}:\d{2}(?::\d{2})?[,.](\d{1,3}))(?![\w"”])')
+
+def quote_timecodes(text):
+ """Wrap unquoted CSV/SRT-style clocks so a decimal comma does not split a cell.
+
+ `00:00:05,400` is a normal way to write a clock, but in a CSV it produces two
+ cells and the whole map is rejected. Timecodes are quoted before the file is
+ read; nothing is rewritten, so `00:00:05,400` and `00:00:05.400` both parse to
+ the same millisecond.
+ """
+ def wrap(match):
+  token=match[0]
+  if ';' in token or '\t' in token:return token
+  return '"'+token+'"'
+ return TIMECODE.sub(wrap,text)
+
 def parse(raw,ext):
  if len(raw)>4_000_000:raise ValueError('Picture plans must be under 4 MB.')
  text=raw.decode('utf-8-sig')
  if ext=='.csv':
+  text=quote_timecodes(text)
   try:
    sample=text[:16384]
    try:dialect=csv.Sniffer().sniff(sample,delimiters=',;\t')
@@ -169,7 +186,7 @@ def assemble(p,seed):
      if abs(snapped-source_start)<=.001:
       s['notes']+=' Contiguous split-source boundary adjusted by '+str(round((snapped-source_start)*1000,6))+' ms for 30-fps rounding.';source_start=snapped
    if a['kind']=='video':
-    if str(row.get('visual_status','')).upper()=='STILL':problem='A source-video still was requested; select and verify the intended extracted frame. The moving clip was not substituted for that still.'
+    if str(row.get('visual_status','')).upper()=='STILL':problem='A still frame was requested from this video but no extracted frame is registered. Set picture policy to photographs and stills so the frame can be extracted, or choose a moving interval.'
     elif abs((source_end-source_start)-duration)>1/30+.001:problem='Source interval and picture duration differ; no automatic trimming, stretching, looping or freezing.'
     elif max(source_end,source_start+duration)+handle>a['duration']+.001:problem='Source file is too short, including transition handles.'
     elif not p.get('allow_archive_reuse') and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'

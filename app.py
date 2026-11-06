@@ -14,6 +14,16 @@ MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
+# clips_only keeps native moving footage everywhere; mixed allows verified stills as well.
+POLICIES={'clips_only':'Moving footage only','mixed':'Moving footage and photographs'}
+STILL_LAYOUTS={'blurred_fit':'Photograph fitted over a blurred copy of itself','full_bleed':'Photograph cropped to fill the frame'}
+
+def policy(p):return p.get('picture_policy') if p.get('picture_policy') in POLICIES else 'clips_only'
+
+def is_still(p,asset):
+ if not asset:return False
+ if asset.get('kind')=='image':return True
+ return str((asset.get('derived_from') or {}).get('kind') or '').lower()=='image'
 def uid():return uuid.uuid4().hex[:16]
 def write(path,data):
  t=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp');t.write_text(json.dumps(data,indent=2),encoding='utf-8');t.replace(path)
@@ -122,7 +132,10 @@ def check(p,final=False):
   if s['transition']=='dissolve' and i==len(p['scenes'])-1:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
   if s['transition']=='dissolve' and i+1<len(p['scenes']) and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
   if s['transition']=='dissolve' and i+1<len(p['scenes']) and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
-  if p.get('picture_policy')=='clips_only' and a['kind']!='video':errors.append(pre+'clips-only timeline contains a still image.')
+  still=is_still(p,a)
+  if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
+  if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
+  if still and a['kind']=='image' and a.get('derived_from') and not a.get('verified'):errors.append(pre+'the extracted frame was never approved for use.')
   if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
   if a['kind']=='video':
    end=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
@@ -186,7 +199,9 @@ def create():
  if profile not in PROFILES or fmt not in ['landscape','portrait']:raise BadRequest('Choose a supported profile and format.')
  pid=uid();root=PROJECTS/pid;root.mkdir()
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
- p={'id':pid,'schema_version':1,'picture_policy':'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
+ requested=d.get('picture_policy')
+ if requested is not None and requested not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
+ p={'id':pid,'schema_version':1,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
@@ -206,6 +221,13 @@ def update_project(pid):
   if not p['title'].strip():raise BadRequest('A production title is required.')
   if 'people' in d:
    p['people']=[{'name':str(x.get('name','')).strip()[:120],'role':str(x.get('role',''))[:80],'aliases':[str(a).strip()[:120] for a in x.get('aliases',[]) if str(a).strip()]} for x in d['people'] if str(x.get('name','')).strip()]
+  if 'picture_policy' in d:
+   if d['picture_policy'] not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
+   p['picture_policy']=d['picture_policy']
+   for scene in p['scenes']:scene['approved']=False
+  if 'image_layout' in d:
+   if d['image_layout'] not in STILL_LAYOUTS:raise BadRequest('Choose a photograph layout: '+', '.join(STILL_LAYOUTS))
+   p['image_layout']=d['image_layout']
   if p['brief']!=old_brief or p['people']!=old_people:
    for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
@@ -396,8 +418,7 @@ def build(pid):
   if not p['srt']:raise BadRequest('Import the narration SRT first.')
   if p['scenes'] and not (request.get_json(silent=True) or {}).get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
   from automatic import restore_reviewed,full_source_analysis
-  if p.get('picture_policy')=='clips_only':
-   full_source_analysis(p,folder(pid))
+  full_source_analysis(p,folder(pid))
   if restore_reviewed(p,folder(pid)):
    save(p);return jsonify(public(p))
   from production import infer
@@ -427,33 +448,33 @@ def build(pid):
   try:decisions,plan_mode=rows_for(p)
   except ValueError as e:raise BadRequest('SRT block map: '+str(e) if p.get('srt_block_map') else 'Production table: '+str(e))
   if decisions:
-   if p.get('picture_policy')=='clips_only':
-    from automatic import native_rows
-    decisions=native_rows(p,decisions);p['allow_archive_reuse']=True
+   from automatic import native_rows
    from edl import assemble
    from conform import stills
+   # Stills first, while the plan still says which beats are photographs or STILL moments:
+   # extraction registers one approved frame per requested moment and rewrites those rows.
+   # Only then are the remaining moving intervals bounded to their uploaded files.
+   still_plan=stills(p,folder(pid),copy.deepcopy(decisions))
+   extracted=sum(bool(a.get('derived_from')) for a in p['assets'])
+   still_plan=native_rows(p,still_plan)
+   p['allow_archive_reuse']=True
    original=p.get('picture_plan')
-   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':decisions,'schema_version':1}
-   try:assemble(p,scenes)
-   except ValueError as e:raise BadRequest('SRT block map: '+str(e))
-   adapted=decisions if p.get('picture_policy')=='clips_only' else stills(p,folder(pid),decisions)
-   p['picture_plan']={**(p['picture_plan']),'beats':adapted}
+   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1}
    try:assemble(p,scenes)
    except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    finally:
     if original is None:p.pop('picture_plan',None)
     else:p['picture_plan']=original
-   p['script_application']['mode']=plan_mode;p['script_application']['generated_stills']=0 if p.get('picture_policy')=='clips_only' else sum(bool(a.get('derived_from')) for a in p['assets'])
+   p['script_application']['mode']=plan_mode;p['script_application']['generated_stills']=extracted
   elif p.get('production_script'):apply(p)
   from edl import signature
   p['assembly_signature']=signature(p)
   p['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
   from picture_flow import apply_flow
   p['picture_flow']=apply_flow(p,folder(pid))
-  if p.get('picture_policy')=='clips_only':
-   from automatic import validate_assembly
-   decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
-   if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join(decoded['errors'][:3]))
+  from automatic import validate_assembly
+  decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
+  if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join(decoded['errors'][:3]))
   save(p);return jsonify(public(p))
 @app.patch('/api/projects/<pid>/scenes/<sid>')
 def edit_scene(pid,sid):
@@ -565,7 +586,7 @@ def planned_samples(pid,aid,bid):
  p=load(pid);a=next((a for a in p['assets'] if a['id']==aid),None)
  if not a:raise NotFound('Media file not found.')
  cut=next((r for r in a.get('document_plan',{}).get('cuts',[]) if str(r['beat_id'])==bid),None)
- if not cut or a['kind']!='video':raise NotFound('Planned cut not found.')
+ if not cut or a['kind'] not in ['video','image']:raise NotFound('Planned cut not found.')
  try:path=samples(folder(pid),a,cut)
  except Exception as e:raise BadRequest('Cannot inspect planned cut: '+str(e)[:250])
  return send_from_directory(path.parent,path.name,conditional=True)

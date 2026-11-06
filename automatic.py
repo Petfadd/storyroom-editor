@@ -25,6 +25,7 @@ def native_rows(p,rows):
  out=copy.deepcopy(rows)
  for row in out:
   row['transition_out']='cut';row['transition_handle_frames']=0;row['transition_handle_ms']=0
+  if str(row.get('visual_status','')).upper() in ('PHOTOGRAPH','STILL_EXTRACTED'):continue  # already a prepared still
   row['visual_status']='VIDEO';row['picture_treatment']='Native MP4 action; no extracted still, loop, frozen tail or imposed camera effect.'
   row['import_blockers']=[n for n in row.get('import_blockers',[]) if 'transition' not in str(n).lower()]
   a=matching_assets(p,row.get('source_file',''))
@@ -50,12 +51,35 @@ def inspect_interval(root,asset,inside,frames,fps=30):
  finally:cap.release()
  return samples
 
+def still_kind(asset):
+ if not asset:return ''
+ if asset.get('kind')=='image':return 'photograph'
+ return 'extracted frame' if (asset.get('derived_from') or {}).get('kind')=='image' else ''
+
+def inspect_still(root,asset):
+ """A still must decode and must not be a black frame. It is not a moving interval."""
+ from PIL import Image,ImageOps,ImageStat
+ path=Path(root)/asset['path']
+ if not path.is_file():raise ValueError('The picture file is missing from disk.')
+ with Image.open(path) as im:
+  im=ImageOps.exif_transpose(im).convert('L')
+  if min(im.size)<64:raise ValueError('The picture is too small to fill a frame.')
+  mean=ImageStat.Stat(im).mean[0];size=im.size
+ if mean<3:raise ValueError('The picture is almost black; choose a usable image.')
+ return {'kind':still_kind(asset),'size':size,'luma_mean':round(mean,2)}
+
 def validate_assembly(p,root):
- assets={a['id']:a for a in p['assets']};report={'scope':'decoded IN/middle/LAST frame availability; not face recognition','scenes':[],'errors':[]}
+ assets={a['id']:a for a in p['assets']};report={'scope':'decoded IN/middle/LAST frame availability and still decode; not face recognition','scenes':[],'errors':[]}
  for i,s in enumerate(p['scenes'],1):
   a=assets.get(s.get('asset_id'))
-  if not a or a['kind']!='video':report['errors'].append(f'Scene {i}: no native MP4 interval.');continue
-  try:report['scenes'].append({'scene':i,'samples':inspect_interval(root,a,s['in_s'],s['frame_out']-s['frame_in'])})
+  if not a:report['errors'].append(f'Scene {i}: no media assigned.');continue
+  kind=still_kind(a)
+  try:
+   if kind:
+    report['scenes'].append({'scene':i,'still':inspect_still(root,a)})
+    continue
+   if a['kind']!='video':report['errors'].append(f'Scene {i}: no native MP4 interval.');continue
+   report['scenes'].append({'scene':i,'samples':inspect_interval(root,a,s['in_s'],s['frame_out']-s['frame_in'])})
   except Exception as e:report['errors'].append(f'Scene {i}: '+str(e))
  return report
 
@@ -167,6 +191,12 @@ def repetition_errors(p):
  errors=[];recent=[];assets={a['id']:a for a in p['assets']}
  for i,s in enumerate(p['scenes'],1):
   a=assets.get(s.get('asset_id'));m=s.get('automatic_match') or {};group=m.get('footage_group') or (a or {}).get('footage_group');source=m.get('original_source_file') or ((a or {}).get('original_full_source') or {}).get('file') or (a or {}).get('original_name');start=m.get('original_source_in_s',((a or {}).get('original_full_source') or {}).get('source_in_s',0)+s.get('in_s',0));end=start+(s['frame_out']-s['frame_in'])/30
+  # A photograph deliberately held over consecutive beats is one continuous shot, not a
+  # repeated one: the hold is only reported when the same photograph is picked up again
+  # later in the window. Reusing a photograph non-consecutively is still an error.
+  still=a is not None and a.get('kind')=='image'
+  if still and recent and recent[-1][0]==i-1 and (assets.get(p['scenes'][i-2].get('asset_id')) or {}).get('id')==a['id'] and all(src==source for j,g,src,inside,outside,hs in recent):
+   recent.append((i,group,source,start,end,m.get('perceptual_hashes') or []));continue
   for j,g,src,inside,outside,prior_hashes in recent[-window:]:
    if (group and group==g) or (src==source and start<outside-.001 and end>inside+.001):errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.');break
    hs=m.get('perceptual_hashes') or []

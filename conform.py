@@ -12,10 +12,27 @@ def capture(path):
  return cv2.VideoCapture(str(path))
 
 def stills(p,root,rows):
+ """Prepare every still beat for assembly.
+
+ Two cases, both real:
+ - the beat names an uploaded photograph, which is used as-is for its whole length;
+ - the beat asks for a STILL moment inside an uploaded video, which is extracted once
+   at exactly the requested time and registered as its own approved asset.
+
+ Nothing is cropped to fake a longer shot and no extracted frame is treated as a
+ moving picture. A still that cannot be prepared is reported on its row, never
+ replaced by an unrelated clip.
+ """
  out=copy.deepcopy(rows);root=Path(root)
  for row in out:
-  if str(row.get('visual_status','')).upper()!='STILL':continue
   matches=matching_assets(p,row.get('source_file',''))
+  status=str(row.get('visual_status','')).upper()
+  if len(matches)==1 and matches[0]['kind']=='image':
+   # An uploaded photograph covers the whole beat at native length.
+   row['source_in_ms']=0;row['source_out_ms']=row['timeline_out_ms']-row['timeline_in_ms']
+   row['visual_status']='PHOTOGRAPH'
+   continue
+  if status!='STILL':continue
   if len(matches)!=1 or matches[0]['kind']!='video':continue
   source=matches[0];path=root/source['path'];ms=row['source_in_ms'];key=hashlib.sha256((source['id']+str(ms)).encode()).hexdigest()[:16];aid='frame-'+key
   existing=next((a for a in p['assets'] if a['id']==aid),None)
@@ -46,9 +63,24 @@ def samples(root,asset,cut):
  with _SAMPLE_LOCK:return _samples(root,asset,cut)
 
 def _samples(root,asset,cut):
- """One contact strip of IN / middle / final frame. Never labels its content automatically."""
+ """One contact strip of IN / middle / final frame. Never labels its content automatically.
+
+ A photograph has no middle or last frame: it is shown once, labelled as a still, so the
+ strip never implies movement that the source does not have.
+ """
  from PIL import Image,ImageOps,ImageDraw
- root=Path(root);inside=cut['source_in_ms'];outside=cut['source_out_ms'];path=root/asset['path']
+ root=Path(root);path=root/asset['path']
+ if asset.get('kind')=='image':
+  key=hashlib.sha256((str(path)+str(path.stat().st_mtime_ns)+'still').encode()).hexdigest()[:24]
+  dest=root/'.cache/planned_samples'/(key+'.jpg');dest.parent.mkdir(parents=True,exist_ok=True)
+  if not dest.exists():
+   canvas=Image.new('RGB',(960,210),'#14212b');draw=ImageDraw.Draw(canvas)
+   im=ImageOps.contain(ImageOps.exif_transpose(Image.open(path)).convert('RGB'),(632,178))
+   canvas.paste(im,((960-im.width)//2,5+(178-im.height)//2))
+   draw.text((8,190),'photograph | whole beat | no movement added',fill='white')
+   canvas.save(dest,quality=85)
+  return dest
+ inside=cut['source_in_ms'];outside=cut['source_out_ms']
  if not path.is_file():raise ValueError('Source file not found.')
  key=hashlib.sha256((str(path)+str(path.stat().st_mtime_ns)+str(inside)+str(outside)).encode()).hexdigest()[:24]
  dest=root/'.cache/planned_samples'/(key+'.jpg');dest.parent.mkdir(parents=True,exist_ok=True)

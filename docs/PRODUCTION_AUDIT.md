@@ -85,7 +85,7 @@ cannot see it. A document that reads like a plan does not act like one.
 partial-map save, and no map export back out (`GET srt-block-map` → 405; only
 `bundle.json` carries it). You write 120–500 rows by hand, from frame inspection.
 
-### Gap 3 — Photos cannot be used: stills are blocked in the only supported mode
+### Gap 3 — Photos could not be used: stills were blocked in the only supported mode — **fixed**
 A map pointing at `shot1.jpg` builds fine, then: *"Scene 1: clips-only timeline contains a
 still image."* Every new project is `picture_policy='clips_only'`, the policy can only be
 changed by editing `project.json`, and the still path also dead-ends in
@@ -93,7 +93,7 @@ changed by editing `project.json`, and the still path also dead-ends in
 frames — is only reachable in a policy you cannot select. **News-video cases are photo
 heavy; this alone can stall an edit.**
 
-### Gap 4 — A CSV block map rejects the most natural timecode format
+### Gap 4 — A CSV block map rejected the most natural timecode format — **fixed**
 Writing `00:00:05,400` in a CSV splits the cell (`Row 1: too many CSV cells`). You must
 write `00:00:05.400`. The SRT accepts `,` and the map does not; the error message does not
 say this. This cost a full failed iteration in the test run.
@@ -193,11 +193,11 @@ feel professional simply reported nothing useful.
 
 | # | Change | Why |
 |---|---|---|
-| 1 | **Still/photo mode** — policy toggle + `picture_policy='mixed'`, route stills through `conform.stills` | Unblocks every photo-heavy case; the code already exists |
+| 1 | ~~**Still/photo mode**~~ — **done**: `picture_policy` `clips_only`/`mixed` switchable, uploaded photographs and `STILL` map rows (one frame pulled from a clip at its stated time), two layouts, still-aware decoded-frame check | Unblocked photo-heavy cases |
 | 2 | **Shot index → candidate list** — from `Full_source_analysis.json`, list every continuous shot (file, in, out, length) and mark which beats it can hold | Turns "watch 15 videos" into "fill 120 slots from a list" |
 | 3 | **Feasibility report before cutting** — per source: seconds needed vs seconds available; flag impossible assignments | Kills dead-end plans in seconds (gap 7) |
 | 4 | **Block-map builder + export** — prefill 120 rows from the SRT, allow partial saves, download the CSV back | Removes hand-writing and round trips (gaps 2, 5, 6) |
-| 5 | **Tolerant CSV clocks** — accept `,` and unquoted timecodes; also accept a Markdown table as a map | Removes a whole class of silent failure (gap 4) |
+| 5 | ~~**Tolerant CSV clocks**~~ — **done**: `00:00:05,400` and `00:00:05.400` both parse unquoted, six media-column spellings accepted, `source_out_excl` still understood | Removed a whole class of silent failure (gap 4) |
 | 6 | **Bulk scene approval** | 120 clicks → 1 (gap 8) |
 | 7 | **Incremental rebuild** — rebuild a block range, keep approvals elsewhere | Makes iteration cheap (gap 10) |
 | 8 | **Frame-QC sheet** — contact sheet per 20 beats with source timecode, flag beats whose in-point changed | Catches wrong casting before a 3-minute render (gap 11) |

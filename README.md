@@ -80,6 +80,36 @@ Recovery is structural and shows its work:
 A block map is still separate work: it needs a media filename and verified source
 IN/OUT per block, which approximate sampled anchors in a guide cannot supply.
 
+## Photographs and stills
+
+A production is either **moving footage only** (the default) or **moving footage and
+photographs**. Switch it in the setup panel; changing it resets scene approvals and needs a
+rebuild. In the second mode:
+
+- an uploaded JPG/PNG/WebP can cover a beat, laid out either fitted over a blurred copy of
+  itself or cropped to fill the frame (`image_layout`);
+- a block-map row marked `STILL` in its `status` column pulls **one frame** from an
+  uploaded video at that row's stated source time, registers it as its own approved asset,
+  and uses it for the beat.
+
+A still never pretends to move: no imposed pan, zoom, trim or freeze, and the sample strip
+in the cut inspector shows one picture labelled as a still rather than an invented
+middle/last frame. A photograph deliberately held across consecutive beats counts as one
+continuous shot, not as repeated footage; picking the same photograph up again later in the
+cooldown window is still reported. The decoded frame check verifies that a still opens and
+is not black — it still says nothing about who or what it shows.
+
+## Picture plan input tolerance
+
+The block-map reader accepts the ways people actually write timecodes and columns:
+
+- `00:00:05.400` and `00:00:05,400` are the same instant; an unquoted decimal comma no
+  longer splits a CSV cell;
+- the media column may be called `media_file`, `media_filename`, `media`, `file`,
+  `source_file` or `source`, and `source_out_excl` still means the exclusive OUT used by
+  older beat tables;
+- a plan row without a `block` column is read as a beat table instead of a block map.
+
 ## Optional SRT block map
 
 `srt_block_map.csv` is the only picture plan the editor accepts: one row per caption
