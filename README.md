@@ -11,7 +11,10 @@ A local Flask application that builds an SRT-driven video storyboard from upload
 - Automatic continuous-master rendering after assembly.
 - **Render MP4** button remains available to start another export.
 - Clips-only picture; no generated stills or blank slots.
-- Clean cuts only; no dissolves or transition handles.
+- Clean cuts by default. Short dissolves are available per scene when a production
+  allows them (`transition_policy`), and are validated: no dissolve off the last scene,
+  no adjacent pairs, never longer than the incoming beat, and the export length never
+  changes by a frame.
 - Six-slot cooldown against repeating the same shot or overlapping source interval.
 - Cut conformance: every picture beat is kept inside one decoded shot of its source, and cuts are eased into the narrator's breaths (see below).
 - Original narration and SRT timing are preserved.
@@ -132,6 +135,30 @@ in proportion to the picture, not by a different route.
   profile with your own hints rather than editing the app for one programme.
 - **Wording hints are dictionaries, not a taxonomy.** Subject words only pick a movement
   family and an emotion label; anything unmatched falls through to neutral defaults.
+
+### Cuts and dissolves
+
+A production starts **clean cuts only**. That is the default because a cut cannot go
+wrong: it needs no handle, no extra source footage, and it never moves a frame.
+
+A short dissolve is available when you ask for it. Set the production's
+`transition_policy` to `allow_dissolves`, then set `transition` on an individual scene;
+the handle defaults to four frames. It is refused, with a reason, when it cannot be
+honest:
+
+- from the last scene (there is nothing to dissolve into),
+- next to another dissolve (adjacent pairs are unsupported — keep the next exit a cut),
+- longer than the picture beat coming in,
+- when the source file has no footage left to borrow the handle from.
+
+Measured on an 11-beat programme: adding a dissolve changed the picture in the blend
+region and left the master at exactly 1800 frames / 00:01:00.00. Switching back to
+`clean_cuts_only` clears the dissolves on every scene and reports how many it cleared,
+rather than leaving a scene claiming a transition the policy forbids.
+
+Asking for a dissolve while the production is still clean-cuts-only is refused with an
+explanation. It used to be silently rewritten to a cut, which looked like success and
+left no way to tell why the dissolve never appeared.
 
 ### Export size
 

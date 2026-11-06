@@ -17,6 +17,7 @@ PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
 # Output geometry is a project setting, not a constant. `format` picks an aspect; `size`
 # picks the pixel target. Anything the engine can encode is allowed, so the same build
 # serves a 720p review, a 1080p master, a vertical cut and a square one.
+TRANSITION_POLICIES=['clean_cuts_only','allow_dissolves']
 ASPECTS={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}
 DEFAULT_SIZE={'landscape':'1080p','portrait':'1080p','square':'1080p','vertical_4_5':'1080p','cinema':'1080p'}
 SIZES={'480p':480,'540p':540,'720p':720,'1080p':1080,'1440p':1440,'4k':2160}
@@ -315,6 +316,21 @@ def update_project(pid):
     p['size']=d.get('size') or DEFAULT_SIZE[d['format']]
     if not valid_size(p['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
     p['picture_rebuilt']=False
+  response_extra={}
+  if 'transition_policy' in d:
+   if d['transition_policy'] not in TRANSITION_POLICIES:raise BadRequest('Choose a transition policy: '+', '.join(TRANSITION_POLICIES))
+   if d['transition_policy']!=p.get('transition_policy'):
+    p['transition_policy']=d['transition_policy']
+    cleared=0
+    if d['transition_policy']=='clean_cuts_only':
+     # Turning dissolves off has to mean something for the scenes that already carry them.
+     # Clearing them is the only consistent reading of "clean cuts only", and the response
+     # says how many so a caller is never left guessing where its dissolves went. It is
+     # reported rather than saved: it describes this request, not the production.
+     for scene in p['scenes']:
+      if scene.get('transition')!='cut':scene['transition']='cut';scene['transition_handle_frames']=0;cleared+=1
+    p.pop('dissolves_cleared',None)
+    response_extra={'dissolves_cleared':cleared}
   if 'size' in d:
    if not isinstance(d['size'],str) or not valid_size(d['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
    if str(d['size'])!=str(p.get('size')):
@@ -322,7 +338,9 @@ def update_project(pid):
     p['picture_rebuilt']=False
   if p['brief']!=old_brief or p['people']!=old_people:
    for scene in p['scenes']:scene['approved']=False
-  save(p);return jsonify(public(p))
+  save(p);body=public(p)
+  if response_extra:body.update(response_extra)
+  return jsonify(body)
 @app.get('/api/projects/<pid>/imports/<key>')
 def import_status(pid,key):
  from import_status import token,get
@@ -699,8 +717,13 @@ def edit_scene(pid,sid):
   if d.get('focus_position') in ['left','center','right']:s['focus_position']=d['focus_position']
   if d.get('motion_strength') in ['subtle','purposeful','strong']:s['motion_strength']=d['motion_strength']
   if d.get('transition') in ['cut','dissolve']:
+   # A dissolve is refused while the production is clean-cuts-only rather than silently
+   # rewritten to a cut. Silently forcing it meant the request appeared to succeed and the
+   # scene then validated as a cut, so the policy error it should have produced could never
+   # be reached and there was nothing to explain why the dissolve never appeared.
+   if d['transition']=='dissolve' and p.get('transition_policy')=='clean_cuts_only':
+    raise BadRequest('This production uses clean cuts only. Allow dissolves for it before setting a dissolve on a scene.')
    s['transition']=d['transition'];s['transition_handle_frames']=(s.get('transition_handle_frames') or 4) if s['transition']=='dissolve' else 0
-  if p.get('transition_policy')=='clean_cuts_only':s['transition']='cut';s['transition_handle_frames']=0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
   if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
