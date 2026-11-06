@@ -101,7 +101,7 @@ def check(p,final=False):
  if not p['brief'].strip() and not p.get('srt'):errors.append('Import your SRT story, or add a case brief.')
  from production import document
  from edl import signature
- if p['scenes'] and (p.get('edit_decision_list') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current optional EDL / production script.')
+ if p['scenes'] and (p.get('picture_plan') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current SRT block map / production script.')
  if p.get('production_script') and p['scenes'] and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
  if not p['voiceover']:errors.append('Import the original narration audio.')
  if not p['scenes']:errors.append('Import an SRT and build the storyboard.')
@@ -253,21 +253,18 @@ def perform_upload(pid,key=''):
    blocks=parse_srt(text)
    if p['scenes'] and request.form.get('replace')!='yes':raise BadRequest('Replacing the SRT invalidates the current storyboard. Confirm replacement first.')
    (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[]
-  elif kind in ['edit_decision_list','srt_block_map']:
+  elif kind=='srt_block_map':
    from edl import parse,srt_signature
    try:
     from automatic import link_frame_csv
     payload=f.read(4_000_001);payload=link_frame_csv(payload,p) if ext=='.csv' else payload
     beats=parse(payload,ext)
-   except (ValueError,UnicodeError) as e:raise BadRequest('Edit decision list: '+str(e))
-   is_map=all(row.get('map_type')=='srt_block' for row in beats)
-   if kind=='srt_block_map' and not is_map:raise BadRequest('Choose a block-map CSV with block,start,end,beat,media_file,source_in,source_out columns.')
-   target='srt_block_map' if is_map else 'edit_decision_list'
-   if is_map:
-    numbers=[row['srt_blocks'][0] for row in beats]
-    if numbers!=list(range(1,len(numbers)+1)):raise BadRequest('Block map must contain unique ordered SRT blocks 1 through its final block.')
-   p[target]={'name':f.filename,'beats':beats,'schema_version':1,'based_on_srt':srt_signature(p) if p.get('srt') else None,'import_notes':list(dict.fromkeys(note for row in beats for note in row.get('import_notes',[]))),'import_blockers':[{'beat_id':row['beat_id'],'note':note} for row in beats for note in row.get('import_blockers',[])]}
-   write(root/('inputs/srt_block_map.json' if is_map else 'inputs/edit_decision_list.json'),p[target])
+   except (ValueError,UnicodeError) as e:raise BadRequest('SRT block map: '+str(e))
+   if not all(row.get('map_type')=='srt_block' for row in beats):raise BadRequest('Choose a block-map CSV with block,start,end,beat,media_file,source_in,source_out columns.')
+   numbers=[row['srt_blocks'][0] for row in beats]
+   if numbers!=list(range(1,len(numbers)+1)):raise BadRequest('Block map must contain unique ordered SRT blocks 1 through its final block.')
+   p['srt_block_map']={'name':f.filename,'beats':beats,'schema_version':1,'based_on_srt':srt_signature(p) if p.get('srt') else None,'import_notes':list(dict.fromkeys(note for row in beats for note in row.get('import_notes',[]))),'import_blockers':[{'beat_id':row.get('beat_id') or row.get('plan_row_id',''),'note':note} for row in beats for note in row.get('import_blockers',[])]}
+   write(root/'inputs/srt_block_map.json',p['srt_block_map'])
    for scene in p['scenes']:scene['approved']=False
   elif kind=='production_script':
    if ext not in ['.txt','.md','.json','.docx']:raise BadRequest('Upload a TXT, Markdown, JSON or DOCX production script.')
@@ -322,14 +319,6 @@ def perform_upload(pid,key=''):
 def remove_block_map(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);p.pop('srt_block_map',None);(folder(pid)/'inputs/srt_block_map.json').unlink(missing_ok=True)
-  for scene in p['scenes']:scene['approved']=False
-  save(p);return jsonify(public(p))
-
-@app.delete('/api/projects/<pid>/edit-decision-list')
-def remove_edl(pid):
- with LOCKS[pid]:
-  editable(pid);p=load(pid);p.pop('edit_decision_list',None)
-  (folder(pid)/'inputs/edit_decision_list.json').unlink(missing_ok=True)
   for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
 
@@ -408,7 +397,7 @@ def build(pid):
    if end<=last:raise BadRequest('An SRT block is shorter than one output frame.')
    s=dict(id=uid(),srt_blocks=[b['number'],b['number']],frame_in=last,frame_out=end,narration=b['text'],purpose=purpose,emotion=emotion,focus=person or category,category=category,person=person,asset_id=None,in_s=0,motion='auto',transition='cut',context_only=False,notes='',approved=False)
    for a in sorted(p['assets'],key=lambda a:(a['id']==(scenes[-1]['asset_id'] if scenes else None),usage[a['id']])):
-    if p.get('production_script') or p.get('edit_decision_list'):break
+    if p.get('production_script') or p.get('srt_block_map'):break
     from production import reserve_id
     if reserve_id(a):continue
     matches=person.casefold() in [n.casefold() for n in a['people']] if person else a['category']==category
@@ -422,24 +411,24 @@ def build(pid):
   from production import apply,document
   from document_plan import rows_for,synchronize
   try:decisions,plan_mode=rows_for(p)
-  except ValueError as e:raise BadRequest('Production table: '+str(e))
+  except ValueError as e:raise BadRequest('SRT block map: '+str(e) if p.get('srt_block_map') else 'Production table: '+str(e))
   if decisions:
    if p.get('picture_policy')=='clips_only':
     from automatic import native_rows
     decisions=native_rows(p,decisions);p['allow_archive_reuse']=True
    from edl import assemble
    from conform import stills
-   original=p.get('edit_decision_list')
-   p['edit_decision_list']={**(original or {}),'beats':decisions}
+   original=p.get('picture_plan')
+   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':decisions,'schema_version':1}
    try:assemble(p,scenes)
-   except ValueError as e:raise BadRequest('Edit plan: '+str(e))
+   except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    adapted=decisions if p.get('picture_policy')=='clips_only' else stills(p,folder(pid),decisions)
-   p['edit_decision_list']={**(original or {}),'beats':adapted}
+   p['picture_plan']={**(p['picture_plan']),'beats':adapted}
    try:assemble(p,scenes)
-   except ValueError as e:raise BadRequest('Edit plan: '+str(e))
+   except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    finally:
-    if original is None:p.pop('edit_decision_list',None)
-    else:p['edit_decision_list']=original
+    if original is None:p.pop('picture_plan',None)
+    else:p['picture_plan']=original
    p['script_application']['mode']=plan_mode;p['script_application']['generated_stills']=0 if p.get('picture_policy')=='clips_only' else sum(bool(a.get('derived_from')) for a in p['assets'])
   elif p.get('production_script'):apply(p)
   from edl import signature
@@ -573,7 +562,7 @@ def download_cut_audit(pid):
  import csv,io
  from flask import Response
  try:result=audit(load(pid))
- except ValueError as e:raise BadRequest('Cannot compare edit plan: '+str(e))
+ except ValueError as e:raise BadRequest('Cannot compare the SRT block map: '+str(e))
  if request.args.get('format')=='json':return jsonify(result)
  output=io.StringIO();fields=list(result['rows'][0]) if result['rows'] else ['scene','status'];writer=csv.DictWriter(output,fieldnames=fields);writer.writeheader();writer.writerows(result['rows'])
  return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="cut-audit.csv"'})

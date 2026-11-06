@@ -72,8 +72,8 @@ def validate(script_path, srt_path, source_arg):
         rows, mode = rows_for(p)
     except Exception as exc:
         return {'ready': False, 'errors': ['Parser rejected the production script: ' + str(exc)], 'warnings': []}
-    if mode not in ['production_script_table', 'optional_edl', 'srt_block_map']:
-        errors.append('No recognized Markdown beat table or EDL was found. Check the exact header row and the Unicode arrow →.')
+    if mode not in ['production_script_table', 'srt_block_map']:
+        errors.append('No recognized Markdown beat table was found. Check the exact header row and the Unicode arrow →.')
     if not rows:
         errors.append('The beat table produced zero rows; a new project would build zero scenes.')
         return {'ready': False, 'errors': errors, 'warnings': warnings, 'mode': mode}

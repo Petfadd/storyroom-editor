@@ -10,7 +10,7 @@ def fingerprint(p,root):
  media=[(a['id'],a['path'],(root/a['path']).stat().st_size,(root/a['path']).stat().st_mtime_ns) for a in p['assets'] if a['kind']=='video' and (root/a['path']).is_file()]
  if p.get('portable_from_project'):
   media=[(a['id'],a['path'],(root/a['path']).stat().st_size,hashlib.sha256((root/a['path']).read_bytes()).hexdigest()) for a in p['assets'] if a['kind']=='video' and (root/a['path']).is_file()]
- data=[p.get('production_script'),p.get('srt'),p.get('srt_block_map'),p.get('edit_decision_list'),p.get('source_bindings'),media,p.get('picture_policy'),p.get('repetition_policy'),p.get('transition_policy')]
+ data=[p.get('production_script'),p.get('srt'),p.get('srt_block_map'),p.get('source_bindings'),media,p.get('picture_policy'),p.get('repetition_policy'),p.get('transition_policy')]
  return hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()
 
 def restore_reviewed(p,root):

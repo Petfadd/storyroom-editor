@@ -213,7 +213,7 @@ def conform_picture(p, root, window=CONFORM_WINDOW, continuity=CONTINUITY_WINDOW
             if not options:
                 record['status'] = 'no_single_shot_fits'
                 record['note'] = ('No decoded shot of %s is long enough for this %.2fs beat. '
-                                  'Shorten the beat in the EDL or use another take; nothing was trimmed or frozen.'
+                                  'Shorten the beat in the SRT block map or use another take; nothing was trimmed or frozen.'
                                   % (filename, duration))
                 record['review'] = True
                 counts['no_single_shot_fits'] += 1

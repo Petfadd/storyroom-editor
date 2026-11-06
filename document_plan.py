@@ -93,29 +93,19 @@ def source_register(p):
  return result
 
 def base_rows_for(p):
- if p.get('edit_decision_list'):
-  from edl import parse
-  rows=copy.deepcopy(p['edit_decision_list']['beats'])
-  for row in rows:
-   old=row.get('import_blockers',[])
-   if row.get('transition') and any('unsupported by the current 4-frame renderer' in str(n) for n in old):
-    row['import_blockers']=[n for n in old if 'unsupported by the current 4-frame renderer' not in str(n)]
-    for key in ['transition_out','transition_handle_ms','transition_handle_frames']:row.pop(key,None)
-  rows=parse(json.dumps(rows).encode(),'.json')
-  p['edit_decision_list']['beats']=rows
-  p['edit_decision_list']['import_notes']=list(dict.fromkeys(n for row in rows for n in row.get('import_notes',[])))
-  p['edit_decision_list']['import_blockers']=[{'beat_id':row['beat_id'],'note':note} for row in rows for note in row.get('import_blockers',[])]
-  return rows,'optional_edl'
- rows=script_beats(p)
- return rows,'production_script_table' if rows else ''
+ return_rows=script_beats(p)
+ return return_rows,'production_script_table' if return_rows else ''
 
 def rows_for(p):
- rows,mode=base_rows_for(p)
+ if p.get('srt_block_map'):
+  rows,mode=[],'srt_block_map'
+ else:
+  rows,mode=base_rows_for(p)
  mapping=p.get('srt_block_map')
  if not mapping:return rows,mode
  from edl import srt_signature
  if mapping.get('based_on_srt') and mapping['based_on_srt']!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map.')
- parents={str(int(r['beat_id'])):r for r in rows if str(r.get('beat_id','')).isdigit()};out=[]
+ parents={str(int(r.get('beat_id') or r.get('plan_row_id'))):r for r in rows if str(r.get('beat_id') or r.get('plan_row_id','')).isdigit()};out=[]
  mapped=mapping['beats']
  for i,raw in enumerate(mapped):
   row=copy.deepcopy(raw);parent=parents.get(str(int(row['parent_beat_id'])));last=i+1==len(mapped) or mapped[i+1]['parent_beat_id']!=row['parent_beat_id']

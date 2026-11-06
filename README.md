@@ -1,10 +1,11 @@
 # Storyroom Editor
 
-A local Flask application that builds an SRT-driven video storyboard from uploaded narration, captions, a production script / EDL and MP4 source clips. It studies the uploaded videos, assembles clean-cut picture slots, and renders a continuous MP4 master for smooth Program-monitor playback.
+A local Flask application that builds an SRT-driven video storyboard from uploaded narration, captions, a production script and MP4 source clips. It studies the uploaded videos, assembles clean-cut picture slots, and renders a continuous MP4 master for smooth Program-monitor playback.
 
 ## Features
 
-- Upload-first workflow: SRT, voiceover, production script / EDL, and MP4s.
+- Upload-first workflow: SRT, voiceover, production script and MP4s, plus an optional
+  per-SRT-block map that points each caption block at a footage source interval.
 - Automatic media-use approval on upload; no manual source-review gate.
 - Automatic source study and storyboard assembly.
 - Automatic continuous-master rendering after assembly.
@@ -58,6 +59,17 @@ the setup panel and the shot inspector. Any in-point you edit by hand overrides 
 automatic conform for that beat. These checks describe continuity and cut placement only;
 they say nothing about who or what a frame shows.
 
+## Optional SRT block map
+
+`srt_block_map.csv` is the only picture plan the editor accepts: one row per caption
+block (`block,start,end,beat,media_file,source_in,source_out`), with an optional parent
+`beat` number that carries the production script's treatment and end transition.
+It must cover SRT blocks 1..N in order and the complete timeline. Upload it on the setup
+panel (or through the alternative upload controls); rebuilding applies it. Removing it
+returns the build to the production script's own beat table. An unsupplied map is not an
+error, and a map never certifies what a shot shows: it supplies explicit source intervals
+only.
+
 ## Validate a production package
 
 ```sh
@@ -73,7 +85,7 @@ The third argument may instead be a JSON map of original filename to duration in
 | `app.py` | Flask routes, uploads, project state and render endpoints |
 | `automatic.py` | Automatic source study, storyboard assembly and continuous-master render |
 | `engine.py` | FFmpeg render/concat job |
-| `document_plan.py`, `edl.py`, `production.py`, `conform.py` | Production-script / EDL parsing and source binding |
+| `document_plan.py`, `edl.py`, `production.py`, `conform.py` | Production-script / block-map parsing and source binding |
 | `approval.py`, `reviewed_library.py`, `import_status.py` | Automatic approval and upload-progress helpers |
 | `cut_audit.py`, `validate_production_package.py` | Timing/source checks |
 | `picture_flow.py` | Shot-continuity conform and narration-breath cut easing |

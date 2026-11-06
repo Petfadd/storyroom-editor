@@ -1,4 +1,7 @@
-"""Optional one-row-per-picture-beat CSV/JSON import. Does not certify media/rights."""
+"""Optional one-row-per-picture-beat CSV/JSON plan (SRT block map or beat table).
+
+A plan supplies explicit source intervals only; it never certifies media, identity or rights.
+"""
 import csv,io,json,math,re,hashlib,copy,uuid
 from decimal import Decimal,InvalidOperation
 from pathlib import Path
@@ -6,8 +9,13 @@ from production import asset_matches,matching_assets,match_problem
 
 def srt_signature(p):return hashlib.sha256(json.dumps((p.get('srt') or {}).get('blocks',[]),sort_keys=True).encode()).hexdigest()
 
+def plan(p):return p.get('picture_plan') or p.get('edit_decision_list') or {}
+
+def row_id(row,index=''):
+ return str(row.get('beat_id') or row.get('plan_row_id') or index)
+
 def signature(p):
- return hashlib.sha256(json.dumps([p.get('edit_decision_list'),(p.get('production_script') or {}).get('text','')]+([p['source_bindings']] if p.get('source_bindings') else [])+([p['srt_block_map']] if p.get('srt_block_map') else []),sort_keys=True).encode()).hexdigest()
+ return hashlib.sha256(json.dumps([plan(p),(p.get('production_script') or {}).get('text','')]+([p['source_bindings']] if p.get('source_bindings') else [])+([p['srt_block_map']] if p.get('srt_block_map') else []),sort_keys=True).encode()).hexdigest()
 def integer(value,label):
  if isinstance(value,bool):raise ValueError(label+' must be an integer number of milliseconds.')
  try:
@@ -68,7 +76,7 @@ def normalize_rows(rows):
  return converted
 
 def parse(raw,ext):
- if len(raw)>4_000_000:raise ValueError('Edit decision lists must be under 4 MB.')
+ if len(raw)>4_000_000:raise ValueError('Picture plans must be under 4 MB.')
  text=raw.decode('utf-8-sig')
  if ext=='.csv':
   try:
@@ -79,13 +87,13 @@ def parse(raw,ext):
   except csv.Error as e:raise ValueError('CSV could not be read: '+str(e))
  elif ext=='.json':
   data=json.loads(text);rows=data.get('beats') if isinstance(data,dict) else data
- else:raise ValueError('Choose edit_decision_list.csv or a JSON list / object with a beats array.')
+ else:raise ValueError('Choose a .csv or .json picture plan: a JSON list, or an object with a beats array.')
  if not isinstance(rows,list) or not 1<=len(rows)<=5000:raise ValueError('Provide 1–5000 beat rows.')
  rows=normalize_rows(rows)
  result=[];seen=set();last=0
  for i,rawrow in enumerate(rows,1):
   if not isinstance(rawrow,dict):raise ValueError(f'Row {i}: expected a beat object.')
-  row=copy.deepcopy(rawrow);bid=str(row.get('beat_id') or i)
+  row=copy.deepcopy(rawrow);bid=row_id(row,i)
   if bid in seen:raise ValueError('Duplicate beat_id: '+bid)
   seen.add(bid);row['beat_id']=bid
   for key in ['timeline_in_ms','timeline_out_ms']:row[key]=integer(row.get(key),f'Row {i}: {key}')
@@ -124,22 +132,22 @@ def parse(raw,ext):
  return result
 
 def assemble(p,seed):
- bound=p['edit_decision_list'].get('based_on_srt')
- if bound and bound!=srt_signature(p):raise ValueError('The SRT changed since this EDL was uploaded. Review and re-upload the matching EDL, or remove it to use the production script.')
- rows=p['edit_decision_list']['beats'];blocks=p['srt']['blocks'];expected=round(blocks[-1]['end_ms']*.03)
- if round(rows[-1]['timeline_out_ms']*.03)!=expected:raise ValueError('The EDL must cover the complete SRT timeline. No partial list or silent fallback is used.')
+ bound=plan(p).get('based_on_srt')
+ if bound and bound!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map, or remove it to use the production script.')
+ rows=plan(p)['beats'];blocks=p['srt']['blocks'];expected=round(blocks[-1]['end_ms']*.03)
+ if round(rows[-1]['timeline_out_ms']*.03)!=expected:raise ValueError('The SRT block map must cover the complete SRT timeline. No partial list or silent fallback is used.')
  scenes=[];issues=[];used={};by_number={b['number']:b for b in blocks};by_srt={s['srt_blocks'][0]:s for s in seed}
  for row in rows:
-  bid=row['beat_id'];start=round(row['timeline_in_ms']*.03);end=round(row['timeline_out_ms']*.03)
+  bid=row_id(row);start=round(row['timeline_in_ms']*.03);end=round(row['timeline_out_ms']*.03)
   if end<=start:raise ValueError('Beat '+bid+': timing is shorter than one output frame.')
   refs=row['srt_blocks']
   if any(n not in by_number for n in refs):raise ValueError('Beat '+bid+': SRT reference does not exist.')
   actual=[b['number'] for b in blocks if b['start_ms']<row['timeline_out_ms'] and b['end_ms']>row['timeline_in_ms']]
   if set(actual)!=set(refs):raise ValueError('Beat '+bid+': SRT references do not match its timeline interval.')
-  s=copy.deepcopy(by_srt[refs[0]]);s.update(id=uuid.uuid4().hex[:16],srt_blocks=[min(refs),max(refs)],frame_in=start,frame_out=end,narration=' '.join(by_number[n]['text'] for n in refs),asset_id=None,in_s=0,transition=row['transition_out'],transition_handle_frames=row.get('transition_handle_frames',4 if row['transition_out']=='dissolve' else 0),approved=False,edl_beat_id=bid,edl_decision=copy.deepcopy(row))
+  s=copy.deepcopy(by_srt[refs[0]]);s.update(id=uuid.uuid4().hex[:16],srt_blocks=[min(refs),max(refs)],frame_in=start,frame_out=end,narration=' '.join(by_number[n]['text'] for n in refs),asset_id=None,in_s=0,transition=row['transition_out'],transition_handle_frames=row.get('transition_handle_frames',4 if row['transition_out']=='dissolve' else 0),approved=False,plan_row_id=bid,plan_row=copy.deepcopy(row))
   # A name in the narration is not a claim that the source shows that face.
   s['mentioned_person']=s.get('person','');s['person']=str(row.get('shown_person') or '');s['focus']=str(row.get('visible_content') or s.get('category') or 'Case footage')
-  s['notes']='Optional EDL instruction. '+str(row.get('match_reason') or '')+' '+str(row.get('gap_note') or '')+' Review: '+str(row.get('coverage_review') or '')+' Treatment: '+str(row.get('picture_treatment') or '')+' Transition requested: '+str(row.get('transition_requested_text') or '')+' Limit on implication: '+str(row.get('limit_on_implication') or '')
+  s['notes']='Optional picture-plan instruction. '+str(row.get('match_reason') or '')+' '+str(row.get('gap_note') or '')+' Review: '+str(row.get('coverage_review') or '')+' Treatment: '+str(row.get('picture_treatment') or '')+' Transition requested: '+str(row.get('transition_requested_text') or '')+' Limit on implication: '+str(row.get('limit_on_implication') or '')
   if str(row.get('visual_status','')).upper()=='CTX':s['context_only']=True
   if row.get('visible_content'):s['focus']=str(row['visible_content'])[:5000]
   treatment=str(row.get('picture_treatment','')).lower();amount=re.search(r'(\d+(?:\.\d+)?)%',treatment)
@@ -151,11 +159,11 @@ def assemble(p,seed):
   if row.get('import_blockers'):problem=' '.join(row['import_blockers'])
   elif not row['source_file']:problem=str(row['gap_note'])
   elif len(matches)!=1:problem=match_problem(p,row['source_file'])
-  elif str(row.get('rights_status','')).lower()=='incompatible':problem='This EDL source has incompatible reuse rights.'
+  elif str(row.get('rights_status','')).lower()=='incompatible':problem='This mapped source has incompatible reuse rights.'
   else:
    a=matches[0];source_start=row['source_in_ms']/1000;source_end=row['source_out_ms']/1000;duration=(end-start)/30;handle=s.get('transition_handle_frames',4)/30 if s['transition']=='dissolve' else 0
    if row.get('map_type')=='srt_block' and scenes:
-    previous=scenes[-1];prior=previous.get('edl_decision',{})
+    previous=scenes[-1];prior=previous.get('plan_row',{})
     if previous.get('asset_id')==a['id'] and prior.get('parent_beat_id')==row.get('parent_beat_id') and prior.get('source_out_ms')==row['source_in_ms'] and previous['transition']=='cut':
      snapped=previous['in_s']+(previous['frame_out']-previous['frame_in'])/30
      if abs(snapped-source_start)<=.001:
@@ -170,5 +178,5 @@ def assemble(p,seed):
     if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_start+duration+handle))
   if problem:issues.append('Beat '+bid+': '+problem);s['notes']+=' Unresolved: '+problem
   scenes.append(s)
- p['scenes']=scenes;p['script_application']={'recognized_instructions':len(rows),'placed_scenes':sum(bool(s['asset_id']) for s in scenes),'issues':issues,'mode':'optional_edl','note':'Uploaded EDL controls picture timing/source placement; production script supplies context. Status fields do not certify media or grant approval. All beats remain unapproved.'}
+ p['scenes']=scenes;p['script_application']={'recognized_instructions':len(rows),'placed_scenes':sum(bool(s['asset_id']) for s in scenes),'issues':issues,'mode':'picture_plan','note':'Parsed picture plan controls picture timing/source placement; production script supplies context. Status fields do not certify media or grant approval. All beats remain unapproved.'}
  return p
