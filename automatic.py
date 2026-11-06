@@ -36,19 +36,25 @@ def native_rows(p,rows):
    if abs(inside-original)>.001:row.setdefault('import_notes',[]).append('Nominal source IN was outside playable coverage; bounded to this same uploaded MP4. This is not semantic verification.')
  return out
 
-def inspect_interval(root,asset,inside,frames,fps=30):
+def inspect_interval(root,asset,inside,frames,fps=30,cap=None):
  from conform import capture
  import cv2,numpy as np
- cap=capture(Path(root)/asset['path']);samples=[]
+ owned=cap is None
+ cap=capture(Path(root)/asset['path']) if owned else cap;samples=[]
  try:
   source_fps=cap.get(cv2.CAP_PROP_FPS)
   if not math.isfinite(source_fps) or source_fps<=0:raise ValueError('Source has no valid frame rate.')
   for offset in [0,max(0,(frames-1)/fps/2),max(0,(frames-1)/fps)]:
-   t=inside+offset;cap.set(cv2.CAP_PROP_POS_MSEC,t*1000);ok,f=cap.read()
+   t=inside+offset
+   # Seek by frame number, not timestamp: on a long programme timestamp seeking walks
+   # from the previous position and cost ~46 ms per seek even on a 3-minute source.
+   cap.set(cv2.CAP_PROP_POS_FRAMES,max(0,int(round(t*source_fps))))
+   ok,f=cap.read()
    if not ok:raise ValueError(f'Cannot decode {asset["original_name"]} at {t:.3f}s.')
    gray=cv2.cvtColor(f,cv2.COLOR_BGR2GRAY);black=float(np.mean(gray<20));samples.append({'time':t,'black_fraction':black,'luma_mean':float(gray.mean())})
    if black>.99:raise ValueError(f'Black picture in {asset["original_name"]} at {t:.3f}s.')
- finally:cap.release()
+ finally:
+  if owned:cap.release()
  return samples
 
 def still_kind(asset):
@@ -70,17 +76,27 @@ def inspect_still(root,asset):
 
 def validate_assembly(p,root):
  assets={a['id']:a for a in p['assets']};report={'scope':'decoded IN/middle/LAST frame availability and still decode; not face recognition','scenes':[],'errors':[]}
- for i,s in enumerate(p['scenes'],1):
-  a=assets.get(s.get('asset_id'))
-  if not a:report['errors'].append(f'Scene {i}: no media assigned.');continue
-  kind=still_kind(a)
-  try:
-   if kind:
-    report['scenes'].append({'scene':i,'still':inspect_still(root,a)})
-    continue
-   if a['kind']!='video':report['errors'].append(f'Scene {i}: no native MP4 interval.');continue
-   report['scenes'].append({'scene':i,'samples':inspect_interval(root,a,s['in_s'],s['frame_out']-s['frame_in'])})
-  except Exception as e:report['errors'].append(f'Scene {i}: '+str(e))
+ from conform import capture
+ decoders={}
+ try:
+  for i,s in enumerate(p['scenes'],1):
+   a=assets.get(s.get('asset_id'))
+   if not a:report['errors'].append(f'Scene {i}: no media assigned.');continue
+   kind=still_kind(a)
+   try:
+    if kind:
+     report['scenes'].append({'scene':i,'still':inspect_still(root,a)})
+     continue
+    if a['kind']!='video':report['errors'].append(f'Scene {i}: no native MP4 interval.');continue
+    # One decoder per source file, reused for every beat taken from it: opening a long
+    # file once per beat is pure overhead on a programme with hundreds of beats.
+    if a['id'] not in decoders:decoders[a['id']]=capture(Path(root)/a['path'])
+    report['scenes'].append({'scene':i,'samples':inspect_interval(root,a,s['in_s'],s['frame_out']-s['frame_in'],cap=decoders[a['id']])})
+   except Exception as e:report['errors'].append(f'Scene {i}: '+str(e))
+ finally:
+  for cap in decoders.values():
+   try:cap.release()
+   except Exception:pass
  return report
 
 # Coalesce sequential uploads into one assembly after all mapped sources are present.
@@ -185,23 +201,51 @@ def full_source_analysis(p,root):
   for result in pool.map(scan,videos):results.append(result);dest.write_text(json.dumps({'sources':results,'complete':False,'source_count':len(videos),'before_timeline_creation':True},indent=2));print('Full video analysis:',len(results),'/',len(videos),result['file'],flush=True)
  report={'sources':results,'complete':len(results)==len(videos),'source_count':len(videos),'before_timeline_creation':True};dest.write_text(json.dumps(report,indent=2));return report
 
+# Beats are laid on whole output frames, so where an editor split one continuous take
+# the two half-frames can appear to overlap by up to a frame. Anything larger is real
+# reuse of the same source interval.
+CONTINUATION_TOLERANCE = 1.5 / 30
+
+
 def repetition_errors(p):
+ """Pictures that genuinely repeat, never pictures that merely continue.
+
+ The measurement is the source interval each beat actually plays. Two beats from the
+ same file are a repeat only when those intervals genuinely overlap. Splitting one take
+ across consecutive beats - the normal way to cut a long take into beats - produces
+ intervals that touch or overlap by under a frame after frame rounding, and that is the
+ same continuous shot, not a repeat. Adjacent beats holding the same photograph are the
+ still equivalent. Everything else is reported.
+ """
  policy=p.get('repetition_policy') or {};window=int(policy.get('cooldown_slots',0))
  if not window:return []
- errors=[];recent=[];assets={a['id']:a for a in p['assets']}
+ errors=[];recent=[];assets={a['id']:a for a in p['assets']};tolerance=CONTINUATION_TOLERANCE
  for i,s in enumerate(p['scenes'],1):
-  a=assets.get(s.get('asset_id'));m=s.get('automatic_match') or {};group=m.get('footage_group') or (a or {}).get('footage_group');source=m.get('original_source_file') or ((a or {}).get('original_full_source') or {}).get('file') or (a or {}).get('original_name');start=m.get('original_source_in_s',((a or {}).get('original_full_source') or {}).get('source_in_s',0)+s.get('in_s',0));end=start+(s['frame_out']-s['frame_in'])/30
-  # A photograph deliberately held over consecutive beats is one continuous shot, not a
-  # repeated one: the hold is only reported when the same photograph is picked up again
-  # later in the window. Reusing a photograph non-consecutively is still an error.
+  a=assets.get(s.get('asset_id'));m=s.get('automatic_match') or {}
+  group=m.get('footage_group') or (a or {}).get('footage_group')
+  source=m.get('original_source_file') or ((a or {}).get('original_full_source') or {}).get('file') or (a or {}).get('original_name')
+  duration=(s['frame_out']-s['frame_in'])/30
+  start=m.get('original_source_in_s',((a or {}).get('original_full_source') or {}).get('source_in_s',0)+s.get('in_s',0));end=start+duration
   still=a is not None and a.get('kind')=='image'
-  if still and recent and recent[-1][0]==i-1 and (assets.get(p['scenes'][i-2].get('asset_id')) or {}).get('id')==a['id'] and all(src==source for j,g,src,inside,outside,hs in recent):
-   recent.append((i,group,source,start,end,m.get('perceptual_hashes') or []));continue
-  for j,g,src,inside,outside,prior_hashes in recent[-window:]:
-   if (group and group==g) or (src==source and start<outside-.001 and end>inside+.001):errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.');break
+  previous=recent[-1] if recent else None
+  continues=bool(previous and previous[0]==i-1 and previous[2]==source and
+                 (abs(previous[4]-start)<=tolerance or (still and previous[6]==a['id'])))
+  if continues:
+   recent.append((i,group,source,start,end,m.get('perceptual_hashes') or [],a['id'] if a else None))
+   continue
+  for j,g,src,inside,outside,prior_hashes,twin in recent[-window:]:
+   if group and group==g:
+    errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.')
+    break
+   overlap=min(end,outside)-max(start,inside)
+   if src==source and overlap>tolerance:
+    errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.')
+    break
    hs=m.get('perceptual_hashes') or []
-   if hs and prior_hashes and min((int(x,16)^int(y,16)).bit_count() for x in hs for y in prior_hashes)<=int(policy.get('visual_hash_max_distance',4)):errors.append(f'Scene {i}: visually matching source footage recurs from scene {j} inside the {window}-slot cooldown.');break
-  recent.append((i,group,source,start,end,m.get('perceptual_hashes') or []))
+   if hs and prior_hashes and min((int(x,16)^int(y,16)).bit_count() for x in hs for y in prior_hashes)<=int(policy.get('visual_hash_max_distance',4)):
+    errors.append(f'Scene {i}: visually matching source footage recurs from scene {j} inside the {window}-slot cooldown.')
+    break
+  recent.append((i,group,source,start,end,m.get('perceptual_hashes') or [],a['id'] if a else None))
  return errors
 
 def source_capacity_errors(p):

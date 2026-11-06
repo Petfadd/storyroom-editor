@@ -78,10 +78,15 @@ def shots(root, assets=None):
             'coverage_s': round(sum(e['duration_s'] for e in entries), 3),
         })
     if assets:
-        uploaded = {a.get('original_name') for a in assets if a.get('kind') == 'video'}
+        videos = {a.get('original_name') for a in assets if a.get('kind') == 'video'}
+        photos = {a.get('original_name') for a in assets if a.get('kind') == 'image' and not a.get('derived_from')}
         known = {entry['file'] for entry in index}
-        for name in sorted(uploaded - known):
+        for name in sorted(videos - known):
             index.append({'file': name, 'duration_s': 0, 'shots': [], 'coverage_s': 0, 'not_decoded': True})
+        # A photograph is a usable picture source of unbounded length: it can hold a beat
+        # of any duration. Calling it "not decoded" made a photo plan look impossible.
+        for name in sorted(photos - known):
+            index.append({'file': name, 'kind': 'image', 'duration_s': 0, 'shots': [], 'coverage_s': 0, 'unbounded': True})
     return index
 
 
@@ -118,6 +123,12 @@ def feasibility(p, root):
     sources = []
     for name, record in sorted(demand.items()):
         entry = index.get(name) or {}
+        if entry.get('unbounded'):
+            # Photographs are exempt from capacity arithmetic; holding one is legitimate.
+            sources.append({**record, 'decoded': True, 'kind': 'image', 'required_s': round(record['required_s'], 3),
+                            'declared_s': round(record['declared_s'], 3), 'longest_beat_s': round(record['longest_beat_s'], 3),
+                            'available_s': 0.0, 'usable_s': 0.0, 'longest_shot_s': 0.0, 'slack_s': 0.0, 'problems': []})
+            continue
         decoded = bool(entry.get('shots'))
         # Before a file is decoded, its own stored duration is still a real figure: it is
         # what the upload reported. Never borrow another file's numbers.
@@ -189,9 +200,13 @@ def candidates(p, root, beat_id=None, limit=8):
         length = (row.get('timeline_out_ms', 0) - row.get('timeline_in_ms', 0)) / 1000
         handle = (row.get('transition_handle_frames') or 0) / FPS if row.get('transition_out') == 'dissolve' else 0
         name = row.get('source_file') or ''
-        entry = (shots(root, p.get('assets')) or [])
-        entry = next((e for e in entry if e['file'] == name), None)
-        options = _candidates(entry, length, handle, limit) if entry else []
+        index = shots(root, p.get('assets')) or []
+        entry = next((e for e in index if e['file'] == name), None)
+        if entry and entry.get('unbounded'):
+            options = [{'file': name, 'in_s': 0.0, 'out_s': round(length + handle, 3), 'duration_s': None,
+                        'frames': None, 'black': False, 'slack_s': None}]
+        else:
+            options = _candidates(entry, length, handle, limit) if entry else []
         beats.append({
             'beat_id': row.get('beat_id'),
             'srt_blocks': row.get('srt_blocks'),

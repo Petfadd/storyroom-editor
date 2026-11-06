@@ -1,4 +1,9 @@
-"""Document-led homicide planning. Deterministic parsing, never factual/visual verification."""
+"""Document-led planning for any programme. Deterministic parsing, never factual/visual verification."""
+import json as _json
+from pathlib import Path as _Path
+_PROFILE_FILE=_Path(__file__).with_name('blueprints')/'style_profiles.json'
+try:PROFILES=_json.loads(_PROFILE_FILE.read_text())
+except (OSError,ValueError):PROFILES={}
 import collections,json,re,zipfile,xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -76,10 +81,15 @@ def infer(p):
  else:people=[]
  people=list(dict.fromkeys(people+list(counts)))[:40]
  if anchor and anchor not in people:people.insert(0,anchor)
- profile='investigative'
- court=len(re.findall(r'\bcourt|\btrial|sentenc|prosecut|testif',narration,re.I));grief=len(re.findall(r'griev|memorial|remember|mourning|vigil',narration,re.I))
- if court>max(3,len((p.get('srt') or {}).get('blocks',[]))*.55):profile='courtroom'
- elif grief>max(3,len((p.get('srt') or {}).get('blocks',[]))*.6):profile='memorial'
+  # Profile is inferred from whichever registered profile best matches the narration's
+ # wording. Nothing here names a genre of programme: a script about a market, a product,
+ # a process or a person resolves to the profile whose hints actually fire, and to the
+ # neutral default when none do.
+ profile='documentary';best=0
+ blocks=(p.get('srt') or {}).get('blocks',[])
+ for name,meta in (PROFILES or {}).items():
+  hits=sum(len(re.findall(h.get('pattern',''),narration,re.I)) for h in meta.get('hints') or [])
+  if hits>best and hits>max(2,len(blocks)*.25):profile,best=name,hits
  return {'anchor':anchor,'people':people,'aliases':d.get('case_aliases',[]),'locations':d.get('locations',[]),'confirmed':True,'profile':profile,'basis':ambiguity,'origin':'uploaded_production_script_and_srt','text_characters':len(text)}
 
 def seconds(value):

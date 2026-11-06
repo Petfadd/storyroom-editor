@@ -189,6 +189,30 @@ feel professional simply reported nothing useful.
 
 ---
 
+## 6A. Scale and generality check (30-minute programme)
+
+Run against a deliberately different production from the one the audit was written
+from: 30:00 narration, 240 SRT blocks of uneven length (1.2 s–12 s), 240 mapped beats
+where the first 24 beats each span two blocks, 15 source clips, and a mixed
+photograph/still policy.
+
+| Question | Result |
+|---|---|
+| Does a 30-minute SRT build? | 240 scenes, 0 errors, 37 s |
+| Do multi-block beats work? | Yes — narration merged per beat, 239 cuts, none over speech |
+| Do photographs work at this size? | 3 photo beats and stills held correctly |
+| Does it render? | 30:00.00, 54,000 frames, 1280×720, 23.4 MB |
+| Is a re-render cheap? | All 240 segments reused; one-beat edit re-encoded one segment (12 s) |
+
+Three generalisation bugs were found and fixed by this run:
+
+1. Contiguous beats from one file were flagged as "repeats footage" (frame rounding left
+   a sub-frame overlap). The check now compares real source intervals.
+2. The feasibility report called a photograph "not decoded" and declared a photo plan
+   impossible. Photographs are now unbounded picture sources in that arithmetic.
+3. The build spent 97% of its time seeking by timestamp in the decoded-frame check
+   (46 ms per seek). It now seeks by frame number and reuses one decoder per source.
+
 ## 7. What to implement (ranked by time saved per case)
 
 | # | Change | Why |

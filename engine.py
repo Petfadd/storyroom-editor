@@ -1,10 +1,13 @@
 """Smooth timestamp-matched AutoEdit renderer with verified full-frame media."""
 from __future__ import annotations
-import json, os, re, shutil, signal, subprocess, threading, time, copy
+import hashlib, json, os, re, shutil, signal, subprocess, threading, time, copy
 from pathlib import Path
 import cv2
 import imageio_ffmpeg
 from PIL import Image
+
+# Bump when the picture pipeline changes so cached segments are not reused blindly.
+SEGMENT_VERSION = 1
 
 class RenderJob:
     def __init__(self, root: Path, on_change=None, story_path=None, catalog_path=None, output_name=None):
@@ -20,6 +23,10 @@ class RenderJob:
         self.on_change = on_change
         self.lock = threading.Lock(); self.process = None; self.cancelled = False; self.captions_enabled = False
         self._audio_cache = {}; self._duration_cache = {}
+        # Encode with the machine, not a constant: two threads per core up to a sane cap,
+        # still leaving room for the server itself on a small box.
+        self.threads = max(2, min(8, (os.cpu_count() or 2) * 2))
+        self._dims_cache = {}
         self.state = {'status':'idle','progress':0.0,'stage':'Ready','detail':'','log':'','output':None,'error':None,'started':None,'finished':None,'captions':False}
 
     def snapshot(self):
@@ -88,12 +95,16 @@ class RenderJob:
         self.update(progress=round(progress,2), stage=f'Cutting {kind} {index+1} of {len(shots)}', detail=f'{seconds:.1f} / {duration:.1f} seconds')
 
     def _dimensions(self, path, is_image=False):
+        key = str(path)
+        if key in self._dims_cache: return self._dims_cache[key]
         if is_image:
-            with Image.open(path) as im: return im.size
+            with Image.open(path) as im:
+                self._dims_cache[key] = im.size; return im.size
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened(): raise RuntimeError(f'Cannot open video: {path}')
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)); cap.release()
         if not w or not h: raise RuntimeError(f'Cannot read video dimensions: {path}')
+        self._dims_cache[key] = (w, h)
         return w,h
 
     def _find_voiceover(self):
@@ -194,7 +205,7 @@ class RenderJob:
                        f'[back][front]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=end_frame={frames}[picture]')
             else: graph=f'[0:v]setpts=PTS-STARTPTS,scale={ow}:{oh},fps={fps},setsar=1,trim=end_frame={frames}[picture]'
         graph=graph.replace('[picture]',',setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[picture]')
-        cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads','2','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
+        cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads',str(self.threads),'-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
         return cmd
 
     def _xfade_command(self, segments, output):
@@ -218,6 +229,57 @@ class RenderJob:
             chunks.append(out);i+=2
         return chunks
 
+    # ---- segment reuse -------------------------------------------------------
+    # A scene's picture is a pure function of its source interval, its treatment and the
+    # output settings. Keeping finished segments keyed by exactly those inputs means an
+    # edit to one beat re-encodes one scene instead of the whole programme, which is what
+    # makes iterating on a 30-minute timeline practical.
+    def _segment_cache(self):
+        path = self.work_dir / 'segments'
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _segment_key(self, shot, extra=0):
+        settings = self.story.get('settings') or {}
+        visual = shot.get('_visual_cache')
+        if visual is None:
+            visual = self._resolve_visual(shot); shot['_visual_cache'] = visual
+        path = Path(visual['path'])
+        try:
+            st = path.stat(); signature = [st.st_size, st.st_mtime_ns]
+        except OSError:
+            signature = ['missing']
+        payload = {
+            'source': str(path), 'signature': signature, 'type': visual['type'],
+            'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'),
+            'frames': shot['duration_frames'] + extra,
+            'motion': shot.get('motion_plan'), 'transition': shot.get('transition'),
+            'size': [settings.get('width'), settings.get('height')], 'fps': settings.get('fps'),
+            'preset': SEGMENT_VERSION,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:32]
+
+    def _restore_segment(self, key, destination, shot, extra):
+        source = self._segment_cache() / (key + '.mp4')
+        if not source.is_file() or source.stat().st_size < 1000:
+            return False
+        cap = cv2.VideoCapture(str(source)); actual = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
+        if actual != shot['duration_frames'] + extra:
+            return False
+        try:
+            os.link(source, destination)
+        except OSError:
+            shutil.copy2(source, destination)
+        return True
+
+    def _store_segment(self, key, rendered):
+        target = self._segment_cache() / (key + '.mp4')
+        if target.exists():
+            return
+        temporary = target.with_name(target.stem + '.tmp.mp4')
+        shutil.copy2(rendered, temporary)
+        temporary.replace(target)
+
     def _run(self):
         self.update(status='running', stage='Validating timestamp matches', progress=.3)
         shots = self.story['shots']; voiceover_path = self._find_voiceover(); settings = self.story['settings']
@@ -233,32 +295,55 @@ class RenderJob:
         for old in self.work_dir.glob('event_*.mp4'): old.unlink()
         base_path = self.work_dir/'documentary_base.mp4'; base_path.unlink(missing_ok=True)
         transition_frames = settings.get('transition_frames', 8); segments = []
+        cache = self._segment_cache(); reused = 0
         for index, shot in enumerate(shots):
             if self.cancelled: raise RuntimeError('Render cancelled by user.')
             extra = shot.get('transition_handle_frames',0)
             segment = self.work_dir/f'event_{index+1:03d}.mp4'; segments.append(segment)
-            cmd = self._picture_segment_command(shot, index, segment, extra)
             self.update(stage=f'Preparing matched scene {index+1} of {len(shots)}', detail=f'{shot["subject"]} · {shot["duration_frames"]} frames · unique source interval')
-            self._run_process(cmd, event_index=index, event_duration=(shot['duration_frames']+extra)/settings['fps'])
-            if not segment.exists() or segment.stat().st_size < 1000: raise RuntimeError(f'Encoder produced no usable segment for scene {index+1}')
-            cap=cv2.VideoCapture(str(segment));actual_frames=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));cap.release()
-            if actual_frames!=shot['duration_frames']+extra:
-                raise RuntimeError(f'Scene {index+1}: source ended early ({actual_frames} frames); replace footage rather than freeze, loop, or shorten narration.')
+            key = self._segment_key(shot, extra)
+            if not self._restore_segment(key, segment, shot, extra):
+                cmd = self._picture_segment_command(shot, index, segment, extra)
+                self._run_process(cmd, event_index=index, event_duration=(shot['duration_frames']+extra)/settings['fps'])
+                if not segment.exists() or segment.stat().st_size < 1000: raise RuntimeError(f'Encoder produced no usable segment for scene {index+1}')
+                cap=cv2.VideoCapture(str(segment));actual_frames=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));cap.release()
+                if actual_frames!=shot['duration_frames']+extra:
+                    raise RuntimeError(f'Scene {index+1}: source ended early ({actual_frames} frames); replace footage rather than freeze, loop, or shorten narration.')
+                self._store_segment(key, segment)
+            else: reused += 1
             self.log(f'Scene {index+1:03d}: {shot["subject"]} · {shot["duration_frames"]} frames · SRT {shot["srt_blocks"]}')
+        if reused:
+            self.log(f'Reused {reused} already-rendered scene segments from an earlier render; only changed scenes were re-encoded.')
+            self.update(detail=f'{reused} of {len(shots)} scenes reused from the previous render')
         segments=self._smooth_transition_chunks(segments)
         self.update(stage='Joining narration-timed scenes', progress=85.0, detail='Short picture dissolves and clean action cuts · narration remains continuous')
         self._run_process(self._xfade_command(segments, base_path))
         if not base_path.exists() or base_path.stat().st_size < 10000: raise RuntimeError('The cross-dissolve pass did not produce a usable picture timeline.')
         subtitle_style = 'FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginV=34,MarginL=85,MarginR=85'
         duration = shots[-1]['frame_out']/settings['fps']; total_frames = shots[-1]['frame_out']
-        picture_filter = f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]" if self.captions_enabled else '[0:v]null[picture]'
+        # The mux copies picture and narration into one file; it does not re-encode the
+        # picture. Progress is weighted by picture content so a 30-minute programme shows
+        # a believable curve instead of sitting at 86% through a short copy pass.
+        self._stage_base, self._stage_span = 86.0, 13.0
         audio_filter = f'[1:a]atrim=0:{duration:.6f},asetpts=PTS-STARTPTS,apad,atrim=0:{duration:.6f},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[narration]'
         temp_output = self.output.with_suffix('.rendering.mp4')
-        cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path, '-i', voiceover,
-               '-filter_complex', f'{picture_filter};{audio_filter}', '-map', '[picture]', '-map', '[narration]',
-               '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads','2','-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
-               '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
+        # With captions off there is nothing left to draw on the picture: the scene pass
+        # already encoded it to the final settings, so the picture is stream-copied and
+        # only the narration is encoded. Re-encoding a 30-minute programme here a second
+        # time was the single largest cost of a render.
+        if self.captions_enabled:
+            picture_filter = f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]"
+            cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path, '-i', voiceover,
+                   '-filter_complex', f'{picture_filter};{audio_filter}', '-map', '[picture]', '-map', '[narration]',
+                   '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),'-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                   '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+                   '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
+        else:
+            cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-i', base_path, '-i', voiceover,
+                   '-filter_complex', audio_filter, '-map', '0:v:0', '-map', '[narration]',
+                   '-t', f'{duration:.6f}', '-c:v', 'copy',
+                   '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+                   '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
         caption_stage = 'Burning selected captions' if self.captions_enabled else 'Exporting with captions off'
         self.update(stage=caption_stage, progress=86.0, detail=f'{len(shots)} matched scenes · {duration:.3f} seconds')
         proc = subprocess.Popen([str(x) for x in cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
@@ -278,6 +363,10 @@ class RenderJob:
         if self.cancelled: raise RuntimeError('Render cancelled by user.')
         if code != 0: raise RuntimeError('Final documentary export failed:\n'+'\n'.join(recent))
         if not temp_output.exists() or temp_output.stat().st_size < 10000: raise RuntimeError('The final export did not produce a usable MP4.')
+        if not self.captions_enabled:
+            cap = cv2.VideoCapture(str(temp_output)); exported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
+            if exported != total_frames:
+                raise RuntimeError(f'The exported picture has {exported} frames where the timeline has {total_frames}. Nothing was shortened silently.')
         temp_output.replace(self.output)
         shutil.copy2(srt, self.output.with_suffix('.srt'))
         size = self.output.stat().st_size/1048576

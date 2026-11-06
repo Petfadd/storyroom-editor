@@ -6,7 +6,7 @@ const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>scenes().at(-1)?.frame_out/30||0;
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
 const editorTime=()=>editorMaster?(masterNode.currentTime||0):(P?.voiceover&&narrNode.getAttribute('src')?narrNode.currentTime:clockBase+(editorPlaying&&!editorBuffering?(performance.now()-clockAt)/1000:0));
-list=async function(){const d=await api('/api/projects');projects=d.projects;$('#project-list').innerHTML=projects.map(p=>`<button class="project-link ${P?.id===p.id?'active':''}" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes</small></button>`).join('');return d};
+list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<button class="project-link ${P?.id===p.id?'active':''}" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes</small></button>`).join('');return d};
 function openProjects(){if(!leave())return;pauseEditor();list().then(()=>$('#projects-dialog').showModal())}
 showHome=openProjects;
 function pauseManagementMedia(){document.querySelectorAll('#manage-dialog audio,#manage-dialog video').forEach(node=>node.pause())}

@@ -14,6 +14,17 @@ MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
+# Default wording hints. They only choose a movement family and an emotion label; a
+# production about a different subject simply falls through to the neutral default. A
+# profile may supply its own `hints` list in blueprints/style_profiles.json instead of
+# anyone editing these for one programme.
+DEFAULT_HINTS=[
+ {'pattern':r'griev|mourn|remember|loved|funeral|vigil|lament|farewell','purpose':'remembrance','emotion':'grief / remembrance','category':'people'},
+ {'pattern':r'court|judge|sentenc|plea|prosecut|attorney|trial|hearing|verdict','purpose':'legal context','emotion':'accountability / clarity','category':'institution'},
+ {'pattern':r'police|investigat|detective|evidence|search warrant|agency|official','purpose':'investigation','emotion':'scrutiny / uncertainty','category':'institution'},
+ {'pattern':r'apartment|house|street|location|complex|river|city|room|building','purpose':'orientation','emotion':'place / context','category':'place'},
+]
+
 # clips_only keeps native moving footage everywhere; mixed allows verified stills as well.
 POLICIES={'clips_only':'Moving footage only','mixed':'Moving footage and photographs'}
 STILL_LAYOUTS={'blurred_fit':'Photograph fitted over a blurred copy of itself','full_bleed':'Photograph cropped to fill the frame'}
@@ -75,11 +86,18 @@ def probe(path):
  return {'duration':int(m[1])*3600+int(m[2])*60+float(m[3]) if m else 0,'has_audio':'Audio:' in out,'has_video':'Video:' in out}
 
 def intent(text,people,profile):
+ """A coarse guess at a beat's tone, from wording alone.
+
+ These word lists are hint dictionaries, not a taxonomy of subject matter: they exist to
+ pick a movement family and an emotion label, and a production about any subject still
+ resolves to neutral defaults when nothing matches. Add a production profile with its own
+ lists instead of editing these for one programme.
+ """
  found=next((x for x in people if any(re.search(r'\b'+re.escape(a)+r'\b',text,re.I) for a in [x['name']]+x.get('aliases',[]) if a)),None)
- if re.search(r'griev|mourn|remember|loved|family|funeral|vigil',text,re.I):purpose,emotion,category='remembrance','grief / remembrance','family'
- elif re.search(r'court|judge|sentenc|plea|prosecut|attorney|trial',text,re.I):purpose,emotion,category='legal context','accountability / clarity','court'
- elif re.search(r'police|investigat|detective|evidence|search warrant',text,re.I):purpose,emotion,category='investigation','scrutiny / uncertainty','police'
- elif re.search(r'apartment|house|street|location|complex|river',text,re.I):purpose,emotion,category='orientation','place / context','location'
+ lists=(PROFILES.get(profile) or {}).get('hints') or DEFAULT_HINTS
+ for hint in lists:
+  if re.search(hint['pattern'],text,re.I):
+   purpose,emotion,category=hint['purpose'],hint['emotion'],hint['category'];break
  else:purpose,emotion,category='develop the account','attention / restraint','general'
  if found:category='person'
  return purpose,emotion,category,found['name'] if found else ''
@@ -104,7 +122,7 @@ def motion(scene,index):
   shift={'left':-.20,'center':0,'right':.20}.get(scene.get('focus_position'),0);x0+=shift;x1+=shift
  y0,y1=(.46,.23) if mode=='rise' else (.36,.40)
  factor=min(1.12,max(.5,duration/4.5))*{'subtle':.65,'purposeful':1,'strong':1.18}.get(scene.get('motion_strength'),1)
- if scene.get('profile') in ['memorial','courtroom']:factor*=.82 if scene['profile']=='memorial' else .72
+ factor*=(PROFILES.get(scene.get('profile')) or {}).get('motion_scale',1)
  z0=min(1.095,1+(z0-1)*factor);z1=min(1.095,1+(z1-1)*factor)
  return dict(id='motion-'+scene['id'],mode='photo_camera',move=mode,emotion=scene['emotion'],focus=scene['focus'],duration_s=duration,zoom_start=round(z0,6),zoom_end=round(z1,6),x_start=round(x0,6),x_end=round(x1,6),y_start=y0,y_end=y1,easing='quick_settle' if mode in ['push','pull','reveal'] else 'linear',rationale=reason+f' Complete the movement over {duration:.3f}s; human review must confirm the actual composition.')
 
@@ -119,7 +137,9 @@ def scene_review(p,i,s,a,ranges,last,final=False):
  if not a:return errors+[pre+'assign uploaded media.'],notes
  if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
  if s['person'] and s['person'].casefold() not in [n.casefold().strip() for n in a['people']]:
-  if not(s['context_only'] and s['notes'].strip() and a['category'] in ['court','location','police','general'] and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
+  # Any subject category that is not a person can carry a disclosed wide/context picture;
+  # the rule is that it is disclosed in notes, not that it belongs to a fixed list.
+  if not(s['context_only'] and s['notes'].strip() and a['category']!='person' and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
   else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
  lastscene=i==len(p['scenes'])-1
  if s['transition']=='dissolve' and lastscene:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
@@ -194,7 +214,9 @@ def public(p):
  return d
 
 @app.get('/')
-def home():return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()))
+def home():
+ options=''.join('<option value="'+name+'"'+( ' selected' if name=='documentary' else '')+'>'+str(meta.get('name') or name)+'</option>' for name,meta in PROFILES.items())
+ return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options)
 @app.after_request
 def cache(response):
  if not request.path.endswith('/file'):response.headers['Cache-Control']='no-store'
@@ -209,7 +231,7 @@ def projects():
 def create():
  d=request.get_json() or {};title=str(d.get('title','')).strip()
  if not title or len(title)>100:raise BadRequest('Enter a production title of 1–100 characters.')
- profile=d.get('profile','investigative');fmt=d.get('format','landscape')
+ profile=d.get('profile') or 'documentary';fmt=d.get('format','landscape')
  if profile not in PROFILES or fmt not in ['landscape','portrait']:raise BadRequest('Choose a supported profile and format.')
  pid=uid();root=PROJECTS/pid;root.mkdir()
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
@@ -420,7 +442,11 @@ def update_asset(pid,aid):
   if 'verified' in d:
    a['verified']=d['verified'] is True
    if not a['verified'] and a.get('approval_record'):a['approval_record']['active']=False
-  if d.get('category') in ['person','police','court','location','family','general']:a['category']=d['category']
+  if 'category' in d:
+   # Categories are a free label ("person", "place", "institution", "product", anything).
+   # Only "person" is meaningful to the rules; the rest is the editor's own vocabulary.
+   value=str(d.get('category') or '').strip()[:40]
+   if value:a['category']=value
   if d.get('rights') in ['unreviewed','permission','licensed','public_domain','reviewed_other']:a['rights']=d['rights']
   for s in p['scenes']:
    if s['asset_id']==aid:s['approved']=False

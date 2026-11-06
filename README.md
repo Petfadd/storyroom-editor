@@ -80,6 +80,46 @@ Recovery is structural and shows its work:
 A block map is still separate work: it needs a media filename and verified source
 IN/OUT per block, which approximate sampled anchors in a guide cannot supply.
 
+## One editor, any programme
+
+Nothing in the timeline is sized to a particular case. The same project runs a 3-minute
+piece with 37 beats or a 30-minute piece with 240 beats, with blocks that map one-to-one
+or several-to-one, and with any mix of video and photographs:
+
+- **Beats and blocks are independent.** A map may give one row per SRT block, or let one
+  beat span many blocks (the build merges their narration into the beat). Both are read
+  the same way.
+- **Contiguous beats from one file are one continuous take.** Splitting a long take across
+  consecutive beats is the normal way to cut it, so a repeat is only reported when two
+  source intervals genuinely overlap; frame rounding is not treated as reuse.
+- **Profile.** A production starts from any of the profiles in
+  `blueprints/style_profiles.json` (documentary, educational, promotional, travel,
+  interview, investigative, courtroom, memorial). A profile supplies default movement,
+  a motion scale and optional wording hints; it decides nothing about content. Add a
+  profile with your own hints rather than editing the app for one programme.
+- **Wording hints are dictionaries, not a taxonomy.** Subject words only pick a movement
+  family and an emotion label; anything unmatched falls through to neutral defaults.
+
+### Rendering a long programme
+
+A 30-minute, 240-beat programme was measured end to end on this machine:
+
+| Stage | Time |
+|---|---|
+| Build (240 scenes, 15 sources decoded, decoded-frame check) | 38 s |
+| First render (240 scene segments + join + mux) | 7.7 min |
+| Re-render, nothing changed (all segments reused) | ~2 min |
+| Re-render after editing one beat (239 reused, 1 re-encoded) | 12 s |
+
+Two changes made that possible:
+
+- **Finished scene segments are cached** by a hash of everything that defines the picture
+  (`engine.SEGMENT_VERSION`, source signature, in/out, frame count, motion plan, output
+  settings). An edit re-encodes the beats whose picture actually changed.
+- **The final mux stream-copies the picture** when captions are off, because the scene
+  pass already encoded it to the final settings. The exported frame count is verified
+  against the timeline, so nothing is shortened silently.
+
 ## Photographs and stills
 
 A production is either **moving footage only** (the default) or **moving footage and

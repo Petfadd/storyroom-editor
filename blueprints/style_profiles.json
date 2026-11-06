@@ -1,18 +1,67 @@
 {
   "investigative": {
     "name": "Investigative",
-    "description": "Evidence-led, restrained, clear changes of thought."
+    "description": "Evidence-led, restrained, clear changes of thought.",
+    "motion_scale": 1.0,
+    "hints": [
+      {"pattern": "evidence|witness|record|document|report|timeline", "purpose": "investigation", "emotion": "scrutiny / uncertainty", "category": "institution"}
+    ]
   },
   "courtroom": {
     "name": "Courtroom",
-    "description": "Native action, clear identification, minimal embellishment."
+    "description": "Native action, clear identification, minimal embellishment.",
+    "motion_scale": 0.72,
+    "hints": [
+      {"pattern": "court|judge|sentenc|plea|prosecut|attorney|trial|hearing|verdict", "purpose": "legal context", "emotion": "accountability / clarity", "category": "institution"}
+    ]
   },
   "interview": {
     "name": "Interview-led",
-    "description": "People and testimony-oriented visual coverage under original narration."
+    "description": "People and testimony-oriented visual coverage under original narration.",
+    "motion_scale": 1.0,
+    "hints": [
+      {"pattern": "said|told|recalls|remembers|explains|testimony", "purpose": "testimony", "emotion": "attention / restraint", "category": "people"}
+    ]
   },
   "memorial": {
     "name": "Memorial",
-    "description": "Family memories, breathing room and careful portrait movement."
+    "description": "Memories, breathing room and careful portrait movement.",
+    "motion_scale": 0.82,
+    "hints": [
+      {"pattern": "griev|mourn|remember|loved|funeral|vigil|lament|farewell", "purpose": "remembrance", "emotion": "grief / remembrance", "category": "people"}
+    ]
+  },
+  "documentary": {
+    "name": "Documentary",
+    "description": "Neutral default for any subject: place, work, process, people, history.",
+    "motion_scale": 1.0,
+    "hints": [
+      {"pattern": "market|workshop|factory|kitchen|school|street|river|city|field", "purpose": "orientation", "emotion": "place / context", "category": "place"},
+      {"pattern": "began|started|history|since|years later|in 19|in 20", "purpose": "background", "emotion": "attention / restraint", "category": "general"}
+    ]
+  },
+  "educational": {
+    "name": "Educational",
+    "description": "Explanation-led: process, diagram, demonstration and example.",
+    "motion_scale": 0.9,
+    "hints": [
+      {"pattern": "step|process|because|therefore|example|first|then|finally", "purpose": "explanation", "emotion": "clarity", "category": "general"}
+    ]
+  },
+  "promotional": {
+    "name": "Promotional",
+    "description": "Product, service or place, shown with confident but restrained movement.",
+    "motion_scale": 1.05,
+    "hints": [
+      {"pattern": "offer|product|service|available|visi|book|order|price", "purpose": "promotion", "emotion": "confidence", "category": "product"}
+    ]
+  },
+  "travel": {
+    "name": "Travel",
+    "description": "Place-led coverage: landscape, movement and arrival.",
+    "motion_scale": 1.1,
+    "hints": [
+      {"pattern": "arriv|journey|road|beach|mountain|coast|village|island", "purpose": "orientation", "emotion": "place / context", "category": "place"}
+    ]
   }
 }
