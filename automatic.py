@@ -13,11 +13,50 @@ def fingerprint(p,root):
  data=[p.get('production_script'),p.get('srt'),p.get('srt_block_map'),p.get('source_bindings'),media,p.get('picture_policy'),p.get('repetition_policy'),p.get('transition_policy')]
  return hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()
 
+# A beat survives a rebuild only when the decision behind its picture is unchanged.
+# Everything that could make the same picture mean something different is in this list.
+SCENE_IDENTITY_FIELDS = ['srt_blocks', 'frame_in', 'frame_out', 'asset_id', 'in_s',
+                         'transition', 'transition_handle_frames', 'narration', 'person',
+                         'context_only', 'focus']
+
+
+def scene_identity(scene):
+    """The part of a scene a rebuild must reproduce for its approval to still stand."""
+    return {field: scene.get(field) for field in SCENE_IDENTITY_FIELDS}
+
+
+def carry_previous_review(p, scenes):
+    """Keep approvals on beats whose picture did not change, drop them on beats that did.
+
+    A rebuild starts every scene unapproved, which is right for new pictures and wrong for
+    the ninety-nine beats an editor already reviewed. This compares the rebuilt scene with
+    the previously saved one on the fields that decide what the picture is; a match
+    carries the approval and its record forward, a difference leaves the beat unapproved
+    so it is reviewed again. It never approves anything a human did not approve before.
+    """
+    previous = {str(s.get('plan_row_id') or s.get('srt_blocks')): s for s in p.get('scenes') or []}
+    kept, reset = 0, 0
+    for scene in scenes:
+        key = str(scene.get('plan_row_id') or scene.get('srt_blocks'))
+        old = previous.get(key)
+        if old and old.get('approved') and scene_identity(old) == scene_identity(scene):
+            scene['approved'] = True
+            if old.get('approval_record'):
+                scene['approval_record'] = dict(old['approval_record'], carried_from_rebuild=True)
+            kept += 1
+        else:
+            scene['approved'] = False
+            reset += 1
+    return {'carried': kept, 'requiring_review': reset}
+
+
 def restore_reviewed(p,root):
  record=p.get('automatic_timeline') or {}
  if not record.get('scenes') or record.get('input_fingerprint')!=fingerprint(p,root):return False
- p['scenes']=copy.deepcopy(record['scenes']);p['allow_archive_reuse']=True
- p['script_application']={'recognized_instructions':len(p['srt']['blocks']),'placed_scenes':len(p['scenes']),'issues':[],'mode':'reviewed_mp4_only_assembly','note':'Automatic restoration of frame-reviewed case-specific cuts; input fingerprint matched. Unavailable exact evidence is recorded separately, never fabricated.'}
+ staged=copy.deepcopy(record['scenes'])
+ carry_previous_review(p,staged)
+ p['scenes']=staged;p['allow_archive_reuse']=True
+ p['script_application']={'recognized_instructions':len(p['srt']['blocks']),'placed_scenes':len(p['scenes']),'issues':[],'mode':'reviewed_mp4_only_assembly','note':'Automatic restoration of frame-reviewed cuts; input fingerprint matched. Unavailable exact evidence is recorded separately, never fabricated.'}
  return True
 
 def native_rows(p,rows):
@@ -121,10 +160,62 @@ def monitor_render(studio,pid,status):
     pass
    time.sleep(2)
  threading.Thread(target=watch,daemon=True,name='automatic-render-monitor-'+pid).start()
+def automatic_readiness(p):
+ """Why automatic assembly will or will not run, in words an editor can act on.
+
+ The app used to fail this silently: with inputs present but no plan, or with the SRT
+ missing, nothing happened and nothing said why. This is the single place that answers
+ the question, used by the status line and by maybe_queue.
+ """
+ have_srt=bool(p.get('srt'))
+ have_voice=bool(p.get('voiceover'))
+ have_media=bool(p.get('assets'))
+ have_script=bool(p.get('production_script'))
+ have_map=bool(p.get('srt_block_map'))
+ missing=[]
+ if not have_media:missing.append('footage')
+ if not have_srt:missing.append('SRT')
+ if not have_voice:missing.append('narration')
+ if have_map:
+  plan='block map'
+ elif have_script:
+  plan='production script'
+ else:
+  plan=''
+ state={'inputs':{'srt':have_srt,'voiceover':have_voice,'assets':have_media,'production_script':have_script,'srt_block_map':have_map},
+         'has_plan':bool(plan),'plan':plan,'missing':missing,
+         'auto_enabled':bool(p.get('auto_assemble_uploads')),
+         'manual_edits':bool(p.get('manual_scene_edits'))}
+ if not have_srt:
+  state.update(status='blocked',detail='Automatic assembly is waiting for the narration SRT, which supplies every beat timing.')
+ elif not have_voice:
+  state.update(status='blocked',detail='Automatic assembly is waiting for the original narration audio. Picture is timed to it, never trimmed to fit.')
+ elif not have_media:
+  state.update(status='blocked',detail='Automatic assembly is waiting for footage. Upload the source videos (and photographs if the picture policy allows them).')
+ elif not plan:
+  state.update(status='needs_plan',detail='All required inputs are present, but there is no plan saying which picture goes where. Upload a block map (download the template first), or a production script with per-scene instructions. Without one, nothing is placed - the app will not choose pictures by guesswork.')
+ elif p.get('scenes'):
+  state.update(status='built',detail=str(len(p['scenes']))+' picture beats are built. Edit, approve and render.')
+ elif state['manual_edits']:
+  state.update(status='manual',detail='This production has manual scene edits, so automatic assembly will not overwrite them. Use Build storyboard to rebuild deliberately.')
+ elif not state['auto_enabled']:
+  state.update(status='paused',detail='Automatic assembly is switched off for this production. Use Build storyboard to assemble now.')
+ else:
+  state.update(status='ready',detail='Every input is present and a plan is defined. Automatic assembly will run; if it has not started, use Build storyboard.')
+ return state
+
+
 def maybe_queue(studio,p):
- if not p.get('auto_assemble_uploads') or p.get('manual_scene_edits'):return
- if not all(p.get(k) for k in ['srt','voiceover','production_script']):return
+ state=automatic_readiness(p)
  pid=p['id'];root=studio.folder(pid)
+ def publish(payload):
+  studio.write(root/'automatic_status.json',dict(payload,at=time.time()))
+ def status_only(state_,detail):
+  publish({'status':state_,'detail':detail})
+ if state['status']!='ready':
+  # Say why, loudly, instead of sitting idle.
+  publish({'status':state['status'],'detail':state['detail'],'missing':state['missing'],'plan':state['plan']})
+  return
  from document_plan import rows_for
  from production import matching_assets
  from reviewed_library import queue_ready
@@ -133,8 +224,12 @@ def maybe_queue(studio,p):
   if not ready:
    rows,_=rows_for(p)
    ready=bool(rows) and all(len(matching_assets(p,r.get('source_file','')))==1 for r in rows)
- except (ValueError,OSError):return
- if not ready:return
+ except (ValueError,OSError) as e:
+  publish({'status':'blocked','detail':'The plan could not be read: '+str(e)[:300]})
+  return
+ if not ready:
+  publish({'status':'blocked','detail':'A plan exists but some beats name a source file that does not match exactly one upload. Resolve those filenames, then build.'})
+  return
  render_status=root/'render_status.json'
  def render_busy():
   if not render_status.is_file():return False
@@ -146,7 +241,6 @@ def maybe_queue(studio,p):
   with _QUEUE_LOCK:
    if pid in _PENDING:return
    _PENDING.add(pid)
-  def status_only(state,detail):studio.write(root/'automatic_status.json',{'status':state,'detail':detail,'at':time.time()})
   def render_only():
    try:
     status_only('rendering','Storyboard is ready. Starting the continuous MP4 master automatically.')
@@ -163,8 +257,7 @@ def maybe_queue(studio,p):
  with _QUEUE_LOCK:
   if pid in _PENDING:return
   _PENDING.add(pid)
- def status(state,detail):
-  studio.write(root/'automatic_status.json',{'status':state,'detail':detail,'at':time.time()})
+ def status(state_,detail):status_only(state_,detail)
  def work():
   try:
    status('working','All inputs are ready. Allowing the machine time to study every source before assembly.')

@@ -132,15 +132,58 @@ Final export requires `s['approved']` on every scene; the only bulk endpoint is
 *Fix suggestion (10 lines):* `POST /api/projects/<pid>/scenes/approve-all` with an
 `attested` flag, alongside the existing per-scene PATCH.
 
-### Gap 9 — Auto-assembly silently does nothing
-`maybe_queue` needs `srt` + `voiceover` + `production_script` **and** a ready plan. Without
-a map it returns silently: status stays `idle`, 0 scenes, no message. Upload order makes it
-worse — the SRT arrives last, after the footage, so nothing is queued at that point either.
+### Gap 9 — Auto-assembly silently does nothing — **fixed**
+`maybe_queue` needed `srt` + `voiceover` + `production_script` **and** a ready plan. Without
+a map it returned silently: status stayed `idle`, 0 scenes, no message. Upload order made it
+worse — the SRT arrives last, after the footage, so nothing was queued at that point either.
 
-### Gap 10 — Rebuild discards human review
-`POST /storyboard {replace:true}` starts from a clean `scenes` array: approvals, in-point
-overrides and notes are lost. There is no "rebuild only blocks 40–60". For a 120-beat edit
-that is a lot of re-review per iteration.
+**Fixed.** `automatic.automatic_readiness(p)` is now the single answer to "why is nothing
+happening", and it is published to the project (`automatic_status.json`) and returned by
+every project read as `automatic_readiness`. It reports `status` — `blocked`, `needs_plan`,
+`manual`, `paused`, `ready` or `built` — plus `missing` (the inputs still absent), `plan`
+(which plan the app found) and `auto_enabled`. The studio renders it as a warning notice
+with the reason in plain words and the next action as buttons: download the block-map
+template, upload a map, upload a script, or rebuild deliberately. A missing plan, an
+unreadable map and a map naming a source file that is not uploaded each publish `blocked`
+with the offending name. Auto-assembly can no longer fail without saying so.
+
+### Gap 10 — Rebuild discards human review — **fixed**
+`POST /storyboard {replace:true}` started from a clean `scenes` array: approvals, in-point
+overrides and notes were lost. There was no "rebuild only blocks 40–60". For a 120-beat
+edit that is a lot of re-review per iteration.
+
+**Fixed, in two parts.**
+*Approval carry-over.* A rebuild now compares each new beat with the saved one on the
+fields that decide what the picture actually is (`srt_blocks`, `frame_in`/`frame_out`,
+`asset_id`, `in_s`, transition and handle frames, narration, person, category, context-only,
+focus). An exact match inherits the approval and its record, stamped
+`carried_from_rebuild`; anything that moved stays unapproved so it is looked at again. It
+never approves a beat a human did not already approve. Measured: a full 120-beat rebuild
+carried **119 of 120** approvals and asked for one review — the single beat whose in-point
+had been changed.
+*Block-range rebuild.* `POST /storyboard {replace:true, blocks:[40,…,60]}` rebuilds only
+those blocks. Beats touching those blocks are replaced in place with a frame offset, every
+other beat keeps its identity, approvals and notes, and `rebuild_report` records
+`scope`, `beats`, `approvals_carried` and `needs_review`. The rebuild is refused with a
+plain reason if the range would change the length of the surrounding timeline, rather than
+saving a storyboard with a gap. Measured on the 120-beat project: one block rebuilt in **0.19 s**, 119 of
+120 beats byte-identical afterwards, approvals intact. At 30-minute scale (240 beats, 15
+sources) blocks 1, 57, 160 and 240 each rebuilt in **~0.4 s**, 239 of 240 approvals carried
+every time, the timeline stayed contiguous and exactly 1800.00 s, and the resulting master
+measured **54000 frames / 30:00.00**. A range that genuinely changes its own length (a map
+row shortened by 1 s) is still refused with the plain reason. The editor offers it per beat
+as "Rebuild this block".
+
+Re-basing a sub-second range onto frame 0 rounds each end independently and can leave a
+1-frame residue (a 268-frame range measuring 269 alone). That residue is absorbed at the
+last rebuilt beat and reported as `rounding_frames`; anything larger is not, so the
+continuity guard still refuses it.
+
+One genuine bug surfaced while testing this and is fixed with it: `picture_flow.snap_cuts`
+re-labelled each scene's `srt_blocks` from whatever happened to overlap it after cuts moved
+into narration pauses. A beat could therefore end up carrying the *next* block's number and
+narration in its saved record. The pass now reports overlaps (`block_conflicts`) instead of
+rewriting the storyboard.
 
 ### Gap 11 — No frame-QC surface
 There is a `/scenes/<id>/thumbnail` and a planned-cut sample strip (`conform.samples`), but
@@ -223,9 +266,9 @@ Three generalisation bugs were found and fixed by this run:
 | 4 | ~~**Block-map builder + export**~~ — **done**: `GET /block-map-template` writes one row per SRT block with clocks and block references filled and picture columns blank by design, importable as named gaps; test proved template → fill from the shot index → re-upload → build 120 scenes, 0 errors | Removed hand-writing and round trips (gaps 2, 5, 6) |
 | 5 | ~~**Tolerant CSV clocks**~~ — **done**: `00:00:05,400` and `00:00:05.400` both parse unquoted, six media-column spellings accepted, `source_out_excl` still understood | Removed a whole class of silent failure (gap 4) |
 | 6 | ~~**Bulk scene approval**~~ — **done**: `POST /scenes/approve` uses the same per-scene rules as export readiness, approves only clean beats, reports the rest with reasons, and offers an all-or-nothing mode. 120 clicks → 1 | Done (gap 8) |
-| 7 | **Incremental rebuild** — rebuild a block range, keep approvals elsewhere | Makes iteration cheap (gap 10) |
+| 7 | ~~**Incremental rebuild**~~ — **done**: `POST /storyboard {blocks:[…]}` rebuilds one range in place with a frame offset, carries the approval of every beat whose picture did not change (119 of 120 on a full rebuild), stamps `carried_from_rebuild`, refuses a range that would move the surrounding timeline, and reports `rebuild_report`; the editor has a per-beat "Rebuild this block" | Iteration went from re-reviewing a whole edit to 0.2 s and one beat (gap 10) |
 | 8 | ~~**Frame-QC sheet**~~ — **done**: `GET /frame-qc?sheet=N` draws 20 beats per sheet, each stamping source file and in-point, with `moved ±Ns` and an amber bar when the in-point no longer matches the plan; undecodable beats are drawn blank and listed | Caught wrong casting before a 3-minute render (gap 11) |
-| 9 | **Loud auto-assembly** — if inputs are present but no plan, say so and offer the template | Kills the silent-idle trap (gap 9) |
+| 9 | ~~**Loud auto-assembly**~~ — **done**: `automatic_readiness` reports `blocked`/`needs_plan`/`manual`/`paused`/`ready`/`built` with the missing inputs and the plan it found; published to `automatic_status.json` and shown as a warning notice with template / upload-map / upload-script / rebuild buttons | Killed the silent-idle trap (gap 9) |
 | 10 | **Template generator** — emit a ready-to-fill block map from any SRT (120 rows, clocks filled) | Makes the app reusable across cases |
 
 ---

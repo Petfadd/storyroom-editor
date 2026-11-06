@@ -152,14 +152,20 @@ def assemble(p,seed):
  bound=plan(p).get('based_on_srt')
  if bound and bound!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map, or remove it to use the production script.')
  rows=plan(p)['beats'];blocks=p['srt']['blocks'];expected=round(blocks[-1]['end_ms']*.03)
- if round(rows[-1]['timeline_out_ms']*.03)!=expected:raise ValueError('The SRT block map must cover the complete SRT timeline. No partial list or silent fallback is used.')
+ # A rebuild of one block range deliberately assembles a subset; a whole-map upload must
+ # still cover the complete timeline, so nothing is silently dropped from a normal build.
+ partial=bool(plan(p).get('partial'))
+ if not partial and round(rows[-1]['timeline_out_ms']*.03)!=expected:raise ValueError('The SRT block map must cover the complete SRT timeline. No partial list or silent fallback is used.')
  scenes=[];issues=[];used={};by_number={b['number']:b for b in blocks};by_srt={s['srt_blocks'][0]:s for s in seed}
  for row in rows:
   bid=row_id(row);start=round(row['timeline_in_ms']*.03);end=round(row['timeline_out_ms']*.03)
   if end<=start:raise ValueError('Beat '+bid+': timing is shorter than one output frame.')
   refs=row['srt_blocks']
   if any(n not in by_number for n in refs):raise ValueError('Beat '+bid+': SRT reference does not exist.')
-  actual=[b['number'] for b in blocks if b['start_ms']<row['timeline_out_ms'] and b['end_ms']>row['timeline_in_ms']]
+  # A single-block-range rebuild re-bases its subset to start at zero, so the comparison
+  # is made against SRT timing shifted by the same amount. A whole-map build is unaffected.
+  shift=0 if not partial else by_number.get(refs[0],{}).get('start_ms',0)-row['timeline_in_ms']
+  actual=[b['number'] for b in blocks if b['start_ms']<row['timeline_out_ms']+shift and b['end_ms']>row['timeline_in_ms']+shift]
   if set(actual)!=set(refs):raise ValueError('Beat '+bid+': SRT references do not match its timeline interval.')
   s=copy.deepcopy(by_srt[refs[0]]);s.update(id=uuid.uuid4().hex[:16],srt_blocks=[min(refs),max(refs)],frame_in=start,frame_out=end,narration=' '.join(by_number[n]['text'] for n in refs),asset_id=None,in_s=0,transition=row['transition_out'],transition_handle_frames=row.get('transition_handle_frames',4 if row['transition_out']=='dissolve' else 0),approved=False,plan_row_id=bid,plan_row=copy.deepcopy(row))
   # A name in the narration is not a claim that the source shows that face.

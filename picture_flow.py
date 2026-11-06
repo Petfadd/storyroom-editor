@@ -421,23 +421,24 @@ def snap_cuts(p, root, window=SNAP_WINDOW, min_scene=MIN_SNAP_SCENE, apply=True)
         scene['cut_sync'] = {'cut_at_s': round(seconds, 3), 'quality': entry['quality_after'],
                              'moved_from_s': entry['before_s'] if entry['moved'] else None}
         report['cuts'].append(entry)
-    # Re-own SRT blocks so a straddling line belongs to exactly one scene.
-    owned, used = [], set()
-    for scene in scenes:
+    # Check that a straddling line still belongs to exactly one scene, WITHOUT rewriting
+    # the storyboard. A cut may move by up to `window`, so a scene's own SRT reference can
+    # legitimately no longer cover every block that overlaps it; rewriting the reference
+    # here silently replaced the plan's own record of which line a beat carries, which is
+    # how a beat ended up labelled with the next block's number. Report it instead.
+    conflicts = []
+    for index, scene in enumerate(scenes, 1):
         start, end = scene['frame_in'] / fps, scene['frame_out'] / fps
-        inside = [b['number'] for b in blocks if b['start_ms'] / 1000 < end - 1e-6 and b['end_ms'] / 1000 > start + 1e-6]
-        inside = [n for n in inside if n not in used]
-        if inside:
-            owned.append(inside)
-            used.update(inside)
-        else:  # a beat too short to own a whole block keeps the closest one for display
-            closest = min(blocks, key=lambda b: abs(b['start_ms'] / 1000 - start))
-            owned.append([closest['number']])
-    for scene, numbers in zip(scenes, owned):
-        numbers = sorted(numbers)
-        scene['srt_blocks'] = [numbers[0], numbers[-1]] if numbers else scene['srt_blocks']
-        if numbers:
-            scene['narration'] = ' '.join(b['text'] for b in blocks if b['number'] in numbers)
+        touching = [b['number'] for b in blocks if b['start_ms'] / 1000 < end - 1e-6 and b['end_ms'] / 1000 > start + 1e-6]
+        declared = set(scene.get('srt_blocks') or [])
+        extra = [n for n in touching if n not in declared]
+        if extra:
+            conflicts.append({'scene': index, 'declared': sorted(declared), 'also_touches': extra})
+    report['block_conflicts'] = conflicts
+    if conflicts:
+        report.setdefault('notes', []).append(
+            'A cut moved into a breath, so %d scene(s) now overlap a neighbouring SRT block. '
+            'The storyboard keeps the block references the plan gave it; nothing was re-labelled.' % len(conflicts))
     report['after'] = _cut_counts([s['frame_in'] / fps for s in scenes[1:]], pauses, blocks)
     report['summary'] = {'cuts': len(boundaries), 'moved': moved,
                          'in_a_breath_before': report['before'].get('in_a_breath', 0),
@@ -489,6 +490,11 @@ def outstanding_notes(report):
                      'SRT wording and total duration are unchanged.' % nsum)
     elif narration.get('reason'):
         notes.append('Narration flow: ' + str(narration['reason']))
+    conflicts = narration.get('block_conflicts') or []
+    if conflicts:
+        scenes = ', '.join(str(c['scene']) for c in conflicts[:10]) + ('…' if len(conflicts) > 10 else '')
+        notes.append('Narration flow: %d cut(s) moved into a breath, so scene %s now overlap a neighbouring SRT '
+                     'block. The beat keeps the block reference the plan gave it; nothing was re-labelled.' % (len(conflicts), scenes))
     return notes
 
 

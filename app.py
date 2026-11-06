@@ -204,6 +204,8 @@ def public(p):
  for a in d['assets']:
   a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file';a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
  if d['voiceover']:d['voiceover']['url']=f'/api/projects/{p["id"]}/narration'
+ from automatic import automatic_readiness
+ d['automatic_readiness']=automatic_readiness(p)
  status_path=folder(p['id'])/'automatic_status.json'
  try:d['automatic_status']=json.loads(status_path.read_text()) if status_path.exists() else {'status':'idle','detail':''}
  except (OSError,ValueError):d['automatic_status']={'status':'idle','detail':''}
@@ -211,6 +213,7 @@ def public(p):
  d['picture_flow']=p.get('picture_flow') or None
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
  d['flow_summary']=(p.get('picture_flow') or {}).get('summary') or {}
+ d['rebuild_report']=p.get('rebuild_report')
  return d
 
 @app.get('/')
@@ -451,13 +454,71 @@ def update_asset(pid,aid):
   for s in p['scenes']:
    if s['asset_id']==aid:s['approved']=False
   save(p);return jsonify(public(p))
+def merge_scoped_rebuild(previous, rebuilt, blocks):
+ """Splice a rebuilt block range back into the saved timeline. Returns scenes plus a note.
+
+ A block can belong to several beats (a parent beat spread across blocks 9 and 10 is one
+ row per block, and both rows carry the same parent), so "beats touching these blocks" is
+ the unit of replacement, not single blocks. Those beats are dropped from the saved
+ timeline, the rebuilt ones are shifted so the range starts where it used to start, and
+ the range is spliced back where the first dropped beat sat.
+
+ Re-basing a range onto frame 0 can leave a sub-frame residue at its far end (a 268-frame
+ range rebuilt alone can measure 269 because each end was rounded independently). A
+ residue of at most 1 frame is absorbed at the last rebuilt beat and reported; anything
+ larger is left alone so the caller's continuity guard refuses the save.
+ """
+ if not previous or not rebuilt:
+  return {'scenes': previous or rebuilt, 'rounding_frames': 0, 'of': blocks}
+ inside = set(blocks)
+ def overlaps(scene):
+  return bool(set(scene.get('srt_blocks') or []) & inside)
+ replaced = [s for s in previous if overlaps(s)]
+ rounding = 0
+ if replaced:
+  offset = min(s['frame_in'] for s in replaced) - min(s['frame_in'] for s in rebuilt)
+  for scene in rebuilt:
+   scene['frame_in'] += offset
+   scene['frame_out'] += offset
+  old_span = max(s['frame_out'] for s in replaced) - min(s['frame_in'] for s in replaced)
+  new_span = max(s['frame_out'] for s in rebuilt) - min(s['frame_in'] for s in rebuilt)
+  residue = old_span - new_span
+  if residue and abs(residue) <= 1:
+   last = max(rebuilt, key=lambda s: s['frame_out'])
+   last['frame_out'] += residue
+   rounding = residue
+ ordered = []
+ placed = False
+ for scene in previous:
+  if overlaps(scene):
+   if not placed:
+    ordered.extend(rebuilt)
+    placed = True
+   continue
+  ordered.append(scene)
+ if not placed:
+  ordered.extend(rebuilt)
+ return {'scenes': ordered, 'rounding_frames': rounding, 'of': blocks}
+
 @app.post('/api/projects/<pid>/storyboard')
 def build(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid)
   if not p['srt']:raise BadRequest('Import the narration SRT first.')
-  if p['scenes'] and not (request.get_json(silent=True) or {}).get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
-  from automatic import restore_reviewed,full_source_analysis
+  payload=request.get_json(silent=True) or {}
+  if p['scenes'] and not payload.get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
+  # Optional block range: rebuild only the beats covering these SRT blocks and leave the
+  # rest of the timeline exactly as saved, approvals included.
+  scope=None
+  if payload.get('blocks'):
+   try:scope=sorted({int(x) for x in payload['blocks']})
+   except (TypeError,ValueError):raise BadRequest('blocks must be a list of SRT block numbers.')
+   if not scope:raise BadRequest('blocks must name at least one SRT block.')
+   known={b['number'] for b in p['srt']['blocks']}
+   unknown=[n for n in scope if n not in known]
+   if unknown:raise BadRequest('These SRT blocks do not exist: '+', '.join(map(str,unknown[:8]))+'.')
+  from automatic import restore_reviewed,full_source_analysis,carry_previous_review
+  previous=copy.deepcopy(p.get('scenes') or [])
   full_source_analysis(p,folder(pid))
   if restore_reviewed(p,folder(pid)):
    save(p);return jsonify(public(p))
@@ -494,12 +555,21 @@ def build(pid):
    # Stills first, while the plan still says which beats are photographs or STILL moments:
    # extraction registers one approved frame per requested moment and rewrites those rows.
    # Only then are the remaining moving intervals bounded to their uploaded files.
+   if scope:
+    # Rebuild only the beats covering the requested blocks. The plan rows outside the
+    # range are dropped, so assembling this subset cannot disturb them.
+    inside=[r for r in decisions if set(r.get('srt_blocks') or []) & set(scope)]
+    if not inside:raise BadRequest('No planned beat covers blocks '+', '.join(map(str,scope[:8]))+'.')
+    timeline_start=min(r['timeline_in_ms'] for r in inside);timeline_end=max(r['timeline_out_ms'] for r in inside)
+    decisions=[copy.deepcopy(r) for r in inside]
+    for r in decisions:
+     r['timeline_in_ms']-=timeline_start;r['timeline_out_ms']-=timeline_start
    still_plan=stills(p,folder(pid),copy.deepcopy(decisions))
    extracted=sum(bool(a.get('derived_from')) for a in p['assets'])
    still_plan=native_rows(p,still_plan)
    p['allow_archive_reuse']=True
    original=p.get('picture_plan')
-   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1}
+   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1,'partial':bool(scope)}
    try:assemble(p,scenes)
    except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    finally:
@@ -515,6 +585,23 @@ def build(pid):
   from automatic import validate_assembly
   decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
   if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join(decoded['errors'][:3]))
+  # An incremental rebuild: restore the review state of every beat whose picture the
+  # rebuild reproduced exactly, and leave the rest unapproved. `scope` narrows this to a
+  # block range, so editing one region does not disturb approvals elsewhere.
+  if scope:
+   if not decisions:raise BadRequest('An incremental rebuild needs a block map: the production script path has no per-block plan to rebuild by range.')
+   spliced=merge_scoped_rebuild(previous,p['scenes'],scope);merged=spliced['scenes']
+   # A range rebuild must reproduce the same timeline it replaces. If it does not, the
+   # saved timeline would gain a gap or an overlap, so refuse rather than save a broken
+   # storyboard and ask for a full rebuild instead.
+   previous_last=0
+   for i,scene in enumerate(merged):
+    if scene['frame_in']!=previous_last:
+     raise BadRequest('Rebuilding blocks '+', '.join(map(str,scope[:6]))+' would change the length of the surrounding timeline. Rebuild the whole storyboard instead.')
+    previous_last=scene['frame_out']
+   p['scenes']=merged
+  carried=carry_previous_review({'scenes':previous},p['scenes'])
+  p['rebuild_report']={'at':time.time(),'beats':len(p['scenes']),'approvals_carried':carried['carried'],'needs_review':carried['requiring_review'],'scope':scope,'previous_scenes':len(previous),'rounding_frames':(spliced['rounding_frames'] if scope else 0)}
   save(p);return jsonify(public(p))
 @app.patch('/api/projects/<pid>/scenes/<sid>')
 def edit_scene(pid,sid):

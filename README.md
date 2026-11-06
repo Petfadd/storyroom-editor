@@ -158,6 +158,54 @@ is not black — it still says nothing about who or what it shows.
   cut moved. It makes no claim about who or what appears in the picture and approves
   nothing.
 
+## Re-editing without losing review
+
+A storyboard is not finished when it is first built; it is finished after a few rounds of
+"this shot is wrong, that line needs a different picture". Both rounds are cheap now.
+
+- **A rebuild keeps the review you already did.** Every rebuild compares each new beat
+  with the saved one on the fields that decide what the picture is — SRT blocks, in/out
+  frames, source, in-point, transition and its handles, narration, person, category,
+  context-only flag, focus. A beat that matches keeps its approval, stamped
+  `carried_from_rebuild`; a beat that changed comes back unapproved so it is looked at
+  again. Nothing is approved that a person had not approved before. On a 120-beat
+  programme, a full rebuild carried 119 approvals and asked for exactly one review.
+- **Rebuild one range.** `POST /api/projects/<id>/storyboard` with
+  `{"replace": true, "blocks": [40, 41, 42]}` rebuilds just those blocks. Only beats
+  touching those blocks are replaced (a block can belong to several beats, and all of them
+  are replaced together); every other beat keeps its id, timing, approval and notes. The
+  rebuilt beats are shifted so the range starts exactly where it used to, and the request
+  is **refused with a plain reason** — rather than saving a gap — if the new range would
+  change the length of the surrounding timeline. The response carries `rebuild_report`
+  (`scope`, `beats`, `approvals_carried`, `needs_review`, `rounding_frames`). In the editor
+  this is the **Rebuild this block** button on each beat. Measured: **0.4 s per block** on
+  a 240-beat, 30-minute programme — blocks 1, 57, 160 and 240 each rebuilt in place with
+  239 of 240 approvals carried, the other beats unchanged, the timeline contiguous and the
+  duration still exactly 1800.00 s; the rendered master measured 54000 frames / 30:00.00.
+  Re-basing a range onto frame 0 can leave a **1-frame** rounding residue, which is
+  absorbed at the end of the rebuilt range and reported; a larger change is refused.
+- **A block map is required for a range rebuild**, because a script-style plan has no
+  per-block rows to rebuild by.
+
+## When nothing seems to happen
+
+Auto-assembly used to be silent: inputs present, no plan, status `idle`, no message. It is
+now impossible to miss. `automatic_readiness` is computed once and published — to the
+project (`automatic_status.json`) and to every project read as `automatic_readiness` — and
+answers "why is nothing happening" with one of:
+
+| status | meaning | what the studio offers |
+|---|---|---|
+| `blocked` | an input is missing, the map cannot be read, or it names a file that is not uploaded | the missing piece, by name |
+| `needs_plan` | media, SRT and voice are all present but no plan says which picture goes where | block-map template, upload a map, upload a script |
+| `manual` | the timeline was hand-edited; auto-assembly will no longer overwrite it | rebuild deliberately |
+| `paused` | auto-assemble is switched off for this project | — |
+| `ready` | everything is present and a plan exists | assembly runs |
+| `built` | picture beats exist and can be reviewed | — |
+
+The notice names the plan it found and the inputs it still wants, in plain words, in the
+studio. Assembly cannot fail without saying why.
+
 ## Planning: shot index, feasibility and the map template
 
 Three aids, all read-only. None of them places a picture for you.

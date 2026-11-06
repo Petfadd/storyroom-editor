@@ -9,7 +9,15 @@ function briefHTML(){return `<div class="stack">${automaticStatusHTML()}<div id=
 function uploadFeedback(message,error=false){let node=$('#upload-feedback');if(!node&&$('#content')){node=document.createElement('div');node.id='upload-feedback';node.setAttribute('role','status');node.setAttribute('aria-live','polite');$('#content').prepend(node)}if(node){node.hidden=false;node.className='notice'+(error?' warn':'');node.innerHTML=`<span>${E(message)}</span>${window.activeImport?'<p><button type="button" onclick="cancelCurrentImport()">Cancel remaining import</button></p>':''}`}if(!window.activeImport||error)toast(message)}
 function automaticStatusHTML(){
  if(!P)return '';
- const s=P.automatic_status||{},r=P.render||{},working=['queued','working','studying','storyboard_ready','rendering'].includes(s.status);
+ const s=P.automatic_status||{},r=P.render||{},ready=P.automatic_readiness||{},working=['queued','working','studying','storyboard_ready','rendering'].includes(s.status);
+ // Never sit silently idle: if assembly will not run, say why and what to do about it.
+ if(ready.status&&['blocked','needs_plan','manual','paused'].includes(ready.status)&&!P.scenes.length){
+  const action=ready.status==='needs_plan'?'<p><button type="button" onclick="downloadMapTemplate()">Download the block-map template</button> <button type="button" onclick="chooseFile(\'srt_block_map\')">Upload a block map</button> <button type="button" onclick="chooseFile(\'production_script\')">Upload a production script</button></p>'
+   :ready.status==='blocked'?`<p class="small">Still needed: ${E((ready.missing||[]).join(', ')||'see the message above')}</p>`
+   :ready.status==='manual'?'<p><button type="button" onclick="buildStoryboard()">Rebuild deliberately</button></p>'
+   :'';
+  return `<div class="notice warn"><strong>Automatic assembly is not running — ${E({blocked:'inputs are missing',needs_plan:'there is no plan yet',manual:'manual edits take precedence',paused:'it is switched off for this production'}[ready.status])}.</strong><p>${E(ready.detail||s.detail||'')}</p>${action}</div>`;
+ }
  if(s.status==='error')return `<div class="notice error"><strong>Automatic assembly stopped.</strong><p>${E(s.detail||'Review the uploaded files and build the storyboard again.')}</p></div>`;
  if(P.scenes.length)return `<div class="notice"><strong>${P.scenes.length} clean-cut picture slots are ready.</strong><p>Source study, six-slot repetition checks and continuous narration checks are complete. ${['running','queued'].includes(r.status)?'The continuous master is rendering. The Program monitor will switch to it when ready.':'Automatic continuous-master rendering is enabled. The Program monitor uses the rendered master for smooth playback.'}</p></div>`;
  if(working)return `<div class="notice"><strong>Working automatically — please allow processing time.</strong><p>${E(s.detail||'Studying the complete source videos before assembly.')}</p><p class="small">The timeline will appear here when the background job finishes. You can leave this page open.</p></div>`;
