@@ -105,7 +105,8 @@ def parse(raw,ext):
  elif ext=='.json':
   data=json.loads(text);rows=data.get('beats') if isinstance(data,dict) else data
  else:raise ValueError('Choose a .csv or .json picture plan: a JSON list, or an object with a beats array.')
- if not isinstance(rows,list) or not 1<=len(rows)<=5000:raise ValueError('Provide 1–5000 beat rows.')
+ if not isinstance(rows,list) or not rows:raise ValueError('Provide at least one beat row.')
+ if len(rows)>20000:raise ValueError('Provide at most 20,000 beat rows in one plan.')
  rows=normalize_rows(rows)
  result=[];seen=set();last=0
  for i,rawrow in enumerate(rows,1):
@@ -166,7 +167,15 @@ def assemble(p,seed):
   # is made against SRT timing shifted by the same amount. A whole-map build is unaffected.
   shift=0 if not partial else by_number.get(refs[0],{}).get('start_ms',0)-row['timeline_in_ms']
   actual=[b['number'] for b in blocks if b['start_ms']<row['timeline_out_ms']+shift and b['end_ms']>row['timeline_in_ms']+shift]
-  if set(actual)!=set(refs):raise ValueError('Beat '+bid+': SRT references do not match its timeline interval.')
+  if set(actual)!=set(refs):
+   # A range rebuild replays the surfaces the editor reviewed, and those are block
+   # boundaries nudged by up to 0.35s into a narration breath. Such a cut can legitimately
+   # reach into the neighbouring block, so the tolerance there is one immediate neighbour
+   # - never a distant block, and never a declared block that went missing.
+   near=set()
+   for n in refs:near.update([n-1,n,n+1])
+   if not partial or not set(refs)<=set(actual) or not set(actual)<=near:
+    raise ValueError('Beat '+bid+': SRT references do not match its timeline interval.')
   s=copy.deepcopy(by_srt[refs[0]]);s.update(id=uuid.uuid4().hex[:16],srt_blocks=[min(refs),max(refs)],frame_in=start,frame_out=end,narration=' '.join(by_number[n]['text'] for n in refs),asset_id=None,in_s=0,transition=row['transition_out'],transition_handle_frames=row.get('transition_handle_frames',4 if row['transition_out']=='dissolve' else 0),approved=False,plan_row_id=bid,plan_row=copy.deepcopy(row))
   # A name in the narration is not a claim that the source shows that face.
   s['mentioned_person']=s.get('person','');s['person']=str(row.get('shown_person') or '');s['focus']=str(row.get('visible_content') or s.get('category') or 'Case footage')

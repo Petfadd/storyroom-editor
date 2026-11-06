@@ -82,9 +82,45 @@ IN/OUT per block, which approximate sampled anchors in a guide cannot supply.
 
 ## One editor, any programme
 
-Nothing in the timeline is sized to a particular case. The same project runs a 3-minute
-piece with 37 beats or a 30-minute piece with 240 beats, with blocks that map one-to-one
-or several-to-one, and with any mix of video and photographs:
+Nothing in the timeline is sized to a particular case, and nothing is weighted per minute.
+One code path, one set of rules, one output shape: a 1-minute piece and a 60-minute piece
+are built, reviewed, rebuilt and rendered by exactly the same functions. Measured on this
+machine, each runtime built to its exact length with no validation errors:
+
+| Runtime | SRT blocks | Beats | Longer runtime | Build | Timeline |
+|---|---|---|---|---|---|
+| 1 min | 11 | 11 | 1 | 124 s | 60.00 s, 0 errors |
+| 5 min | 49 | 49 | 2 | 130 s | 300.00 s, 0 errors |
+| 10 min | 96 | 96 | 4 | 173 s | 600.00 s, 0 errors |
+| 18 min | 176 | 176 | 7 | 224 s | 1080.00 s, 0 errors |
+| 25 min | 249 | 249 | 10 | 240 s | 1500.00 s, 0 errors |
+| 30 min | 291 | 291 | 12 | 300 s | 1800.00 s, 0 errors |
+| 60 min | 593 | 593 | 24 | 454 s | 3600.00 s, 0 errors |
+
+That table is the point of this section: the numbers differ, the behaviour does not. Each
+build produced a contiguous timeline starting at frame 0 and ending on the last SRT block,
+with every scene carrying the block reference the plan gave it. Longer runtimes are slower
+in proportion to the picture, not by a different route.
+
+- **Beats and blocks are independent.** A map may give one row per SRT block, or let one
+  beat span many blocks (the build merges their narration into the beat). Both are read
+  the same way.
+- **Narration is optional.** A programme can be carried by its text alone: the picture is
+  built, approved and exported on the SRT timing, and the master is written without an
+  audio stream. A narration track is still checked against the picture when one is
+  supplied, to 0.25 s.
+- **Cue clocks are read as tools write them.** A one- or two-digit hour field and one to
+  three millisecond digits are both accepted, so a 47-minute programme exported as
+  `0:00:00,000` imports. Nonsense — out of order, empty, zero-length — is still refused.
+- **A plan and a narration must agree on length.** If a block map covers only part of the
+  SRT (a map built for a 10-minute cut dropped onto an 18-minute one), readiness says
+  exactly how far it reaches, how many blocks are unplaced and which is the first, and
+  export readiness refuses with the same numbers. It never leaves the tail of a programme
+  silently unplanned.
+- **Capacity is judged on the plan you are building.** A range rebuild or a scoped
+  feasibility query measures only the beats it is placing, against the footage that
+  exists. If a runtime needs more picture than you hold, the report says by how much and
+  asks for more footage — it does not repeat a shot, loop it, or shorten the narration.
 
 - **Beats and blocks are independent.** A map may give one row per SRT block, or let one
   beat span many blocks (the build merges their narration into the beat). Both are read

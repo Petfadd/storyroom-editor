@@ -60,14 +60,18 @@ def busy(pid):return pid in JOBS and JOBS[pid].snapshot()['status'] in ['queued'
 def editable(pid):
  if busy(pid):raise BadRequest('This production is exporting. Wait or cancel before editing.')
 def stamp(t):
- h,m,s,ms=map(int,re.split('[:,.]',t));return ((h*60+m)*60+s)*1000+ms
+ h,m,s,ms=re.split('[:,.]',t);ms=(ms+'000')[:3]
+ return ((int(h)*60+int(m))*60+int(s))*1000+int(ms)
 
 def parse_srt(text):
  blocks=[];last=0;nums=set()
  for part in re.split(r'\n\s*\n',text.strip().replace('\r\n','\n')):
   lines=part.splitlines()
   if len(lines)<3 or not lines[0].strip().isdigit():raise BadRequest('SRT blocks need a number, time range and narration text.')
-  match=re.fullmatch(r'\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*',lines[1])
+  # Cue clocks are accepted as the tools actually write them: a one- or two-digit hour
+  # field and one to three millisecond digits. A 47-minute programme written as
+  # 0:00:00,000 used to be rejected outright, which is a length limit nobody asked for.
+  match=re.fullmatch(r'\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*',lines[1])
   if not match:raise BadRequest('Use standard SRT time ranges: 00:00:00,000 --> 00:00:05,000.')
   n=int(lines[0]);a,b=map(stamp,match.groups());txt=' '.join(lines[2:]).strip()
   if n in nums or a<last or b<=a or not txt:raise BadRequest('SRT numbers must be unique and time ranges must be ordered, positive and non-overlapping.')
@@ -163,16 +167,22 @@ def scene_review(p,i,s,a,ranges,last,final=False):
 
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
- from automatic import repetition_errors,source_capacity_errors
+ from automatic import repetition_errors,source_capacity_errors,_plan_coverage
  errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
+ # A block map written for a different runtime leaves blocks unplaced. Say so as a plan
+ # problem with the numbers, rather than letting the picture come up short at the end.
+ uncovered=_plan_coverage(p)
+ if uncovered and p['scenes']:
+  errors.append(str(len(uncovered))+' SRT block(s) are not placed by the block map (first is block '+str(uncovered[0])+'). Extend the map over the whole narration, or download a fresh template for this SRT.')
  if not p['brief'].strip() and not p.get('srt'):errors.append('Import your SRT story, or add a case brief.')
  from production import document
  from edl import signature
  if p['scenes'] and (p.get('picture_plan') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current SRT block map / production script.')
  if p.get('production_script') and p['scenes'] and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
- if not p['voiceover']:errors.append('Import the original narration audio.')
+ # Narration is optional. A programme may be carried by its text alone; what is not
+ # allowed is a narration track whose length disagrees with the picture it sits under.
  if not p['scenes']:errors.append('Import an SRT and build the storyboard.')
- if p['voiceover'] and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
+ if p.get('voiceover') and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
  for i,s in enumerate(p['scenes']):
   a=assets.get(s['asset_id'])
   scene_errors,scene_notes=scene_review(p,i,s,a,ranges,last,final)
@@ -209,7 +219,7 @@ def public(p):
  status_path=folder(p['id'])/'automatic_status.json'
  try:d['automatic_status']=json.loads(status_path.read_text()) if status_path.exists() else {'status':'idle','detail':''}
  except (OSError,ValueError):d['automatic_status']={'status':'idle','detail':''}
- d['inputs_ready']=bool(p.get('srt') and p.get('voiceover') and p.get('production_script') and p.get('assets'))
+ d['inputs_ready']=bool(p.get('srt') and p.get('production_script') and p.get('assets'))
  d['picture_flow']=p.get('picture_flow') or None
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
  d['flow_summary']=(p.get('picture_flow') or {}).get('summary') or {}
@@ -509,7 +519,7 @@ def build(pid):
   if p['scenes'] and not payload.get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
   # Optional block range: rebuild only the beats covering these SRT blocks and leave the
   # rest of the timeline exactly as saved, approvals included.
-  scope=None
+  scope=None;adopted_surfaces=0
   if payload.get('blocks'):
    try:scope=sorted({int(x) for x in payload['blocks']})
    except (TypeError,ValueError):raise BadRequest('blocks must be a list of SRT block numbers.')
@@ -520,7 +530,10 @@ def build(pid):
   from automatic import restore_reviewed,full_source_analysis,carry_previous_review
   previous=copy.deepcopy(p.get('scenes') or [])
   full_source_analysis(p,folder(pid))
-  if restore_reviewed(p,folder(pid)):
+  # A cached timeline may only stand in for a whole rebuild. On a block-range rebuild it
+  # would replace the entire storyboard with the cached one, so a request that named three
+  # blocks would silently rebuild (and resequence) all of them.
+  if not scope and restore_reviewed(p,folder(pid)):
    save(p);return jsonify(public(p))
   from production import infer
   detected=infer(p);p['profile']=detected['profile']
@@ -560,17 +573,34 @@ def build(pid):
     # range are dropped, so assembling this subset cannot disturb them.
     inside=[r for r in decisions if set(r.get('srt_blocks') or []) & set(scope)]
     if not inside:raise BadRequest('No planned beat covers blocks '+', '.join(map(str,scope[:8]))+'.')
-    timeline_start=min(r['timeline_in_ms'] for r in inside);timeline_end=max(r['timeline_out_ms'] for r in inside)
+    timeline_start=min(r['timeline_in_ms'] for r in inside)
     decisions=[copy.deepcopy(r) for r in inside]
     for r in decisions:
      r['timeline_in_ms']-=timeline_start;r['timeline_out_ms']-=timeline_start
+    # A cut can sit anywhere inside a beat's own wording and still be faithful to it: the
+    # saved storyboard holds the surfaces the editor actually reviewed, block boundaries
+    # nudged by up to 0.35s into narration breaths. When the range is one saved beat per
+    # planned beat - the normal case - those exact surfaces are reused, so a rebuild
+    # reproduces the reviewed picture instead of silently moving cuts and changing the
+    # length of the range it was asked to preserve.
+    saved=[s for s in previous if set(s.get('srt_blocks') or [])&set(scope)]
+    if saved and len(saved)==len(decisions):
+     first=min(s['frame_in'] for s in saved)
+     for row,hit in zip(decisions,saved):
+      row['timeline_in_ms']=round((hit['frame_in']-first)/30*1000)
+      row['timeline_out_ms']=round((hit['frame_out']-first)/30*1000)
+     adopted_surfaces=len(saved)
    still_plan=stills(p,folder(pid),copy.deepcopy(decisions))
    extracted=sum(bool(a.get('derived_from')) for a in p['assets'])
    still_plan=native_rows(p,still_plan)
    p['allow_archive_reuse']=True
    original=p.get('picture_plan')
    p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1,'partial':bool(scope)}
-   try:assemble(p,scenes)
+   try:
+    # The plan decides the cuts. On a range rebuild the seed must also be limited to the
+    # blocks being rebuilt: passing the whole-timeline seeds assembled every beat with
+    # whole-timeline frame numbers, so a one-block rebuild moved the entire storyboard.
+    assemble(p,[s for s in scenes if set(s['srt_blocks'])&set(scope)] if scope else scenes)
    except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    finally:
     if original is None:p.pop('picture_plan',None)
@@ -601,7 +631,7 @@ def build(pid):
     previous_last=scene['frame_out']
    p['scenes']=merged
   carried=carry_previous_review({'scenes':previous},p['scenes'])
-  p['rebuild_report']={'at':time.time(),'beats':len(p['scenes']),'approvals_carried':carried['carried'],'needs_review':carried['requiring_review'],'scope':scope,'previous_scenes':len(previous),'rounding_frames':(spliced['rounding_frames'] if scope else 0)}
+  p['rebuild_report']={'at':time.time(),'beats':len(p['scenes']),'approvals_carried':carried['carried'],'needs_review':carried['requiring_review'],'scope':scope,'previous_scenes':len(previous),'rounding_frames':(spliced['rounding_frames'] if scope else 0),'cut_surfaces_adopted':adopted_surfaces}
   save(p);return jsonify(public(p))
 @app.patch('/api/projects/<pid>/scenes/<sid>')
 def edit_scene(pid,sid):
@@ -732,7 +762,7 @@ def asset_file(pid,aid):
 @app.get('/api/projects/<pid>/narration')
 def narration(pid):
  p=load(pid)
- if not p['voiceover']:raise NotFound('No narration imported.')
+ if not p.get('voiceover'):raise NotFound('No narration imported.')
  return send_from_directory(folder(pid),p['voiceover']['path'],conditional=True)
 @app.get('/api/projects/<pid>/exports/<name>')
 def export_file(pid,name):
@@ -781,7 +811,10 @@ def shot_index_report(pid):
 def feasibility_report(pid):
  from shot_plan import feasibility
  p=load(pid)
- return jsonify(feasibility(p,folder(pid)))
+ blocks=request.args.get('blocks')
+ scope=[int(x) for x in re.findall(r'\d+',blocks)] if blocks else None
+ try:return jsonify(feasibility(p,folder(pid),scope))
+ except ValueError as e:raise BadRequest('Feasibility: '+str(e))
 
 @app.get('/api/projects/<pid>/candidates')
 def candidate_report(pid):

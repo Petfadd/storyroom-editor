@@ -108,10 +108,15 @@ class RenderJob:
         return w,h
 
     def _find_voiceover(self):
+        """The narration track, or None when the programme has no narration.
+
+        A programme can be carried by its text alone. Returning None keeps every other
+        length working, and the export then muxes the picture without an audio stream
+        instead of refusing over a track nobody supplied.
+        """
         candidates = sorted((self.root/'inputs').glob('voiceover.*'))
         candidates = [p for p in candidates if p.suffix.lower() in ('.wav','.mp3','.m4a','.aac','.flac','.ogg')]
-        if not candidates: raise RuntimeError('Voiceover is missing. Upload voiceover.wav or voiceover.mp3 first.')
-        return candidates[0]
+        return candidates[0] if candidates else None
 
     def _has_audio(self, path):
         key = str(path)
@@ -284,7 +289,7 @@ class RenderJob:
         self.update(status='running', stage='Validating timestamp matches', progress=.3)
         shots = self.story['shots']; voiceover_path = self._find_voiceover(); settings = self.story['settings']
         srt = self.root/settings['caption_srt']
-        if not srt.exists(): raise RuntimeError(f'Missing documentary caption file: {srt.name}')
+        if self.captions_enabled and not srt.exists(): raise RuntimeError(f'Missing documentary caption file: {srt.name}')
         for shot in shots:
             self._resolve_visual(shot)
             if shot['kind'] == 'archival':
@@ -331,7 +336,20 @@ class RenderJob:
         # already encoded it to the final settings, so the picture is stream-copied and
         # only the narration is encoded. Re-encoding a 30-minute programme here a second
         # time was the single largest cost of a render.
-        if self.captions_enabled:
+        if voiceover_path is None:
+            # Text-only programme: no narration stream to mux. The picture is complete on
+            # its own, so it is copied (or re-encoded only if captions are being burned).
+            if self.captions_enabled:
+                cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path,
+                       '-filter_complex', f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]",
+                       '-map', '[picture]', '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),
+                       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-an',
+                       '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
+            else:
+                cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-i', base_path,
+                       '-map', '0:v:0', '-t', f'{duration:.6f}', '-c:v', 'copy', '-an',
+                       '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
+        elif self.captions_enabled:
             picture_filter = f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]"
             cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path, '-i', voiceover,
                    '-filter_complex', f'{picture_filter};{audio_filter}', '-map', '[picture]', '-map', '[narration]',

@@ -160,6 +160,28 @@ def monitor_render(studio,pid,status):
     pass
    time.sleep(2)
  threading.Thread(target=watch,daemon=True,name='automatic-render-monitor-'+pid).start()
+def _plan_coverage(p):
+ """Which SRT blocks the block map never places, and where the plan stops."""
+ blocks=(p.get('srt') or {}).get('blocks') or []
+ rows=(p.get('srt_block_map') or {}).get('beats') or []
+ if not blocks or not rows:return []
+ covered={n for row in rows for n in row.get('srt_blocks') or []}
+ return [b['number'] for b in blocks if b['number'] not in covered]
+
+
+def _plan_does_not_cover_srt(p):
+ return bool(_plan_coverage(p))
+
+
+def _coverage_detail(p):
+ missing=_plan_coverage(p)
+ plan_s=((p.get('srt_block_map') or {}).get('beats') or [{}])[-1].get('timeline_out_ms',0)/1000
+ srt_s=((p.get('srt') or {}).get('blocks') or [{}])[-1].get('end_ms',0)/1000
+ return (str(len(missing))+' SRT block(s) are not placed by this block map: it covers '+str(round(plan_s,1))+'s of a '
+         +str(round(srt_s,1))+'s narration (first unplaced block '+str(missing[0])+'). A map written for a different '
+         'runtime needs its rows extended, or download a fresh template for this SRT. Nothing is left silently unplanned.')
+
+
 def automatic_readiness(p):
  """Why automatic assembly will or will not run, in words an editor can act on.
 
@@ -175,7 +197,7 @@ def automatic_readiness(p):
  missing=[]
  if not have_media:missing.append('footage')
  if not have_srt:missing.append('SRT')
- if not have_voice:missing.append('narration')
+ # Narration is recorded, never required: a programme may be carried by its text alone.
  if have_map:
   plan='block map'
  elif have_script:
@@ -188,10 +210,10 @@ def automatic_readiness(p):
          'manual_edits':bool(p.get('manual_scene_edits'))}
  if not have_srt:
   state.update(status='blocked',detail='Automatic assembly is waiting for the narration SRT, which supplies every beat timing.')
- elif not have_voice:
-  state.update(status='blocked',detail='Automatic assembly is waiting for the original narration audio. Picture is timed to it, never trimmed to fit.')
  elif not have_media:
   state.update(status='blocked',detail='Automatic assembly is waiting for footage. Upload the source videos (and photographs if the picture policy allows them).')
+ elif have_map and _plan_does_not_cover_srt(p):
+  state.update(status='blocked',detail=_coverage_detail(p))
  elif not plan:
   state.update(status='needs_plan',detail='All required inputs are present, but there is no plan saying which picture goes where. Upload a block map (download the template first), or a production script with per-scene instructions. Without one, nothing is placed - the app will not choose pictures by guesswork.')
  elif p.get('scenes'):

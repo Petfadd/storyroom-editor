@@ -101,10 +101,25 @@ def _beat_lengths(p):
     return [(r.get('timeline_out_ms', 0) - r.get('timeline_in_ms', 0)) / 1000 for r in _plan_rows(p)]
 
 
-def feasibility(p, root):
-    """Seconds required against seconds available, per source. Never guesses."""
+def feasibility(p, root, blocks=None):
+    """Seconds required against seconds available, per source. Never guesses.
+
+    `blocks` narrows the arithmetic to one rebuilt range, so a block-range rebuild is
+    judged on the beats it is actually placing rather than the whole programme. A plan
+    whose rows stop covering the SRT is called out on its own: that is how a map built for
+    a shorter or differently shaped narration announces that it needs extending, instead
+    of quietly leaving the tail of the programme unplanned.
+    """
     index = {entry['file']: entry for entry in shots(root, p.get('assets'))}
     rows = _plan_rows(p)
+    srt_blocks = (p.get('srt') or {}).get('blocks') or []
+    uncovered = []
+    if rows and srt_blocks:
+        covered = {n for row in rows for n in row.get('srt_blocks') or []}
+        uncovered = [b['number'] for b in srt_blocks if b['number'] not in covered]
+    if blocks:
+        wanted = set(blocks)
+        rows = [r for r in rows if set(r.get('srt_blocks') or []) & wanted]
     demand, unfilled = {}, []
     for row in rows:
         name = row.get('source_file') or ''
@@ -162,9 +177,12 @@ def feasibility(p, root):
     return {
         'has_plan': bool(rows),
         'beat_count': len(rows),
+        'scope_blocks': blocks,
+        'unplanned_blocks': uncovered[:200],
+        'unplanned_block_count': len(uncovered),
         'unfilled_beats': unfilled,
         'sources': sources,
-        'verdict': 'no_plan' if not rows else ('blocked' if (unfilled or any(s['problems'] for s in sources)) else 'feasible'),
+        'verdict': 'no_plan' if not rows else ('blocked' if (unfilled or uncovered or any(s['problems'] for s in sources)) else 'feasible'),
         'scope': 'Arithmetic on decoded durations and the plan as written. Says nothing about what any shot shows; that stays a human review.',
     }
 
