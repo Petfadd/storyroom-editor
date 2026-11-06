@@ -99,6 +99,33 @@ continuous shot, not as repeated footage; picking the same photograph up again l
 cooldown window is still reported. The decoded frame check verifies that a still opens and
 is not black — it still says nothing about who or what it shows.
 
+## Planning: shot index, feasibility and the map template
+
+Three aids, all read-only. None of them places a picture for you.
+
+- **Shot index** (`GET /api/projects/<id>/shot-index`) lists every decoded continuous
+  shot per source with its exact IN/OUT, length, frame count and whether it contains
+  black. A shot is a span between detected changes; the list says nothing about who or
+  what appears in it.
+- **Feasibility** (`GET /api/projects/<id>/feasibility`) compares, per source, the
+  seconds the plan demands against the file's own length and its decoded shots. It flags
+  a source that is short, a beat longer than the longest single shot, or a plan that
+  reuses footage to manufacture length. Before a file is decoded it uses only that
+  file's reported duration and says so.
+- **Candidates** (`GET /api/projects/<id>/candidates?length_s=&handle_s=`) offers only
+  shots that can hold a picture of exactly that length, ignoring black spans. When
+  nothing fits, it returns nothing: a gap is reported, never covered with an
+  approximately-right shot.
+- **Map template** (`GET /api/projects/<id>/block-map-template`, `.csv` by default)
+  writes one row per SRT block with every clock, block reference and parent beat filled,
+  and every picture column deliberately blank. A blank row carries a `gap_note`, so an
+  honest half-finished map imports as a list of gaps rather than a silent choice. The
+  shot table shows the matching `HH:MM:SS.mmm` values for the `source_in`/`source_out`
+  columns.
+
+The build also checks that check itself: if the plan asks one file for more picture than
+it holds, export readiness reports it rather than rendering the same shot on repeat.
+
 ## Picture plan input tolerance
 
 The block-map reader accepts the ways people actually write timecodes and columns:

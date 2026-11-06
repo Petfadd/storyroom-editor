@@ -194,9 +194,9 @@ feel professional simply reported nothing useful.
 | # | Change | Why |
 |---|---|---|
 | 1 | ~~**Still/photo mode**~~ — **done**: `picture_policy` `clips_only`/`mixed` switchable, uploaded photographs and `STILL` map rows (one frame pulled from a clip at its stated time), two layouts, still-aware decoded-frame check | Unblocked photo-heavy cases |
-| 2 | **Shot index → candidate list** — from `Full_source_analysis.json`, list every continuous shot (file, in, out, length) and mark which beats it can hold | Turns "watch 15 videos" into "fill 120 slots from a list" |
-| 3 | **Feasibility report before cutting** — per source: seconds needed vs seconds available; flag impossible assignments | Kills dead-end plans in seconds (gap 7) |
-| 4 | **Block-map builder + export** — prefill 120 rows from the SRT, allow partial saves, download the CSV back | Removes hand-writing and round trips (gaps 2, 5, 6) |
+| 2 | ~~**Shot index → candidate list**~~ — **done**: `GET /shot-index` lists every decoded shot with exact clocks; `GET /candidates?length_s=` returns only shots that hold that exact length; the inspector shows the fits for the selected beat | Turned "watch 15 videos" into a list |
+| 3 | ~~**Feasibility report before cutting**~~ — **done**: `GET /feasibility` compares seconds needed per source against the file length and decoded shot lengths; the same arithmetic now blocks export readiness when a plan demands more picture than a file holds | Killed dead-end plans (gap 7) |
+| 4 | ~~**Block-map builder + export**~~ — **done**: `GET /block-map-template` writes one row per SRT block with clocks and block references filled and picture columns blank by design, importable as named gaps; test proved template → fill from the shot index → re-upload → build 120 scenes, 0 errors | Removed hand-writing and round trips (gaps 2, 5, 6) |
 | 5 | ~~**Tolerant CSV clocks**~~ — **done**: `00:00:05,400` and `00:00:05.400` both parse unquoted, six media-column spellings accepted, `source_out_excl` still understood | Removed a whole class of silent failure (gap 4) |
 | 6 | **Bulk scene approval** | 120 clicks → 1 (gap 8) |
 | 7 | **Incremental rebuild** — rebuild a block range, keep approvals elsewhere | Makes iteration cheap (gap 10) |

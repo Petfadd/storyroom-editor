@@ -110,8 +110,8 @@ def motion(scene,index):
 
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
- from automatic import repetition_errors
- errors.extend(repetition_errors(p))
+ from automatic import repetition_errors,source_capacity_errors
+ errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
  if not p['brief'].strip() and not p.get('srt'):errors.append('Import your SRT story, or add a case brief.')
  from production import document
  from edl import signature
@@ -601,6 +601,56 @@ def download_cut_audit(pid):
  if request.args.get('format')=='json':return jsonify(result)
  output=io.StringIO();fields=list(result['rows'][0]) if result['rows'] else ['scene','status'];writer=csv.DictWriter(output,fieldnames=fields);writer.writeheader();writer.writerows(result['rows'])
  return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="cut-audit.csv"'})
+
+def _shot_plan_prereqs(p):
+ from shot_plan import _analysis
+ if not p.get('srt'):raise BadRequest('Upload the authored SRT first; the plan is built from its blocks.')
+ if not _analysis(folder(p['id'])) and any(a['kind']=='video' for a in p['assets']):raise BadRequest('The sources have not finished decoding yet. Run the build once, then open the plan builder.')
+
+@app.get('/api/projects/<pid>/shot-index')
+def shot_index_report(pid):
+ from shot_plan import shots
+ p=load(pid)
+ if not any(a['kind']=='video' for a in p['assets']):raise BadRequest('Upload at least one video first.')
+ index=shots(folder(pid),p['assets'])
+ total=sum(len(e['shots']) for e in index)
+ return jsonify({'sources':index,'shot_count':total,'scope':'Detected shot boundaries in decoded files. Nothing here says who or what a shot shows.'})
+
+@app.get('/api/projects/<pid>/feasibility')
+def feasibility_report(pid):
+ from shot_plan import feasibility
+ p=load(pid)
+ return jsonify(feasibility(p,folder(pid)))
+
+@app.get('/api/projects/<pid>/candidates')
+def candidate_report(pid):
+ from shot_plan import candidates as candidate_list,shots_of_length
+ p=load(pid)
+ limit=min(int(request.args.get('limit',8) or 8),40)
+ try:
+  if request.args.get('length_s') is not None:
+   length=float(request.args['length_s'])
+   if not 0<length<3600:raise ValueError('Picture length must be between 0 and 3600 seconds.')
+   handle=float(request.args.get('handle_s') or 0)
+   if not 0<=handle<1.5:raise ValueError('Transition handle must be under 1.5 seconds.')
+   return jsonify({'length_s':round(length,3),'needed_s':round(length+handle,3),'candidates':shots_of_length(folder(pid),p,length,handle,limit)})
+  return jsonify(candidate_list(p,folder(pid),beat_id=request.args.get('beat'),limit=limit))
+ except ValueError as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/block-map-template')
+def block_map_template(pid):
+ from shot_plan import prefill_csv,guidance
+ from flask import Response
+ p=load(pid)
+ try:
+  if request.args.get('format')=='json':return jsonify(guidance(p,folder(pid),parent_beat_min(1)))
+  text=prefill_csv(p,parent_beat_min(1))
+ except ValueError as e:raise BadRequest(str(e))
+ return Response(text,mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="block-map-template.csv"'})
+
+def parent_beat_min(value):
+ from edl import integer
+ return integer(value,'beat')
 
 @app.get('/api/projects/<pid>/flow-audit')
 def download_flow_audit(pid):

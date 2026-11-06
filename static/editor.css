@@ -57,3 +57,5 @@
 .management details>summary{cursor:pointer;font-size:12px;color:#cdd8e7;margin:10px 0}
 /* Flow detail lines inside the shot inspector */
 .inspector-panel .small{display:block;margin-top:6px;font-size:10px;line-height:1.55;color:#93a3b8}
+
+/* Planning aids */.plan-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:11px}.plan-table th,.plan-table td{text-align:left;padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap}.plan-table th{color:var(--muted);font-weight:500}#plan-body{max-height:70vh;overflow:auto}

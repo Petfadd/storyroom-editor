@@ -204,6 +204,26 @@ def repetition_errors(p):
   recent.append((i,group,source,start,end,m.get('perceptual_hashes') or []))
  return errors
 
+def source_capacity_errors(p):
+ """A plan cannot demand more picture from a file than the file holds.
+
+ Reusing one interval across many beats would pass the cooldown check while making the
+ same shot repeat over and over, so the arithmetic is stated plainly before a long
+ render. Photographs are exempt: holding one across beats is a legitimate choice.
+ """
+ assets={a['id']:a for a in p['assets']};demand={}
+ for i,s in enumerate(p['scenes'],1):
+  a=assets.get(s.get('asset_id'))
+  if not a or a.get('kind')!='video':continue
+  handle=(s.get('transition_handle_frames') or 0)/30 if s.get('transition')=='dissolve' else 0
+  record=demand.setdefault(a['id'],{'name':a.get('original_name') or a.get('name'),'needed':0.0,'beats':0,'duration':float(a.get('duration') or 0)})
+  record['needed']+=(s['frame_out']-s['frame_in'])/30+handle;record['beats']+=1
+ errors=[]
+ for record in demand.values():
+  if record['duration'] and record['needed']>record['duration']+1e-6:
+   errors.append(str(record['beats'])+' picture beats take '+str(round(record['needed'],3))+'s from '+str(record['name'])+', which is only '+str(round(record['duration'],3))+'s long. Fit cannot come from repeating the same footage; use more sources or shorter beats.')
+ return errors
+
 def link_frame_csv(payload,p):
  """Link the supplied frame-cut CSV to actual SRT blocks; preserve planned frame columns."""
  import csv,io

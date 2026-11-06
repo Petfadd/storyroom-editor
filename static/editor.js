@@ -91,10 +91,91 @@ function renderInspector(){const s=scenes()[sceneIndex];$('#shot-number').textCo
  const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous beat',continued_running_take:'continued take',slid_inside_a_shot:'conformed inside a shot',slid_far_inside_a_shot:'moved far — check it',repeats_recent_footage:'repeats recent footage',jump_cut_within_shot:'deliberate jump cut',no_single_shot_fits:'no shot fits this beat',not_decoded:'source not decoded'};
  const cutLabel={in_a_breath:'cut in a breath',on_a_block_boundary:'cut on a line break',over_speech:'cut over a spoken word',between_blocks:'cut between blocks'};
  const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Picture flow</span><span title="${E(flow.note||'')}">${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · shot ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut to next</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · moved from ${cut.moved_from_s}s`:''}</span></div>`:''}`;
- $('#inspector-content').innerHTML=`<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>Video in-point (seconds)<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="splitBeat()">Split beat</button><button type="button" ${sceneIndex===P.scenes.length-1?'disabled':''} onclick="mergeBeat()">Merge next</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form>`;
+ $('#inspector-content').innerHTML=`<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>Video in-point (seconds)<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="splitBeat()">Split beat</button><button type="button" ${sceneIndex===P.scenes.length-1?'disabled':''} onclick="mergeBeat()">Merge next</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="plan-tools"></div>`;
+ $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
  if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
 }
 function sourceTimingHTML(s,a){if(!a)return '';if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);return `<div class="inspector-group"><label>Source cut / CSV timing</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p><p>${planned?'CSV IN: '+((planned.extracted_frame_ms??planned.source_in_ms)/1000).toFixed(3)+'s':'No conformed CSV row linked to this scene.'}</p><p id="source-clock" class="small"></p></div>`}
+
+
+// ---- Planning aids: shot index, feasibility, block-map template -----------------
+// Everything here reads decoded facts. Nothing places a picture by itself.
+let planCache = {id: null, index: null, feasibility: null};
+
+async function loadPlanning(id){
+  if(planCache.id === id) return planCache;
+  planCache = {id, index: null, feasibility: null};
+  try{ planCache.index = await api(`/api/projects/${id}/shot-index`); }catch(e){ planCache.index = {error: e.message}; }
+  try{ planCache.feasibility = await api(`/api/projects/${id}/feasibility`); }catch(e){ planCache.feasibility = {error: e.message}; }
+  return planCache;
+}
+
+function planningSummaryHTML(){
+  const f = planCache.feasibility || {};
+  if(f.error) return `<div class="notice">Feasibility could not be read: ${E(f.error)}</div>`;
+  const unfilled = (f.unfilled_beats || []).length;
+  const blocked = (f.sources || []).filter(s => s.problems.length);
+  const verdict = f.verdict === 'feasible' ? 'The plan fits the footage as written.'
+    : f.verdict === 'no_plan' ? 'No block map yet, so there is nothing to check.'
+    : `${unfilled} beat${unfilled===1?'':'s'} still unfilled and ${blocked.length} source${blocked.length===1?'':'s'} with a problem.`;
+  const rows = (f.sources || []).map(s => `<tr><td>${E(s.file)}</td><td>${s.beats}</td><td>${s.required_s}s</td><td>${s.available_s}s</td><td>${s.longest_beat_s}s</td><td>${s.longest_shot_s}s</td></tr>`).join('');
+  return `<p>${E(verdict)}</p>${rows?`<table class="plan-table"><thead><tr><th>Source</th><th>Beats</th><th>Needed</th><th>File length</th><th>Longest beat</th><th>Longest shot</th></tr></thead><tbody>${rows}</tbody></table>`:''}
+  ${blocked.map(s => `<div class="notice warn"><strong>${E(s.file)}</strong>${s.problems.map(x => `<p class="small">${E(x)}</p>`).join('')}</div>`).join('')}
+  ${unfilled ? `<p class="small">${unfilled} name${unfilled===1?'s':'s'} no source yet. Those rows are gaps by design; fill them in the block map rather than letting a clip be chosen by guesswork.</p>` : ''}`;
+}
+
+function planToolsHTML(){
+  return `<div class="inspector-group"><label>Planning</label>
+  <div class="inline"><button type="button" onclick="openPlanDialog('index')">Shot index</button><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><button type="button" onclick="downloadMapTemplate()">Download map template</button></div>
+  <p class="small">The template fills every clock and SRT block reference from your SRT and leaves the picture columns blank on purpose. A blank row is a named gap, not a choice.</p></div>`;
+}
+
+async function openPlanDialog(view){
+  if(!P) return;
+  $('#plan-title').textContent = view === 'index' ? 'Shot index' : 'Feasibility';
+  $('#plan-body').innerHTML = '<p class="small">Reading decoded sources…</p>';
+  $('#plan-dialog').showModal();
+  await loadPlanning(P.id);
+  if(view === 'index'){
+    const sources = (planCache.index?.sources || []);
+    if(!sources.length){ $('#plan-body').innerHTML = '<p>Upload at least one video, then run the build so the sources are decoded.</p>'; return; }
+    $('#plan-body').innerHTML = sources.map(s => `<div class="card"><h3>${E(s.file)} · ${s.duration_s.toFixed(3)}s · ${s.shots.length} shots${s.not_decoded?' · not decoded yet':''}</h3>
+      ${s.not_decoded ? '<p class="small">Run the build once so this file is decoded.</p>' : `<table class="plan-table"><thead><tr><th>#</th><th>IN</th><th>OUT</th><th>Length</th><th>Map columns</th><th></th></tr></thead><tbody>${s.shots.map((x,i)=>`<tr><td>${i+1}</td><td>${x.in_s}s</td><td>${x.out_s}s</td><td>${x.duration_s}s</td><td><code>${x.in_clock} → ${x.out_clock}</code></td><td>${x.black?'black':''}</td></tr>`).join('')}</tbody></table>`}</div>`).join('')
+      + `<p class="small">A shot is a decoded span between detected changes. This list says nothing about who or what appears in it.</p>`;
+  } else {
+    $('#plan-body').innerHTML = `<div class="card"><h3>Does this plan fit the footage?</h3>${planningSummaryHTML()}</div>`;
+  }
+}
+
+async function downloadMapTemplate(){
+  if(!P) return;
+  try{
+    const r = await fetch(`/api/projects/${P.id}/block-map-template`);
+    if(!r.ok){ const d = await r.json().catch(()=>({})); throw Error(d.error || 'The template could not be built.'); }
+    const blob = await r.blob(); const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'block-map-template.csv'; a.click();
+    URL.revokeObjectURL(url);
+    toast('Template downloaded. Clocks are filled; picture columns are blank on purpose.');
+  }catch(e){ toast(e.message); }
+}
+
+async function candidateHTMLForScene(s){
+  if(!P) return '';
+  const length = (s.frame_out - s.frame_in) / 30;
+  const handle = s.transition === 'dissolve' ? (s.transition_handle_frames || 0) / 30 : 0;
+  try{
+    const d = await api(`/api/projects/${P.id}/candidates?length_s=${length.toFixed(6)}&handle_s=${handle.toFixed(6)}&limit=6`);
+    if(!d.candidates.length){
+      const anyDecoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
+      if(!anyDecoded && !planCache.index) await loadPlanning(P.id);
+      const decoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
+      return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${decoded
+        ? `No decoded shot is exactly ${(length+handle).toFixed(3)}s long. Nothing is offered rather than something approximate; the build reports this as a gap.`
+        : 'The sources have not been decoded yet. Run the build once, then this list is exact.'}</p></div>`;
+    }
+    return `<div class="inspector-group"><label>Shots that fit this beat · ${(length+handle).toFixed(3)}s</label>${d.candidates.map(c=>`<p class="small"><strong>${E(c.file)}</strong> · <code>${c.in_clock} → ${c.out_clock}</code> · ${c.duration_s}s · ${c.slack_s}s spare</p>`).join('')}<p class="small">Exact-length shots only. Choosing one is still your editorial decision.</p></div>`;
+  }catch(e){ return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${E(e.message)}</p></div>`; }
+}
 
 async function saveEditorScene(e){pauseEditor();await saveScene(e);sourceScene='';renderProject()}
 function renderChecks(){const ss=scenes(),errors=P?.validation?.errors||[];$('#validation-summary').textContent=!P?'No production selected':errors.length?`${errors.length} item${errors.length===1?'':'s'} to review`:(P?.picture_policy==='clips_only'?'Ready · automatic checks passed':'Ready for review export');$('#validation-summary').style.color=errors.length?'var(--amber)':'var(--green)';$('#validation-list').innerHTML=P?`<div class="validation-item ok">✓ ${ss.length} picture beats · original narration / SRT timing preserved.</div>${errors.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${errors.length>3?`<div class="validation-item">${errors.length-3} more items under Review / export checks.</div>`:''}${!editorMaster&&ss.length?'<div class="validation-item">Automatic continuous-master render is enabled. Play the rendered master for smooth cuts.</div>':''}`:'<div class="validation-item">Create a new production, then import the voiceover, SRT and source MP4s.</div>'}
