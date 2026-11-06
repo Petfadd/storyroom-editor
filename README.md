@@ -59,6 +59,27 @@ the setup panel and the shot inspector. Any in-point you edit by hand overrides 
 automatic conform for that beat. These checks describe continuity and cut placement only;
 they say nothing about who or what a frame shows.
 
+## One file or two
+
+A production script may carry the narration SRT inside it, as a Markdown table with a
+block number, a documentary `IN → OUT` clock and the exact wording. On upload the editor
+recovers those blocks verbatim (`document_plan.srt_outline_blocks`): wording, order and
+timing are copied, never rewritten or retimed, and the recovered SRT is also written to
+`inputs/captions.srt`. The setup panel reports how many blocks were recovered and whether
+anything was refused.
+
+Recovery is structural and shows its work:
+
+- columns are identified by content, so a beat table with source IN/OUT columns is never
+  mistaken for narration;
+- timing must be numbered 1..N in order and contiguous. A table with a gap or overlap is
+  reported and **not** used — nothing is retimed to make it fit;
+- an explicitly uploaded `.srt` always wins. Recovery only fills an empty SRT slot, and
+  uploading a separate `.srt` later replaces the recovered one and clears its note.
+
+A block map is still separate work: it needs a media filename and verified source
+IN/OUT per block, which approximate sampled anchors in a guide cannot supply.
+
 ## Optional SRT block map
 
 `srt_block_map.csv` is the only picture plan the editor accepts: one row per caption

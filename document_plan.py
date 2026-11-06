@@ -14,6 +14,75 @@ def tables(text):
    i+=1
   if len(rows)>1:yield [dict(zip(rows[0],row)) for row in rows[1:] if len(row)==len(rows[0])]
 
+def _clock_ms(text):
+ """HH:MM:SS.mmm, HH:MM:SS,mmm or MM:SS.mmm -> milliseconds, else None."""
+ m=re.fullmatch(r'(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,](\d{1,3}))?',str(text).strip())
+ if not m:return None
+ a,b,c,frac=m.groups()
+ hours,minutes,seconds=(0,int(a),int(b)) if c is None else (int(a),int(b),int(c))
+ if minutes>59 or seconds>59:return None
+ return (hours*3600+minutes*60+seconds)*1000+int(((frac or '0')+'000')[:3])
+
+def _clock_span(cell):
+ """'IN → OUT' -> (in_ms, out_ms) when both sides read as clocks."""
+ parts=[p.strip() for p in re.split(r'\s*(?:→|->|-->|–|—)\s*',str(cell)) if p.strip()]
+ vals=[_clock_ms(p) for p in parts]
+ vals=[v for v in vals if v is not None]
+ return (vals[0],vals[1]) if len(vals)>=2 and vals[0]<vals[1] else None
+
+def raw_tables(text):
+ lines=text.splitlines();i=0
+ while i<len(lines):
+  if not lines[i].lstrip().startswith('|'):i+=1;continue
+  rows=[];header=None
+  while i<len(lines) and lines[i].lstrip().startswith('|'):
+   line=lines[i].strip()
+   if not re.fullmatch(r'[|\s:–-]+',line):
+    cells=[clean(c) for c in re.split(r'(?<!\\)\|',line.strip('|'))]
+    header=cells if header is None else header
+    if len(cells)==len(header):rows.append(cells)
+   i+=1
+  if rows:
+   body=rows[1:] if len(rows)>1 and rows[0]==header and not re.fullmatch(r'\d{1,4}',rows[0][0]) else rows
+   if body:yield header,body
+
+def srt_outline(text):
+ """Recover a narration SRT that exists only as a Markdown block table.
+
+ Columns are identified by content, never by header wording: a block-number column,
+ a document clock (IN -> OUT) column, and the longest remaining column as the wording.
+ Returns [(number,in_ms,out_ms,wording)] or [] when no such table is present. The
+ recovery is structural: no wording, order or timing is altered or invented.
+ """
+ for header,rows in raw_tables(text):
+  width=len(header);columns=[[row[i] for row in rows] for i in range(width)]
+  number_i=next((i for i,col in enumerate(columns) if col and all(re.fullmatch(r'\d{1,4}',c) for c in col)),None)
+  if number_i is None or len(rows)<2:continue
+  clock_i=next((i for i,col in enumerate(columns) if i!=number_i and all(_clock_span(c) for c in col)),None)
+  if clock_i is None:continue
+  others=[(sum(len(c) for c in columns[i]),i) for i in range(width) if i not in (number_i,clock_i)]
+  if not others:continue
+  wording_i=max(others)[1];out=[]
+  for row in rows:
+   span=_clock_span(row[clock_i]);wording=' '.join(row[wording_i].split())
+   if not re.fullmatch(r'\d{1,4}',row[number_i]) or not span or not wording:out=[];break
+   out.append((int(row[number_i]),span[0],span[1],wording))
+  if len(out)>=2 and all(a[0]<b[0] for a,b in zip(out,out[1:])):return out
+ return []
+
+def srt_outline_blocks(text):
+ """Validate a recovered outline as SRT blocks; returns (blocks,problems)."""
+ rows=srt_outline(text)
+ if not rows:return [],[]
+ problems=[];last=0
+ if [r[0] for r in rows]!=list(range(1,len(rows)+1)):problems.append('Block numbers in the table are not 1 through '+str(len(rows))+' in order.')
+ for number,start,end,_ in rows:
+  if start!=last:problems.append('Block '+str(number)+' starts at '+str(start)+' ms while the previous block ends at '+str(last)+' ms; recovered timing must be contiguous.')
+  if end<=start:problems.append('Block '+str(number)+' has a non-positive interval.')
+  last=end
+ if problems:return [],problems
+ return [{'number':n,'start_ms':a,'end_ms':b,'text':t} for n,a,b,t in rows],[]
+
 def script_beats(p):
  from edl import parse
  for table in tables(document(p)):

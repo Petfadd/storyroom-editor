@@ -54,6 +54,10 @@ def parse_srt(text):
  if not blocks:raise BadRequest('The SRT is empty.')
  return blocks
 
+def srt_stamp(ms):
+ h,rem=divmod(int(ms),3600000);m,rem=divmod(rem,60000);sec,frac=divmod(rem,1000)
+ return '%02d:%02d:%02d,%03d'%(h,m,sec,frac)
+
 def probe(path):
  try:out=subprocess.run([FFMPEG,'-nostdin','-hide_banner','-probesize','2097152','-analyzeduration','3000000','-threads','2','-i',str(path)],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15).stderr
  except subprocess.TimeoutExpired:raise ValueError('Metadata check timed out after 15 seconds. No full-video analysis was attempted. Check that the file is fully downloaded and playable locally.')
@@ -252,7 +256,7 @@ def perform_upload(pid,key=''):
    except UnicodeDecodeError:raise BadRequest('SRT must be UTF-8 text.')
    blocks=parse_srt(text)
    if p['scenes'] and request.form.get('replace')!='yes':raise BadRequest('Replacing the SRT invalidates the current storyboard. Confirm replacement first.')
-   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[]
+   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[];p.pop('srt_recovery',None)
   elif kind=='srt_block_map':
    from edl import parse,srt_signature
    try:
@@ -272,6 +276,16 @@ def perform_upload(pid,key=''):
    try:text=read_document(f,ext)
    except Exception as e:raise BadRequest('The production script could not be read: '+str(e)[:200])
    (root/'inputs/production_script.txt').write_text(text,encoding='utf-8');p['production_script']={'name':f.filename,'text':text}
+   from document_plan import srt_outline_blocks
+   recovered,outline_problems=srt_outline_blocks(text)
+   if recovered and not p.get('srt'):
+    p['srt']={'blocks':recovered,'name':f.filename+' · narration table','recovered_from':f.filename}
+    (root/'inputs/captions.srt').write_text('\n\n'.join('%d\n%s --> %s\n%s'%(b['number'],srt_stamp(b['start_ms']),srt_stamp(b['end_ms']),b['text']) for b in recovered),encoding='utf-8')
+    p['srt_recovery']={'source':f.filename,'blocks':len(recovered),'total_s':recovered[-1]['end_ms']/1000,'note':'Narration blocks were recovered verbatim from a Markdown block table in the production script. Wording, order and timing were copied, not rewritten; a separate .srt can still replace this.'}
+   elif recovered and p.get('srt'):
+    p['srt_recovery']={'source':f.filename,'blocks':len(recovered),'total_s':recovered[-1]['end_ms']/1000,'skipped':True,'note':'This production script also contains a narration block table. The separate .srt already uploaded is used; upload the table as .srt if you want it instead.'}
+   elif outline_problems:
+    p['srt_recovery']={'source':f.filename,'blocks':0,'problems':outline_problems[:5],'note':'A narration block table was found but not used; the reported problems would require altering timing.'}
    for scene in p['scenes']:scene['approved']=False
   elif kind=='voiceover':
    if ext not in ['.mp3','.wav','.m4a','.aac','.flac','.ogg']:raise BadRequest('Use MP3, WAV, M4A, AAC, FLAC or OGG narration.')
