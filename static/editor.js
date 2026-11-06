@@ -126,7 +126,7 @@ function planningSummaryHTML(){
 
 function planToolsHTML(){
   return `<div class="inspector-group"><label>Planning</label>
-  <div class="inline"><button type="button" onclick="openPlanDialog('index')">Shot index</button><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><button type="button" onclick="downloadMapTemplate()">Download map template</button></div>
+  <div class="inline"><button type="button" onclick="openPlanDialog('index')">Shot index</button><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><button type="button" onclick="downloadMapTemplate()">Download map template</button><button type="button" onclick="openFrameQC(1)">Frame QC sheet</button><button type="button" onclick="approveReadyScenes()">Approve all ready beats</button></div>
   <p class="small">The template fills every clock and SRT block reference from your SRT and leaves the picture columns blank on purpose. A blank row is a named gap, not a choice.</p></div>`;
 }
 
@@ -175,6 +175,46 @@ async function candidateHTMLForScene(s){
     }
     return `<div class="inspector-group"><label>Shots that fit this beat · ${(length+handle).toFixed(3)}s</label>${d.candidates.map(c=>`<p class="small"><strong>${E(c.file)}</strong> · <code>${c.in_clock} → ${c.out_clock}</code> · ${c.duration_s}s · ${c.slack_s}s spare</p>`).join('')}<p class="small">Exact-length shots only. Choosing one is still your editorial decision.</p></div>`;
   }catch(e){ return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${E(e.message)}</p></div>`; }
+}
+
+
+// ---- Bulk approval and frame QC ----------------------------------------------
+async function approveReadyScenes(){
+  if(!P || !leave()) return;
+  const unapproved = P.scenes.filter(s => !s.approved).length;
+  if(!unapproved){ toast('Every picture beat is already approved.'); return; }
+  if(!confirm(`Approve every picture beat that passes the same checks export readiness uses? ${unapproved} beat(s) are not approved. A beat with any blocking item is left unapproved and listed with its reason. This is your attestation that you reviewed the pictures, not an identity or rights clearance.`)) return;
+  try{
+    const d = await api(`/api/projects/${P.id}/scenes/approve`, 'POST', {attested: true, scope: 'ready'});
+    P = d; renderProject(); await list();
+    const done = d.bulk_approval?.approved?.length || 0, skipped = d.bulk_approval?.skipped || [];
+    if(skipped.length){
+      const first = skipped[0];
+      toast(`${done} beat(s) approved. ${skipped.length} left unapproved — Scene ${first.scene}: ${first.reasons[0]}`);
+    } else toast(`${done} picture beat(s) approved. All others were already approved.`);
+  }catch(e){ toast(e.message); }
+}
+
+let qcCache = {id: null, data: null};
+async function openFrameQC(sheet){
+  if(!P) return;
+  $('#plan-title').textContent = 'Frame QC';
+  $('#plan-body').innerHTML = '<p class="small">Decoding one frame per beat and stamping its source timecode…</p>';
+  if(!$('#plan-dialog').open) $('#plan-dialog').showModal();
+  try{
+    const d = await api(`/api/projects/${P.id}/frame-qc?format=json&sheet=${sheet || 1}`);
+    qcCache = {id: P.id, data: d};
+    const sheets = Math.max(1, d.sheets);
+    $('#plan-body').innerHTML = `<div class="card"><h3>Sheet ${d.sheet} of ${sheets} · beats ${(d.sheet-1)*d.per_sheet+1}–${(d.sheet-1)*d.per_sheet+d.beats_on_sheet}</h3>
+      <p>${E(d.note)}</p>
+      <img style="width:100%;border-radius:6px" src="${d.url}" alt="Contact sheet of decoded frames stamped with source and in-point">
+      <div class="inline">${Array.from({length: sheets}, (_, i) => `<button type="button" onclick="openFrameQC(${i+1})" ${i+1===d.sheet?'disabled':''}>Sheet ${i+1}</button>`).join('')}</div>
+      ${d.missing.length ? `<div class="notice warn"><strong>${d.missing.length} beat(s) could not be decoded</strong>${d.missing.slice(0,6).map(b => `<p class="small">Scene ${b.scene} · SRT ${(b.srt_blocks||[]).join('-')} · ${E(b.source_file || 'no media assigned')} at ${b.in_clock}</p>`).join('')}</div>` : ''}
+      ${d.moved.length ? `<details><summary>${d.moved.length} beat(s) start somewhere other than the plan declared</summary>${d.moved.map(b => `<p class="small">Scene ${b.scene} · SRT ${(b.srt_blocks||[]).join('-')} · ${E(b.source_file)} · planned in-point moved by ${b.declared_drift_s}s → now ${b.in_clock}</p>`).join('')}</details>` : ''}
+      <p class="small">${E(d.scope)}</p></div>`;
+  }catch(e){
+    $('#plan-body').innerHTML = `<div class="notice">${E(e.message)}</div>`;
+  }
 }
 
 async function saveEditorScene(e){pauseEditor();await saveScene(e);sourceScene='';renderProject()}

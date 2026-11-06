@@ -198,9 +198,9 @@ feel professional simply reported nothing useful.
 | 3 | ~~**Feasibility report before cutting**~~ — **done**: `GET /feasibility` compares seconds needed per source against the file length and decoded shot lengths; the same arithmetic now blocks export readiness when a plan demands more picture than a file holds | Killed dead-end plans (gap 7) |
 | 4 | ~~**Block-map builder + export**~~ — **done**: `GET /block-map-template` writes one row per SRT block with clocks and block references filled and picture columns blank by design, importable as named gaps; test proved template → fill from the shot index → re-upload → build 120 scenes, 0 errors | Removed hand-writing and round trips (gaps 2, 5, 6) |
 | 5 | ~~**Tolerant CSV clocks**~~ — **done**: `00:00:05,400` and `00:00:05.400` both parse unquoted, six media-column spellings accepted, `source_out_excl` still understood | Removed a whole class of silent failure (gap 4) |
-| 6 | **Bulk scene approval** | 120 clicks → 1 (gap 8) |
+| 6 | ~~**Bulk scene approval**~~ — **done**: `POST /scenes/approve` uses the same per-scene rules as export readiness, approves only clean beats, reports the rest with reasons, and offers an all-or-nothing mode. 120 clicks → 1 | Done (gap 8) |
 | 7 | **Incremental rebuild** — rebuild a block range, keep approvals elsewhere | Makes iteration cheap (gap 10) |
-| 8 | **Frame-QC sheet** — contact sheet per 20 beats with source timecode, flag beats whose in-point changed | Catches wrong casting before a 3-minute render (gap 11) |
+| 8 | ~~**Frame-QC sheet**~~ — **done**: `GET /frame-qc?sheet=N` draws 20 beats per sheet, each stamping source file and in-point, with `moved ±Ns` and an amber bar when the in-point no longer matches the plan; undecodable beats are drawn blank and listed | Caught wrong casting before a 3-minute render (gap 11) |
 | 9 | **Loud auto-assembly** — if inputs are present but no plan, say so and offer the template | Kills the silent-idle trap (gap 9) |
 | 10 | **Template generator** — emit a ready-to-fill block map from any SRT (120 rows, clocks filled) | Makes the app reusable across cases |
 

@@ -108,6 +108,39 @@ def motion(scene,index):
  z0=min(1.095,1+(z0-1)*factor);z1=min(1.095,1+(z1-1)*factor)
  return dict(id='motion-'+scene['id'],mode='photo_camera',move=mode,emotion=scene['emotion'],focus=scene['focus'],duration_s=duration,zoom_start=round(z0,6),zoom_end=round(z1,6),x_start=round(x0,6),x_end=round(x1,6),y_start=y0,y_end=y1,easing='quick_settle' if mode in ['push','pull','reveal'] else 'linear',rationale=reason+f' Complete the movement over {duration:.3f}s; human review must confirm the actual composition.')
 
+def scene_review(p,i,s,a,ranges,last,final=False):
+ """Review one scene exactly as export readiness does. Bulk approval reuses this.
+
+ Returns (errors, notes). `ranges` is the per-asset list of intervals already claimed
+ by earlier scenes, so an overlap is caught the same way in both paths.
+ """
+ errors=[];notes=[];pre=f'Scene {i+1}: '
+ if s['frame_in']!=last or s['frame_out']<=last:errors.append(pre+'timeline has a gap, overlap or empty scene.')
+ if not a:return errors+[pre+'assign uploaded media.'],notes
+ if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
+ if s['person'] and s['person'].casefold() not in [n.casefold().strip() for n in a['people']]:
+  if not(s['context_only'] and s['notes'].strip() and a['category'] in ['court','location','police','general'] and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
+  else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
+ lastscene=i==len(p['scenes'])-1
+ if s['transition']=='dissolve' and lastscene:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
+ if s['transition']=='dissolve' and not lastscene and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
+ if s['transition']=='dissolve' and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
+ still=is_still(p,a)
+ if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
+ if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
+ if still and a['kind']=='image' and a.get('derived_from') and not a.get('verified'):errors.append(pre+'the extracted frame was never approved for use.')
+ if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
+ if a['kind']=='video':
+  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
+  if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
+  for start,stop,number in ranges.get(a['id'],[]):
+   if not p.get('allow_archive_reuse') and s['in_s']<stop and end_s>start:errors.append(pre+f'source interval overlaps scene {number}.')
+ if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
+ if not s['focus'].strip():errors.append(pre+'set the story focus.')
+ if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
+ if final and (a['rights']=='unreviewed' or not a['notes'].strip()):errors.append(pre+'document the rights/reuse decision and notes before final export.')
+ return errors,notes
+
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
  from automatic import repetition_errors,source_capacity_errors
@@ -121,32 +154,13 @@ def check(p,final=False):
  if not p['scenes']:errors.append('Import an SRT and build the storyboard.')
  if p['voiceover'] and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
  for i,s in enumerate(p['scenes']):
-  pre=f'Scene {i+1}: '
-  if s['frame_in']!=last or s['frame_out']<=last:errors.append(pre+'timeline has a gap, overlap or empty scene.')
-  last=s['frame_out'];a=assets.get(s['asset_id'])
-  if not a:errors.append(pre+'assign uploaded media.');continue
-  if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
-  if s['person'] and s['person'].casefold() not in [n.casefold().strip() for n in a['people']]:
-   if not(s['context_only'] and s['notes'].strip() and a['category'] in ['court','location','police','general'] and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
-   else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
-  if s['transition']=='dissolve' and i==len(p['scenes'])-1:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
-  if s['transition']=='dissolve' and i+1<len(p['scenes']) and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
-  if s['transition']=='dissolve' and i+1<len(p['scenes']) and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
-  still=is_still(p,a)
-  if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
-  if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
-  if still and a['kind']=='image' and a.get('derived_from') and not a.get('verified'):errors.append(pre+'the extracted frame was never approved for use.')
-  if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
-  if a['kind']=='video':
-   end=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
-   if s['in_s']<0 or end>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
-   for start,stop,number in ranges[a['id']]:
-    if not p.get('allow_archive_reuse') and s['in_s']<stop and end>start:errors.append(pre+f'source interval overlaps scene {number}.')
-   ranges[a['id']].append((s['in_s'],end,i+1))
-  if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
-  if not s['focus'].strip():errors.append(pre+'set the story focus.')
-  if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
-  if final and (a['rights']=='unreviewed' or not a['notes'].strip()):errors.append(pre+'document the rights/reuse decision and notes before final export.')
+  a=assets.get(s['asset_id'])
+  scene_errors,scene_notes=scene_review(p,i,s,a,ranges,last,final)
+  errors.extend(scene_errors);notes.extend(scene_notes)
+  last=s['frame_out']
+  if a and a['kind']=='video':
+   end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
+   ranges[a['id']].append((s['in_s'],end_s,i+1))
  flow=p.get('picture_flow') or {}
  from picture_flow import outstanding_notes
  notes.extend(outstanding_notes(flow))
@@ -506,6 +520,40 @@ def edit_scene(pid,sid):
   if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
   save(p);return jsonify(public(p))
 
+@app.post('/api/projects/<pid>/scenes/approve')
+def approve_scenes(pid):
+ """Approve every scene that passes the same review export readiness applies.
+
+ A scene that raises any export-readiness error is left unapproved and reported with
+ its reasons. That keeps bulk approval honest: it cannot approve a beat whose media,
+ timing or disclosure would block the export a moment later.
+ """
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if d.get('attested') is not True:raise BadRequest('Confirm that you have reviewed the picture beats before approving them.')
+  scope=str(d.get('scope') or 'ready')
+  if scope not in ['ready','all']:raise BadRequest('Choose scope "ready" (default) or "all".')
+  assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
+  approved=[];skipped=[]
+  for i,scene in enumerate(p['scenes']):
+   a=assets.get(scene['asset_id'])
+   errors,_=scene_review(p,i,scene,a,ranges,last)
+   if not errors:
+    if not scene['approved']:
+     scene['approved']=True;scene['approval_record']={'method':'bulk_scene_approval','scope':scope,'at':time.time(),'reasons':'media assigned, source recorded, timing valid, no blocking review item'}
+     approved.append(i+1)
+   else:
+    scene['approved']=False;skipped.append({'scene':i+1,'srt_blocks':scene.get('srt_blocks'),'reasons':errors})
+   last=scene['frame_out']
+   if a and a['kind']=='video':
+    end_s=scene['in_s']+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene['transition']=='dissolve' else 0))/30
+    ranges[a['id']].append((scene['in_s'],end_s,i+1))
+  p.setdefault('scene_approval_history',[]).append({'action':'bulk_scene_approval','scope':scope,'approved':len(approved),'skipped':len(skipped),'at':time.time()})
+  if scope=='all' and skipped:raise BadRequest(str(len(skipped))+' picture beat(s) cannot be approved yet. Nothing was approved; open the first one to see why: Scene '+str(skipped[0]['scene'])+' — '+skipped[0]['reasons'][0])
+  save(p)
+  result=public(p);result['bulk_approval']={'approved':approved,'skipped':skipped,'scope':scope}
+  return jsonify(result)
+
 @app.post('/api/projects/<pid>/scenes/<sid>/split')
 def split_scene(pid,sid):
  with LOCKS[pid]:
@@ -636,6 +684,21 @@ def candidate_report(pid):
    return jsonify({'length_s':round(length,3),'needed_s':round(length+handle,3),'candidates':shots_of_length(folder(pid),p,length,handle,limit)})
   return jsonify(candidate_list(p,folder(pid),beat_id=request.args.get('beat'),limit=limit))
  except ValueError as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/frame-qc')
+def frame_qc_sheet(pid):
+ from frame_qc import build
+ p=load(pid)
+ try:manifest=build(folder(pid),p,per_sheet=request.args.get('per_sheet',20),group=request.args.get('sheet',1))
+ except ValueError as e:raise BadRequest(str(e))
+ if request.args.get('format')=='json':
+  return jsonify({k:v for k,v in manifest.items() if k!='file'}|{'url':f'/api/projects/{pid}/frame-qc/{manifest["file"]}'})
+ return send_from_directory(folder(pid)/'.cache/frame_qc',manifest['file'],conditional=True)
+
+@app.get('/api/projects/<pid>/frame-qc/<name>')
+def frame_qc_file(pid,name):
+ if not re.fullmatch(r'frame_qc_sheet_\d{2}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
+ return send_from_directory(folder(pid)/'.cache/frame_qc',name,conditional=True)
 
 @app.get('/api/projects/<pid>/block-map-template')
 def block_map_template(pid):

@@ -99,6 +99,25 @@ continuous shot, not as repeated footage; picking the same photograph up again l
 cooldown window is still reported. The decoded frame check verifies that a still opens and
 is not black — it still says nothing about who or what it shows.
 
+## Review in bulk: approval and frame QC
+
+- **Approve all ready beats** (`POST /api/projects/<id>/scenes/approve`) reviews every
+  scene with the *same* function export readiness uses, and approves only the ones with
+  no blocking item. Anything that would fail the export a moment later is left
+  unapproved and returned with its reason. `"scope": "all"` is all-or-nothing: if any beat
+  cannot be approved, nothing is approved and the first reason is reported. The
+  attestation flag is required, and a per-scene `approval_record` is written.
+  Editing a scene still resets only that scene's approval.
+- **Frame QC sheet** (`GET /api/projects/<id>/frame-qc?sheet=N&per_sheet=20`) decodes one
+  frame per beat into a contact sheet, each cell stamped with `#scene · SRT blocks ·
+  HH:MM:SS.mmm`, the source filename, and — when the scene's in-point no longer matches
+  the plan — `moved +1.250s` plus an amber bar across the cell. Undecodable beats are
+  drawn as an empty box, listed in the response, never silently skipped. Sheets are
+  cached per project state and renderer version.
+  The sheet is a provenance record: it says where each frame came from and whether the
+  cut moved. It makes no claim about who or what appears in the picture and approves
+  nothing.
+
 ## Planning: shot index, feasibility and the map template
 
 Three aids, all read-only. None of them places a picture for you.
