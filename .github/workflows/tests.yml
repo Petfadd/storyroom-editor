@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    # The full runtime sweep takes about 13 minutes and renders an hour of video, which is
+    # too much for every push. This job proves the application imports, serves, and can
+    # assemble and export a real production end to end at a small runtime. Run the sweep
+    # yourself before anything ships: see tools/runtime_sweep.py.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Install packages
+        run: pip install -r requirements.txt
+      - name: Compile every module
+        run: python -m compileall -q . -x '\.venv|__pycache__'
+      - name: Import the application
+        run: python -c "import app; assert app.app.test_client().get('/').status_code == 200"
+      - name: Start the server
+        run: |
+          python app.py > /tmp/server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:8003/ && echo "server up" && exit 0
+            sleep 1
+          done
+          echo "server did not start"; cat /tmp/server.log; exit 1
+      - name: End-to-end acceptance sweep
+        # 60 seconds: build, rebuild one block, export an exact duration. This is the same
+        # driver used for the 1-to-60-minute verification, at the smallest runtime.
+        run: python tools/runtime_sweep.py --runtimes 60 --work /tmp/sweep --sources 8
+      - name: Server log
+        if: failure()
+        run: tail -50 /tmp/server.log

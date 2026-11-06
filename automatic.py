@@ -5,11 +5,19 @@ Frame decoding verifies availability, not semantic identity or copyright.
 from pathlib import Path
 import copy,hashlib,json,math
 
+def file_sha256(path,chunk=1024*1024):
+ """Hash a file by streaming it. Uploads may be 8 GB; reading one into memory to hash it
+ would either swap the machine or fail outright, and it is only ever compared, not stored."""
+ digest=hashlib.sha256()
+ with open(path,'rb') as handle:
+  for block in iter(lambda:handle.read(chunk),b''):digest.update(block)
+ return digest.hexdigest()
+
 def fingerprint(p,root):
  root=Path(root)
  media=[(a['id'],a['path'],(root/a['path']).stat().st_size,(root/a['path']).stat().st_mtime_ns) for a in p['assets'] if a['kind']=='video' and (root/a['path']).is_file()]
  if p.get('portable_from_project'):
-  media=[(a['id'],a['path'],(root/a['path']).stat().st_size,hashlib.sha256((root/a['path']).read_bytes()).hexdigest()) for a in p['assets'] if a['kind']=='video' and (root/a['path']).is_file()]
+  media=[(a['id'],a['path'],(root/a['path']).stat().st_size,file_sha256(root/a['path'])) for a in p['assets'] if a['kind']=='video' and (root/a['path']).is_file()]
  data=[p.get('production_script'),p.get('srt'),p.get('srt_block_map'),p.get('source_bindings'),media,p.get('picture_policy'),p.get('repetition_policy'),p.get('transition_policy')]
  return hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()
 
@@ -307,13 +315,42 @@ def full_source_analysis(p,root):
  def scan(a):
   path=root/a['path'];st=path.stat();key=[st.st_size,st.st_mtime_ns];prev=cached.get(a['id'])
   if prev and prev.get('file_signature')==key and prev.get('complete_decode_success'):return prev
-  r=subprocess.run([ff,'-hide_banner','-threads','2','-i',str(path),'-map','0:v:0','-vf',"scale=320:-2,blackdetect=d=0.05:pic_th=0.99:pix_th=0.05,select='gt(scene,0.32)',showinfo",'-an','-f','null','-'],capture_output=True,text=True,timeout=600)
+  # The budget scales with the picture instead of capping at a fixed 600 s. A scan runs at
+  # roughly 50x realtime on two cores, so a ten-minute file takes about 12 s; the allowance
+  # is deliberately loose (6 s of decoding per minute of footage, minimum 10 minutes) and
+  # exists only to stop a pathological file hanging the whole assembly forever. A fixed
+  # ceiling would have failed a long enough file on a slow enough disk with no explanation.
+  budget=max(600,int(float(a.get('duration') or 0)*6)+60)
+  try:
+   r=subprocess.run([ff,'-hide_banner','-threads','2','-i',str(path),'-map','0:v:0','-vf',"scale=320:-2,blackdetect=d=0.05:pic_th=0.99:pix_th=0.05,select='gt(scene,0.32)',showinfo",'-an','-f','null','-'],capture_output=True,text=True,timeout=budget)
+  except subprocess.TimeoutExpired:
+   raise RuntimeError('Source study timed out after %d seconds on %s. The file may be on slow storage; retry, or re-encode it at a lower bitrate.'%(budget,a['original_name']))
   if r.returncode:raise RuntimeError('Full source decode failed: '+a['original_name']+' '+r.stderr[-400:])
-  record={'asset_id':a['id'],'file':a['original_name'],'file_signature':key,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'duration_s':a['duration'],'complete_decode_success':True,'scene_change_times_s':[float(x) for x in re.findall(r'pts_time:\s*([\d.]+)',r.stderr)],'black_intervals':[dict(start=float(x),end=float(y)) for x,y in re.findall(r'black_start:([\d.]+) black_end:([\d.]+)',r.stderr)],'scope':'Every video frame decoded; shot changes/black intervals indexed. Semantic identity is NOT inferred by this scan.'}
+  record={'asset_id':a['id'],'file':a['original_name'],'file_signature':key,'sha256':file_sha256(path),'duration_s':a['duration'],'complete_decode_success':True,'scene_change_times_s':[float(x) for x in re.findall(r'pts_time:\s*([\d.]+)',r.stderr)],'black_intervals':[dict(start=float(x),end=float(y)) for x,y in re.findall(r'black_start:([\d.]+) black_end:([\d.]+)',r.stderr)],'scope':'Every video frame decoded; shot changes/black intervals indexed. Semantic identity is NOT inferred by this scan.'}
   return record
  videos=[a for a in p['assets'] if a['kind']=='video'];results=[]
+ def checkpoint():
+  dest.write_text(json.dumps({'sources':results,'complete':False,'source_count':len(videos),'before_timeline_creation':True},indent=2))
  with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-  for result in pool.map(scan,videos):results.append(result);dest.write_text(json.dumps({'sources':results,'complete':False,'source_count':len(videos),'before_timeline_creation':True},indent=2));print('Full video analysis:',len(results),'/',len(videos),result['file'],flush=True)
+  # Each file reports for itself. pool.map raises on the first failure and would discard
+  # the completed scans of every other file, so a single unreadable upload cancelled the
+  # whole study and lost the work already done.
+  futures={pool.submit(scan,a):a for a in videos}
+  failures=[]
+  try:
+   for done in concurrent.futures.as_completed(futures):
+    try:
+     record=done.result()
+    except Exception as e:
+     failures.append(str(e)[:400]);continue
+    results.append(record);checkpoint()
+    print('Full video analysis:',len(results),'/',len(videos),record['file'],flush=True)
+  finally:
+   # The scans that did succeed are written first, whatever happens next. Studying sources
+   # is the most expensive part of assembly on long footage, and one unreadable upload used
+   # to throw the finished studies away and start over on the retry.
+   checkpoint()
+  if failures:raise RuntimeError(failures[0]+('' if len(failures)==1 else ' (%d sources failed.)'%len(failures)))
  report={'sources':results,'complete':len(results)==len(videos),'source_count':len(videos),'before_timeline_creation':True};dest.write_text(json.dumps(report,indent=2));return report
 
 # Beats are laid on whole output frames, so where an editor split one continuous take

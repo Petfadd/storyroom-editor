@@ -201,6 +201,14 @@ def check(name, runtime, work, clip_seconds=180, sources=8, narration=True):
     problems = []
     if errors:
         problems.append(f'{len(errors)} validation error(s): {errors[:2]}')
+        # A sweep with too few sources fails as a repetition complaint, which reads like an
+        # engine bug. It is not: the cooldown is meant to stop a shot coming back within six
+        # slots, so a runtime needing more than six distinct shots needs more than six files.
+        # Say so, with the number that would fix it, instead of leaving it to be worked out.
+        if any('cooldown' in str(e) for e in errors):
+            needed = len(scenes)
+            problems.append(f'this fixture has too few sources for {needed} beats: pass '
+                            f'--sources {needed} or more (the cooldown is six slots)')
     if abs(duration - runtime) > 0.05:
         problems.append(f'duration {duration:.2f}s is not {runtime:.2f}s')
     if scenes[0]['frame_in'] != 0:
