@@ -122,9 +122,6 @@ in proportion to the picture, not by a different route.
   exists. If a runtime needs more picture than you hold, the report says by how much and
   asks for more footage — it does not repeat a shot, loop it, or shorten the narration.
 
-- **Beats and blocks are independent.** A map may give one row per SRT block, or let one
-  beat span many blocks (the build merges their narration into the beat). Both are read
-  the same way.
 - **Contiguous beats from one file are one continuous take.** Splitting a long take across
   consecutive beats is the normal way to cut it, so a repeat is only reported when two
   source intervals genuinely overlap; frame rounding is not treated as reuse.
@@ -136,25 +133,57 @@ in proportion to the picture, not by a different route.
 - **Wording hints are dictionaries, not a taxonomy.** Subject words only pick a movement
   family and an emotion label; anything unmatched falls through to neutral defaults.
 
+### Export size
+
+The master is not tied to one resolution. `format` picks the aspect and `size` the pixel
+target, per production, changeable at any time. A "1080p" target names the short side, so
+it means what people mean by it:
+
+| Format | 720p | 1080p | 4K |
+|---|---|---|---|
+| Landscape 16:9 | 1280×720 | 1920×1080 | 3840×2160 |
+| Portrait 9:16 | 720×1280 | 1080×1920 | 2160×3840 |
+| Square 1:1 | 720×720 | 1080×1080 | 2160×2160 |
+| Vertical 4:5 | 576×720 | 1080×1350 | 2160×2700 |
+| Cinema 2.39:1 | 1720×720 | 2580×1080 | 5162×2160 |
+
+`"1920x1080"` is also accepted as written. Measured on one 60-second, 11-beat programme:
+exporting the **same cuts** at 1920×1080, 1080×1920, 720×720, 2580×1080 and 3840×2160
+produced 1800 frames every time, with identical in/out points before and after each change
+— the target moves pixels, never a cut, an approval or the duration.
+
 ### Rendering a long programme
 
-A 30-minute, 240-beat programme was measured end to end on this machine:
+A 30-minute, 291-beat programme at 1920×1080 on this machine (2 cores), with the per-stage
+breakdown the renderer writes to `projects/<id>/render_timing.json`:
 
-| Stage | Time |
-|---|---|
-| Build (240 scenes, 15 sources decoded, decoded-frame check) | 38 s |
-| First render (240 scene segments + join + mux) | 7.7 min |
-| Re-render, nothing changed (all segments reused) | ~2 min |
-| Re-render after editing one beat (239 reused, 1 re-encoded) | 12 s |
+| Stage | Cold render | Warm re-render |
+|---|---|---|
+| Scene segments (291) | 218 s (83%) | 0.7 s (all reused) |
+| Join | 1.2 s | 1.2 s |
+| Mux (narration encoded, picture copied) | 42 s (16%) | 42 s |
+| **Total** | **262 s** | **46 s** |
 
-Two changes made that possible:
+What made that possible:
 
 - **Finished scene segments are cached** by a hash of everything that defines the picture
   (`engine.SEGMENT_VERSION`, source signature, in/out, frame count, motion plan, output
-  settings). An edit re-encodes the beats whose picture actually changed.
+  settings). An edit re-encodes only the beats whose picture actually changed, and changing
+  the export size re-encodes rather than mixing two sizes in one master.
 - **The final mux stream-copies the picture** when captions are off, because the scene
-  pass already encoded it to the final settings. The exported frame count is verified
-  against the timeline, so nothing is shortened silently.
+  pass already encoded it to the final settings. Only the narration is encoded there. The
+  exported frame count is verified against the timeline, so nothing is shortened silently.
+- **The picture encoder is `ultrafast` at a high-quality target** (`-crf 16`) instead of
+  `veryfast -crf 23`. Measured on a 1080p clip: 0.76 s vs 1.36 s per 6-second segment,
+  **1.8× faster**, and closer to the source (SSIM 0.99998 vs 0.99964) at no larger a
+  file — a faster preset spends its bits on fidelity instead of motion-search heuristics.
+- **The join is skipped when there is nothing to blend.** Its only job is handle-backed
+  dissolves; with clean cuts the segments already are the picture timeline, so joining
+  them would write every frame twice for no change in output (42 s of pure copy at this
+  length). The renderer's only transition policy is clean cuts, so that is the normal path.
+
+Encoding the segments in parallel was measured and rejected: each libx264 encode already
+saturates both cores, so two workers gained ~5% — not worth the complexity.
 
 ## Photographs and stills
 

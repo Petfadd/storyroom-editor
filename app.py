@@ -14,16 +14,38 @@ MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
-# Default wording hints. They only choose a movement family and an emotion label; a
-# production about a different subject simply falls through to the neutral default. A
-# profile may supply its own `hints` list in blueprints/style_profiles.json instead of
-# anyone editing these for one programme.
-DEFAULT_HINTS=[
- {'pattern':r'griev|mourn|remember|loved|funeral|vigil|lament|farewell','purpose':'remembrance','emotion':'grief / remembrance','category':'people'},
- {'pattern':r'court|judge|sentenc|plea|prosecut|attorney|trial|hearing|verdict','purpose':'legal context','emotion':'accountability / clarity','category':'institution'},
- {'pattern':r'police|investigat|detective|evidence|search warrant|agency|official','purpose':'investigation','emotion':'scrutiny / uncertainty','category':'institution'},
- {'pattern':r'apartment|house|street|location|complex|river|city|room|building','purpose':'orientation','emotion':'place / context','category':'place'},
-]
+# Output geometry is a project setting, not a constant. `format` picks an aspect; `size`
+# picks the pixel target. Anything the engine can encode is allowed, so the same build
+# serves a 720p review, a 1080p master, a vertical cut and a square one.
+ASPECTS={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}
+DEFAULT_SIZE={'landscape':'1080p','portrait':'1080p','square':'1080p','vertical_4_5':'1080p','cinema':'1080p'}
+SIZES={'480p':480,'540p':540,'720p':720,'1080p':1080,'1440p':1440,'4k':2160}
+def valid_size(size):
+ """True for a named target or an explicit WxH in a sane range."""
+ size=str(size or '').strip()
+ if size in SIZES:return True
+ match=re.fullmatch(r'\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*',size)
+ if not match:return False
+ w,h=int(match[1]),int(match[2])
+ return 64<=w<=7680 and 64<=h<=7680
+
+def output_size(fmt,size):
+ """Pixel width and height for an aspect and a target, rounded to even numbers.
+
+ A target names the SHORT side in every case, so "1080p" always means the number people
+ mean by it: 1920x1080 landscape, 1080x1920 portrait, 1080x1080 square, 1080x1350 for 4:5.
+ An explicit "1920x1080" is also accepted and used as written.
+ """
+ fmt=fmt if fmt in ASPECTS else 'landscape'
+ if size in SIZES:short=SIZES[size]
+ else:
+  match=re.fullmatch(r'\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*',str(size or ''))
+  if match:return (max(2,int(match[1])//2*2),max(2,int(match[2])//2*2))
+  short=SIZES['1080p']
+ aw,ah=ASPECTS[fmt]
+ if aw>=ah:w,h=int(round(short*aw/ah)),short       # landscape: short side is the height
+ else:w,h=short,int(round(short*ah/aw))             # portrait: short side is the width
+ return max(2,w//2*2),max(2,h//2*2)
 
 # clips_only keeps native moving footage everywhere; mixed allows verified stills as well.
 POLICIES={'clips_only':'Moving footage only','mixed':'Moving footage and photographs'}
@@ -224,6 +246,11 @@ def public(p):
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
  d['flow_summary']=(p.get('picture_flow') or {}).get('summary') or {}
  d['rebuild_report']=p.get('rebuild_report')
+ # What the next export will actually be, resolved once here so the studio never has to
+ # guess and no two parts of the app can disagree about the size.
+ width,height=output_size(p.get('format','landscape'),p.get('size'))
+ d['output']={'format':p.get('format','landscape'),'size':p.get('size'),'width':width,'height':height,
+              'label':str(width)+'×'+str(height),'aspect':ASPECTS.get(p.get('format','landscape'))}
  return d
 
 @app.get('/')
@@ -245,12 +272,14 @@ def create():
  d=request.get_json() or {};title=str(d.get('title','')).strip()
  if not title or len(title)>100:raise BadRequest('Enter a production title of 1–100 characters.')
  profile=d.get('profile') or 'documentary';fmt=d.get('format','landscape')
- if profile not in PROFILES or fmt not in ['landscape','portrait']:raise BadRequest('Choose a supported profile and format.')
+ if profile not in PROFILES or fmt not in ASPECTS:raise BadRequest('Choose a supported profile and format.')
+ requested_size=d.get('size') or DEFAULT_SIZE.get(fmt)
+ if not isinstance(requested_size,str) or not valid_size(requested_size):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
  pid=uid();root=PROJECTS/pid;root.mkdir()
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
  requested=d.get('picture_policy')
  if requested is not None and requested not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
- p={'id':pid,'schema_version':1,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
+ p={'id':pid,'schema_version':1,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'size':requested_size,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
@@ -277,6 +306,20 @@ def update_project(pid):
   if 'image_layout' in d:
    if d['image_layout'] not in STILL_LAYOUTS:raise BadRequest('Choose a photograph layout: '+', '.join(STILL_LAYOUTS))
    p['image_layout']=d['image_layout']
+  # Output geometry. Changing it does not change a single cut: it re-encodes the picture
+  # at the new size, so the beats, wording, approvals and duration all stay as reviewed.
+  if 'format' in d:
+   if d['format'] not in ASPECTS:raise BadRequest('Choose a format: '+', '.join(ASPECTS))
+   if d['format']!=p.get('format'):
+    p['format']=d['format']
+    p['size']=d.get('size') or DEFAULT_SIZE[d['format']]
+    if not valid_size(p['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
+    p['picture_rebuilt']=False
+  if 'size' in d:
+   if not isinstance(d['size'],str) or not valid_size(d['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
+   if str(d['size'])!=str(p.get('size')):
+    p['size']=str(d['size'])
+    p['picture_rebuilt']=False
   if p['brief']!=old_brief or p['people']!=old_people:
    for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
@@ -722,7 +765,7 @@ def merge_scene(pid,sid):
 
 def manifest(p):
  from production import reserve_id,asset_used
- root=folder(p['id']);w,h=(720,1280) if p['format']=='portrait' else (1280,720);assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
+ root=folder(p['id']);w,h=output_size(p.get('format','landscape'),p.get('size'));assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
  for i,s in enumerate(p['scenes']):
   a=assets[s['asset_id']];frames=s['frame_out']-s['frame_in'];m=motion(s,i);signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
   while signature in signatures:m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
