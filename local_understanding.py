@@ -4,6 +4,7 @@ Only reads project media and local model files; the sole HTTP endpoint is Ollama
 loopback. Jobs are serialized to bound CPU/RAM use and never modify the storyboard.
 """
 import base64
+import csv
 import gc
 import importlib.util
 import json
@@ -34,6 +35,7 @@ def capabilities():
             'whisper_model_ready': local_model,
             'scenedetect': bool(importlib.util.find_spec('scenedetect')),
             'librosa': bool(importlib.util.find_spec('librosa')),
+            'sound_classifier': bool(importlib.util.find_spec('onnxruntime') and os.environ.get('STORYROOM_YAMNET_MODEL') and Path(os.environ['STORYROOM_YAMNET_MODEL']).is_file()),
             'ollama_url': 'http://127.0.0.1:11434',
             'vision_model': os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b'),
             'speaker_diarization': bool(importlib.util.find_spec('pyannote') and os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR') and Path(os.environ['STORYROOM_PYANNOTE_MODEL_DIR']).is_dir()),
@@ -189,6 +191,48 @@ def _audio_features(wav):
             'note': 'Approximate low-energy intervals use an absolute RMS threshold; they are not guaranteed silence or a music/sound-event classification.'}
 
 
+def _sound_events(wav):
+    """CPU YAMNet waveform ONNX: independent 3-second source-time windows."""
+    import numpy as np
+    import onnxruntime as ort
+    model = os.environ.get('STORYROOM_YAMNET_MODEL', '').strip()
+    if not model or not Path(model).is_file():
+        raise RuntimeError('Set STORYROOM_YAMNET_MODEL to a compatible local YAMNet waveform ONNX model.')
+    with (Path(__file__).parent / 'data' / 'yamnet_class_map.csv').open(encoding='utf-8', newline='') as f:
+        labels = [row['display_name'] for row in csv.DictReader(f)]
+    opts = ort.SessionOptions(); opts.intra_op_num_threads = 2; opts.inter_op_num_threads = 1
+    session = ort.InferenceSession(model, sess_options=opts, providers=['CPUExecutionProvider'])
+    inputs, outputs = session.get_inputs(), session.get_outputs()
+    if len(inputs) != 1 or inputs[0].shape != [1, 48000] or inputs[0].type != 'tensor(float)' or not any(o.name == 'scores' for o in outputs):
+        raise RuntimeError('Incompatible YAMNet model: expected float32 waveform [1, 48000] and a scores output.')
+    windows = []
+    with wave.open(str(wav), 'rb') as f:
+        if f.getframerate()!=16000 or f.getnchannels()!=1 or f.getsampwidth()!=2:
+            raise ValueError('Expected mono 16 kHz PCM audio.')
+        position = 0
+        while True:
+            raw=f.readframes(48000)
+            if not raw: break
+            y=np.frombuffer(raw, dtype='<i2').astype(np.float32)/32768.0
+            length=len(y)
+            top=[]
+            # A very short zero-padded tail can be confidently misclassified as silence.
+            if length >= 16000:
+                y=np.pad(y, (0, 48000-length))[None, :]
+                scores=np.asarray(session.run(['scores'], {inputs[0].name: y})[0])
+                if scores.ndim != 2 or scores.shape[1] != len(labels) or not np.isfinite(scores).all():
+                    raise RuntimeError('YAMNet returned incompatible or invalid class scores.')
+                # Score frames cover approximately 0.96 s, starting every 0.48 s.
+                # Exclude frames extending into padding rather than mislabelling it.
+                valid=max(1, min(scores.shape[0], 1 + int((length/16000-0.96)/0.48)))
+                mean=scores[:valid].mean(axis=0)
+                top=[{'label': labels[int(i)], 'score': round(float(mean[i]), 4)}
+                     for i in np.argsort(mean)[::-1][:5] if mean[i] >= 0.1]
+            windows.append({'start_s': round(position/16000,3), 'end_s': round((position+length)/16000,3), 'predictions': top, 'too_short': length < 16000})
+            position += length
+    return {'windows': windows, 'note': 'YAMNet estimates for independent 3-second windows, not verified sound events. Low-scoring classes are omitted; speech and music can overlap. Tails under one second are not classified.'}
+
+
 def _scenes(path, duration):
     from scenedetect import detect, ContentDetector
     spans = detect(str(path), ContentDetector(), show_progress=False)
@@ -256,6 +300,10 @@ def _run(root, target, source, data):
                 else:
                     _stage(data, report, 'transcript', lambda: _transcribe(wav))
                     _stage(data, report, 'audio_features', lambda: _audio_features(wav))
+                    if os.environ.get('STORYROOM_YAMNET_MODEL'):
+                        _stage(data, report, 'sound_events', lambda: _sound_events(wav))
+                    else:
+                        data['stages']['sound_events'] = {'status': 'not_requested', 'detail': 'Optional local sound-event model is not configured.'}
                     if os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR'):
                         _stage(data, report, 'speakers', lambda: _diarize(wav))
                         if data['stages']['speakers']['status'] == 'complete' and data['stages']['transcript']['status'] == 'complete':
@@ -269,6 +317,8 @@ def _run(root, target, source, data):
                     _stage(data, report, 'visual', lambda: _vision(source, cuts['result']))
                 else:
                     data['stages']['visual'] = {'status':'unavailable','detail':'Scene detection failed; no visual frames analysed.'}
+            if 'sound_events' not in data['stages']:
+                data['stages']['sound_events'] = {'status': 'unavailable', 'detail': 'No decoded audio for sound classification.'}
             if 'speakers' not in data['stages']:
                 data['stages']['speakers'] = {'status': 'unavailable', 'detail': 'No decoded audio for diarization.'}
             data['status'] = 'complete' if all(x['status'] in ('complete', 'not_requested') for x in data['stages'].values()) else 'partial'
@@ -282,3 +332,37 @@ def _run(root, target, source, data):
         except OSError: pass
     finally:
         with _GUARD: _RUNNING.discard(key)
+
+
+def scene_context(report, scene):
+    """Project source-time observations onto a saved scene without asserting verification."""
+    source_in = float(scene.get('in_s') or 0)
+    timeline_in = scene['frame_in'] / 30
+    duration = (scene['frame_out'] - scene['frame_in']) / 30
+    source_out = source_in + duration
+    result = {'status': report.get('status'), 'source_in_s': round(source_in, 3),
+              'source_out_s': round(source_out, 3), 'timeline_in_s': round(timeline_in, 3),
+              'transcript': [], 'sound_events': [], 'visual': [],
+              'note': 'Source observations are estimates; timeline times are mapped from the saved in-point and not editorial verification.'}
+    if report.get('status') not in ('complete', 'partial'): return result
+    stages = report.get('stages') or {}
+    def interval(rows):
+        found = []
+        for item in rows:
+            a, b = float(item['start_s']), float(item['end_s'])
+            if a >= source_out or b <= source_in: continue
+            row = dict(item)
+            row['timeline_start_s'] = round(timeline_in + max(a, source_in) - source_in, 3)
+            row['timeline_end_s'] = round(timeline_in + min(b, source_out) - source_in, 3)
+            found.append(row)
+        return found
+    def data(name):
+        stage = stages.get(name) or {}
+        return stage.get('result', {}) if stage.get('status') == 'complete' else {}
+    result['transcript'] = interval(data('transcript').get('segments', []))
+    result['sound_events'] = interval(data('sound_events').get('windows', []))
+    for item in data('visual').get('observations', []):
+        at = float(item['frame_time_s'])
+        if source_in <= at < source_out:
+            result['visual'].append(dict(item, timeline_time_s=round(timeline_in + at - source_in, 3)))
+    return result

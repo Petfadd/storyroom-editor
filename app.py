@@ -948,6 +948,18 @@ def local_understanding_report(pid,target):
   if request.method=='POST':enqueue(root,target,path,kind,duration)
   return jsonify(read_result(root,target,path))
 
+@app.get('/api/projects/<pid>/scenes/<sid>/understanding')
+def scene_understanding_report(pid,sid):
+ from local_understanding import read_result,scene_context
+ with LOCKS[pid]:
+  p=load(pid)
+  scene=next((s for s in p['scenes'] if s['id']==sid),None)
+  if not scene:raise NotFound('Scene not found.')
+  target=scene.get('asset_id')
+  if not target:raise NotFound('This scene has no video source.')
+  root,path,kind,_=understanding_source(pid,target)
+  return jsonify(scene_context(read_result(root,target,path),scene))
+
 @app.get('/api/projects/<pid>/block-map-editor')
 def block_map_editor(pid):
  from edl import srt_signature

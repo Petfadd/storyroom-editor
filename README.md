@@ -405,9 +405,9 @@ Production setup → **Local audio & video understanding** opens an independent,
 per-file report. It does not change the SRT, make editorial approvals, or affect
 storyboard construction. Use **Analyse locally** for narration or an uploaded video.
 The JSON report is also available at `GET /api/projects/<id>/understanding/<target>`
-where target is `narration` or a video asset ID. Results are source-time observations;
-they are not automatically mapped to timeline positions. Replacing a source marks
-its report stale. Processing is serialized to reduce CPU and memory pressure.
+where target is `narration` or a video asset ID. The shot inspector also shows source
+observations that overlap the saved beat, mapped to its timeline times; these do not
+change the edit. Replacing a source marks its report stale. Processing is serialized to reduce CPU and memory pressure.
 
 Setup on the computer running Storyroom:
 
@@ -439,15 +439,17 @@ not configured or verified; the transcription path is explicitly CPU-only.
 pass samples still frames across the video, up to the sample cap, so it can miss actions
 and text between frames. Descriptions and timestamps can be wrong; names and identities
 are not established. Librosa reports RMS, spectral centroid and coarse low-energy
-windows and estimated low-energy intervals, not guaranteed silence, music recognition
-or sound-event labels.
+windows and estimated low-energy intervals, not guaranteed silence. Optional YAMNet
+adds estimated music and sound-event labels in three-second windows; scores are not
+proof, and short or overlapping events may be missed.
 Optional pyannote diarization requires a separately installed local pipeline and has not
 been tested here with real models. Its speaker labels are anonymous, per-file estimates,
 not verified identities. The model may require license acceptance and authentication
 for the one-time download; inference itself is local. Missing
 models/dependencies and failures appear per stage, and partial results are labelled as
-such. Full transcription, visual inference, sound classification and diarization need
-real-model testing before this capability should be treated as complete.
+such. Full transcription, visual inference and diarization need real-model testing before
+this capability should be treated as complete. The optional sound classifier was tested
+on a handful of sample files, not benchmarked for real-world accuracy.
 
 ### Windows 11: CPU-first setup
 
@@ -488,3 +490,22 @@ AMD GPU support depends on the exact GPU, driver and Ollama version. Consult
 [Ollama's hardware support](https://docs.ollama.com/gpu) and use `ollama ps` while a
 model is loaded to see whether it is using GPU. No AMD acceleration has been verified
 in this environment. On an unsupported GPU, Ollama can fall back to CPU.
+
+### Optional local sound-event tagging
+
+Set `STORYROOM_YAMNET_MODEL` before starting Storyroom to a local YAMNet ONNX graph
+with a float32 waveform input shaped `[1, 48000]` (three seconds at 16 kHz) and a
+`scores` output with 521 AudioSet classes. For example in PowerShell:
+
+```powershell
+$env:STORYROOM_YAMNET_MODEL = "C:\path\to\yamnet_3s.onnx"
+```
+
+The model file is not bundled or downloaded by Storyroom. Only use a model whose
+license permits your use. Output is an estimated list of sounds and music for each
+three-second window; class scores can be wrong, are not verified probabilities, and do
+not identify a sound's source. Short tails are not classified. The compatibility test
+used the `yamnet_3s.onnx` waveform graph from
+[Choise-ieee/yamnet_onnx_cpp_audio_speech_classification](https://github.com/Choise-ieee/yamnet_onnx_cpp_audio_speech_classification);
+that repository does not state a license, so it is **not redistributed here**. The
+included class labels and their license are documented in `data/YAMNET-NOTICE.md`.

@@ -66,6 +66,29 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertGreater(samples[-1][0],850)
         self.assertLess(samples[-1][0],1000)
 
+    @unittest.skipUnless(importlib.util.find_spec('onnxruntime'), 'install requirements-local-ai.txt')
+    def test_sound_event_windows_and_unclassified_short_tail(self):
+        import wave
+        import numpy as np
+        import onnxruntime as ort
+        from types import SimpleNamespace
+        wav=self.root/'audio.wav'; model=self.root/'model.onnx';model.write_bytes(b'test')
+        with wave.open(str(wav),'wb') as f:
+            f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000);f.writeframes(bytes(2 * (3*16000+8000)))
+        class FakeSession:
+            def __init__(self,*args,**kwargs):
+                self.kwargs=kwargs
+            def get_inputs(self):return [SimpleNamespace(name='input',shape=[1,48000],type='tensor(float)')]
+            def get_outputs(self):return [SimpleNamespace(name='scores')]
+            def run(self,outputs,feed):
+                result=np.zeros((6,521),dtype=np.float32);result[:,0]=0.9;return [result]
+        with patch.dict('os.environ',{'STORYROOM_YAMNET_MODEL':str(model)}), patch.object(ort,'InferenceSession',FakeSession):
+            windows=lu._sound_events(wav)['windows']
+        self.assertEqual((windows[0]['start_s'],windows[0]['end_s']),(0,3))
+        self.assertEqual(windows[0]['predictions'][0]['label'],'Speech')
+        self.assertTrue(windows[1]['too_short'])
+        self.assertEqual(windows[1]['predictions'],[])
+
     def test_speakers_aligned_by_overlap_without_claiming_identity(self):
         transcript={'segments':[{'start_s':1,'end_s':3,'words':[{'start_s':1,'end_s':2}, {'start_s':2,'end_s':3}, {'start_s':4,'end_s':5}]}]}
         speakers={'turns':[{'start_s':0,'end_s':2,'speaker':'SPEAKER_00'},{'start_s':2,'end_s':3,'speaker':'SPEAKER_01'}]}
@@ -89,6 +112,19 @@ class LocalUnderstandingTest(unittest.TestCase):
         subprocess.run([self.ff,'-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=1',str(mp3)],check=True)
         lu._decode_audio(mp3,wav)
         self.assertGreater(wav.stat().st_size,16000)
+
+    def test_source_observations_are_mapped_to_the_saved_scene(self):
+        report={'status':'partial','stages':{
+            'transcript':{'status':'complete','result':{'segments':[{'start_s':9.0,'end_s':11.0,'text':'Before and within'}, {'start_s':14.0,'end_s':15.0,'text':'outside'}]}},
+            'visual':{'status':'complete','result':{'observations':[{'frame_time_s':10.5,'description':'visible'}, {'frame_time_s':14.0,'description':'outside'}]}},
+            'sound_events':{'status':'complete','result':{'windows':[{'start_s':12.0,'end_s':15.0,'predictions':[{'label':'Music','score':.7}]}]}}}}
+        scene={'in_s':10,'frame_in':300,'frame_out':420}
+        context=lu.scene_context(report,scene)
+        self.assertEqual((context['transcript'][0]['timeline_start_s'],context['transcript'][0]['timeline_end_s']),(10,11))
+        self.assertEqual(context['visual'][0]['timeline_time_s'],10.5)
+        self.assertEqual((context['sound_events'][0]['timeline_start_s'],context['sound_events'][0]['timeline_end_s']),(12,14))
+        self.assertEqual(len(context['visual']),1)
+        self.assertEqual(lu.scene_context({'status':'stale'},scene)['transcript'],[])
 
     def test_stale_results_not_returned_for_changed_media(self):
         source=self.root/'audio.wav';source.write_bytes(b'first')
