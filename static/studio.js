@@ -22,11 +22,12 @@ function automaticStatusHTML(){
   return `<div class="notice warn"><strong>Automatic assembly is not running — ${E({blocked:'inputs are missing',needs_plan:'there is no plan yet',manual:'manual edits take precedence',paused:'it is switched off for this production'}[ready.status])}.</strong><p>${E(ready.detail||s.detail||'')}</p>${action}</div>`;
  }
  if(P.scenes.length){
+  const preview=P.preview||{},previewInfo=preview.status==='done'?'<p>Temporary smooth preview is ready. Pause playback to switch to it.</p>':['running','queued'].includes(preview.status)?`<p>Preparing smooth preview: ${Number(preview.progress||0).toFixed(0)}% · ${E(preview.detail||'')}</p>`:`<p><button type="button" onclick="prepareSmoothPreview()">Prepare smooth preview</button> ${preview.status==='error'?E(preview.detail):'Creates a temporary low-resolution playback copy without changing your edit.'}</p>`;
   const errors=P.validation?.errors||[];
   if(['running','queued'].includes(r.status))return `<div class="notice"><strong>${P.scenes.length} picture slots built · continuous master rendering.</strong><p>The Program monitor can use the rendered master when it is ready.</p></div>`;
   if(r.status==='done'&&r.current)return `<div class="notice"><strong>Continuous master ready.</strong><p>The Program monitor can play the rendered MP4.</p></div>`;
-  if(errors.length)return `<div class="notice warn"><strong>Continuous master not rendered · ${errors.length} issue(s) need attention.</strong><p>The Program monitor is using source preview, which can pause while loading footage.</p>${errors.slice(0,6).map(x=>`<p class="small">${E(x)}</p>`).join('')}</div>`;
-  return `<div class="notice"><strong>${P.scenes.length} picture slots built · no current continuous master.</strong><p>${E(s.status==='error'?s.detail:'Use Review & export to start a render. Until then the Program monitor uses source preview.')}</p></div>`;
+  if(errors.length)return `<div class="notice warn"><strong>Continuous master not rendered · ${errors.length} issue(s) need attention.</strong><p>The Program monitor is using source preview, which can pause while loading footage.</p>${errors.slice(0,6).map(x=>`<p class="small">${E(x)}</p>`).join('')}${previewInfo}</div>`;
+  return `<div class="notice"><strong>${P.scenes.length} picture slots built · no current continuous master.</strong><p>${E(s.status==='error'?s.detail:'Use Review & export to start a render. Until then the Program monitor uses source preview.')}</p>${previewInfo}</div>`;
  }
  if(s.status==='error'||s.status==='interrupted')return `<div class="notice error"><strong>Automatic assembly stopped.</strong><p>${E(s.detail||'Review the uploaded files and build the storyboard again.')}</p></div>`;
  if(working)return `<div class="notice"><strong>Working automatically — please allow processing time.</strong><p>${E(s.detail||'Studying the complete source videos before assembly.')}</p><p class="small">The timeline will appear here when the background job finishes. You can leave this page open.</p></div>`;
@@ -133,3 +134,5 @@ async function removeInput(kind){
  if(!confirm(`Remove the ${label} from this project? The project copy${kind==='voiceover'?' and its local analysis report':''} will be deleted.${impact}${srtWarning} Your original computer file and existing exports are not deleted.`))return;
  try{P=await api(`/api/projects/${P.id}/inputs/${kind}`,'DELETE',{confirm:true,confirm_used:true});renderProject();await list();toast(P.removal_warnings?.length?P.removal_warnings.join(' '):'File removed from this project.')}catch(e){toast(e.message)}
 }
+
+async function prepareSmoothPreview(){if(!P||!leave())return;try{await api(`/api/projects/${P.id}/continuous-preview`,'POST',{});P=await api(`/api/projects/${P.id}`);renderProject();toast('Preparing a temporary smooth preview.');}catch(e){toast(e.message)}}

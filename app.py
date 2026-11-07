@@ -248,6 +248,9 @@ def public(p):
  with _QUEUE_LOCK:auto_active=p['id'] in _PENDING
  if d['automatic_status'].get('status') in ('queued','working','studying','storyboard_ready','rendering') and not auto_active and not busy(p['id']):
   d['automatic_status']={'status':'interrupted','detail':'The previous automatic job stopped. Check the storyboard and export validation before retrying.'}
+ from preview_render import status as preview_status
+ d['preview']=preview_status(folder(p['id']),p['id'],p['updated'])
+ if d['preview'].get('status')=='done':d['preview']['url']=f'/api/projects/{p["id"]}/continuous-preview?version={p["updated"]}'
  d['inputs_ready']=bool(p.get('srt') and p.get('production_script') and p.get('assets'))
  d['picture_flow']=p.get('picture_flow') or None
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
@@ -892,6 +895,29 @@ def manifest(p):
   shots.append(shot)
  result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
+@app.post('/api/projects/<pid>/continuous-preview')
+def prepare_continuous_preview(pid):
+ from preview_render import start
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if not p['scenes']:raise BadRequest('Build a storyboard first.')
+  def publish(updated,temp,base):
+   with LOCKS[pid]:
+    if load(pid)['updated']!=updated:return False
+    temp.replace(base/'preview.mp4')
+    write(base/'status.json',{'status':'done','updated':updated,'progress':100,'detail':'Temporary smooth preview ready.'})
+    return True
+  try:result=start(root,p,publish)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify(result),202
+
+@app.get('/api/projects/<pid>/continuous-preview')
+def continuous_preview_file(pid):
+ from preview_render import status as preview_status
+ p=load(pid);root=folder(pid);state=preview_status(root,pid,p['updated'])
+ if state.get('status')!='done' or request.args.get('version')!=str(p['updated']):raise NotFound('Preview is not current.')
+ return send_from_directory(root/'.cache/continuous_preview','preview.mp4',conditional=True)
+
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:
