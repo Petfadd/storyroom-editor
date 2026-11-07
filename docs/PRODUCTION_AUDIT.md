@@ -273,29 +273,6 @@ Three generalisation bugs were found and fixed by this run:
 
 ---
 
-## 8. Reusable template: the production script shape the parser wants
-
-The parser is strict but simple. One table, these exact headers, Unicode arrow `→`:
-
-```markdown
-| # | SRT | Timeline in → out | Source → file | Src IN → OUT | Treatment · transition |
-|---|---|---|---|---|---|
-| 1 | 1-3 | 00:00:00.000 → 00:00:16.500 | v19 → v19.mp4 | 00:00:21.000 → 00:00:37.500 | Hold on scene · cut |
-```
-
-Rules that are enforced, not advisory:
-
-- every row: exactly one `vN.mp4`, one timeline range, one source range;
-- the beat table must cover the SRT start to end, contiguously, with no partial list;
-- SRT blocks referenced must be exactly the blocks inside that timeline range;
-- `transition` is `cut` or `dissolve` (no adjacent dissolves, none on the last beat);
-- source OUT is exclusive and must equal IN + beat duration for video.
-
-A narration-only document (headings, prose, a block table) is also valid input — it seeds
-the SRT and the beat table can be added later as the block map instead.
-
----
-
 ## 9. Bottom line
 
 Uploading is three documents plus footage. **Building the master is one input: the block
