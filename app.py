@@ -198,6 +198,7 @@ def check(p,final=False):
  if uncovered and p['scenes']:
   errors.append(str(len(uncovered))+' SRT block(s) are not placed by the block map (first is block '+str(uncovered[0])+'). Extend the map over the whole narration, or download a fresh template for this SRT.')
  if not p['brief'].strip() and not p.get('srt'):errors.append('Import your SRT story, or add a case brief.')
+ if p.get('srt_removed') and p['scenes'] and not p.get('srt'):errors.append('The SRT was removed. Import an SRT and rebuild before exporting.')
  from production import document
  from edl import signature
  if p['scenes'] and (p.get('picture_plan') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current SRT block map / production script.')
@@ -388,7 +389,7 @@ def perform_upload(pid,key=''):
    except UnicodeDecodeError:raise BadRequest('SRT must be UTF-8 text.')
    blocks=parse_srt(text)
    if p['scenes'] and request.form.get('replace')!='yes':raise BadRequest('Replacing the SRT invalidates the current storyboard. Confirm replacement first.')
-   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[];p.pop('srt_recovery',None)
+   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[];p.pop('srt_recovery',None);p.pop('srt_removed',None)
   elif kind=='srt_block_map':
    from edl import parse,srt_signature
    expected_srt=request.form.get('expected_srt_signature')
@@ -414,7 +415,7 @@ def perform_upload(pid,key=''):
    from document_plan import srt_outline_blocks
    recovered,outline_problems=srt_outline_blocks(text)
    if recovered and not p.get('srt'):
-    p['srt']={'blocks':recovered,'name':f.filename+' · narration table','recovered_from':f.filename}
+    p['srt']={'blocks':recovered,'name':f.filename+' · narration table','recovered_from':f.filename};p.pop('srt_removed',None)
     (root/'inputs/captions.srt').write_text('\n\n'.join('%d\n%s --> %s\n%s'%(b['number'],srt_stamp(b['start_ms']),srt_stamp(b['end_ms']),b['text']) for b in recovered),encoding='utf-8')
     p['srt_recovery']={'source':f.filename,'blocks':len(recovered),'total_s':recovered[-1]['end_ms']/1000,'note':'Narration blocks were recovered verbatim from a Markdown block table in the production script. Wording, order and timing were copied, not rewritten; a separate .srt can still replace this.'}
    elif recovered and p.get('srt'):
@@ -478,6 +479,75 @@ def remove_block_map(pid):
   editable(pid);p=load(pid);p.pop('srt_block_map',None);(folder(pid)/'inputs/srt_block_map.json').unlink(missing_ok=True)
   for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
+
+def removable(pid, targets=()):
+ editable(pid)
+ from automatic import _QUEUE_LOCK, _PENDING
+ with _QUEUE_LOCK:
+  if pid in _PENDING:raise BadRequest('Wait for automatic assembly or rendering to finish before removing files.')
+ from local_understanding import _GUARD, _RUNNING
+ with _GUARD:
+  if any((str(folder(pid)),target) in _RUNNING for target in targets):
+   raise BadRequest('Wait for local analysis of this file to finish before removing it.')
+
+def remove_local_files(root, paths):
+ warnings=[]
+ for path in paths:
+  try:
+   path=Path(path).resolve()
+   if not path.is_relative_to(root.resolve()):raise ValueError('File is outside this project')
+   path.unlink(missing_ok=True)
+  except (OSError,ValueError) as e:warnings.append('Could not remove a local file: '+str(e))
+ return warnings
+
+@app.delete('/api/projects/<pid>/assets/<aid>')
+def delete_asset(pid,aid):
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid);asset=next((a for a in p['assets'] if a['id']==aid),None)
+  if not asset:raise NotFound('Media not found.')
+  related=[asset]+[a for a in p['assets'] if (a.get('derived_from') or {}).get('asset_id')==aid]
+  ids={a['id'] for a in related};removable(pid,ids)
+  d=request.get_json(silent=True) or {}
+  if d.get('confirm') is not True:raise BadRequest('Confirm removal of this file.')
+  affected=[s for s in p['scenes'] if s.get('asset_id') in ids]
+  if (affected or len(related)>1) and d.get('confirm_used') is not True:
+   raise BadRequest('Confirm removal of the source and any extracted frames; affected storyboard scenes will become unassigned.')
+  remaining=[a for a in p['assets'] if a['id'] not in ids]
+  remaining_paths={a.get('path') for a in remaining}
+  paths=[root/a['path'] for a in related if a.get('path') and a['path'] not in remaining_paths]
+  from local_understanding import result_path
+  paths += [result_path(root, a['id']) for a in related]
+  p['assets']=remaining
+  p['source_bindings']={name:asset_id for name,asset_id in (p.get('source_bindings') or {}).items() if asset_id not in ids}
+  for scene in affected:scene['asset_id']=None;scene['approved']=False
+  save(p)
+  warnings=remove_local_files(root,paths)
+  result=public(p);result['removal_warnings']=warnings
+  return jsonify(result)
+
+@app.delete('/api/projects/<pid>/inputs/<kind>')
+def delete_input(pid,kind):
+ if kind not in ('voiceover','srt','production_script'):raise NotFound('Input not found.')
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid);removable(pid,['narration'] if kind=='voiceover' else [])
+  d=request.get_json(silent=True) or {}
+  if d.get('confirm') is not True:raise BadRequest('Confirm removal of this file.')
+  if not p.get(kind):raise NotFound('Input not found.')
+  if p['scenes'] and d.get('confirm_used') is not True:raise BadRequest('Confirm removal: the existing storyboard will need review or rebuilding.')
+  paths=[]
+  if kind=='voiceover':
+   paths.append(root/p['voiceover']['path'])
+   from local_understanding import result_path
+   paths.append(result_path(root,'narration'))
+  elif kind=='srt':
+   paths.append(root/'inputs/captions.srt');p.pop('srt_recovery',None);p['srt_removed']=True
+  else:paths.append(root/'inputs/production_script.txt')
+  p[kind]=None
+  for scene in p['scenes']:scene['approved']=False
+  save(p)
+  warnings=remove_local_files(root,paths)
+  result=public(p);result['removal_warnings']=warnings
+  return jsonify(result)
 
 @app.post('/api/projects/<pid>/assets/approve-all')
 def approve_all_assets(pid):
@@ -1008,7 +1078,7 @@ def apply_narration_transcript(pid):
   # Match normal SRT upload semantics, but only after the user confirms. No timestamps
   # are stretched to match narration and old block maps remain detectably stale.
   (root/'inputs/captions.srt').write_text(text,encoding='utf-8')
-  p['srt']={'blocks':blocks,'name':'Machine transcript · review required.srt'}
+  p['srt']={'blocks':blocks,'name':'Machine transcript · review required.srt'};p.pop('srt_removed',None)
   p['scenes']=[];p.pop('srt_recovery',None)
   save(p)
   from automatic import maybe_queue
