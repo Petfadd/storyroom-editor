@@ -251,6 +251,9 @@ def public(p):
  from preview_render import status as preview_status
  d['preview']=preview_status(folder(p['id']),p['id'],p['updated'])
  if d['preview'].get('status')=='done':d['preview']['url']=f'/api/projects/{p["id"]}/continuous-preview?version={p["updated"]}'
+ from scene_exports import status as scene_export_status
+ d['scene_exports']=scene_export_status(folder(p['id']),p['id'],p['updated'])
+ if d['scene_exports'].get('status')=='done':d['scene_exports']['url']=f'/api/projects/{p["id"]}/scene-exports/{d["scene_exports"]["output"]}'
  d['inputs_ready']=bool(p.get('srt') and p.get('production_script') and p.get('assets'))
  d['picture_flow']=p.get('picture_flow') or None
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
@@ -917,6 +920,37 @@ def continuous_preview_file(pid):
  p=load(pid);root=folder(pid);state=preview_status(root,pid,p['updated'])
  if state.get('status')!='done' or request.args.get('version')!=str(p['updated']):raise NotFound('Preview is not current.')
  return send_from_directory(root/'.cache/continuous_preview','preview.mp4',conditional=True)
+
+@app.post('/api/projects/<pid>/scene-exports')
+def prepare_scene_exports(pid):
+ from scene_exports import start
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid);data=request.get_json(silent=True) or {};kind=data.get('source')
+  if kind not in ('preview','render'):raise BadRequest('Choose the smooth preview or a rendered master.')
+  d=public(p)
+  if kind=='preview':
+   if d['preview'].get('status')!='done':raise BadRequest('Prepare a current smooth preview first.')
+   source=root/'.cache/continuous_preview/preview.mp4'
+  else:
+   render_info=d['render']
+   if render_info.get('status')!='done' or not render_info.get('current'):raise BadRequest('Render the current storyboard first.')
+   name=render_info.get('output','')
+   if Path(name).name!=name:raise BadRequest('Invalid rendered video name.')
+   source=root/'renders'/name
+  def publish(updated,archive,name,source_kind):
+   with LOCKS[pid]:
+    if load(pid)['updated']!=updated:return False
+    dest=root/'renders/scene_exports';dest.mkdir(parents=True,exist_ok=True);archive.replace(dest/name)
+    write(root/'scene_exports_status.json',{'status':'done','updated':updated,'source_kind':source_kind,'output':name,'progress':100,'detail':str(len(p['scenes']))+' scene clips ready.'})
+    return True
+  try:result=start(root,p,source,kind,publish)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify(result),202
+
+@app.get('/api/projects/<pid>/scene-exports/<name>')
+def download_scene_exports(pid,name):
+ if not re.fullmatch(r'scenes_[0-9]{8}_[0-9]{6}_[a-f0-9]{8}\.zip',name):raise NotFound('Scene archive not found.')
+ return send_from_directory(folder(pid)/'renders/scene_exports',name,conditional=True,as_attachment=True)
 
 @app.post('/api/projects/<pid>/render')
 def render(pid):
