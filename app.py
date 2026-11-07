@@ -584,7 +584,7 @@ def asset_approval_policy(pid):
 def bind_script_source(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);data=request.get_json() or {};name=str(data.get('source_file') or '').strip();aid=data.get('asset_id')
-  if not name or len(name)>200 or '/' in name or chr(92) in name or Path(name).suffix.lower() not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use a script filename such as v1.mp4, not a path or source label.')
+  if not name or len(name)>200 or '/' in name or chr(92) in name or Path(name).suffix.lower() not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use a script filename such as S01.mp4, not a path or source label.')
   asset=next((a for a in p['assets'] if a['id']==aid),None)
   if not asset:raise BadRequest('Choose an existing upload from this project.')
   if asset.get('derived_from'):raise BadRequest('Choose the original source upload, not an extracted frame.')
@@ -941,7 +941,7 @@ def prepare_scene_exports(pid):
    with LOCKS[pid]:
     if load(pid)['updated']!=updated:return False
     dest=root/'renders/scene_exports';dest.mkdir(parents=True,exist_ok=True);archive.replace(dest/name)
-    write(root/'scene_exports_status.json',{'status':'done','updated':updated,'source_kind':source_kind,'output':name,'progress':100,'detail':str(len(p['scenes']))+' scene clips ready.'})
+    write(root/'scene_exports_status.json',{'status':'done','updated':updated,'source_kind':source_kind,'naming':'C','output':name,'progress':100,'detail':str(len(p['scenes']))+' scene clips ready.'})
     return True
   try:result=start(root,p,source,kind,publish)
   except ValueError as e:raise BadRequest(str(e))

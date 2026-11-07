@@ -16,7 +16,7 @@ GUARD = threading.Lock()
 
 
 def scene_name(index):
-    return f'S{index:02d}.mp4'
+    return f'C{index:02d}.mp4'
 
 
 def status(root, pid, updated):
@@ -42,7 +42,7 @@ def start(root, project, source, source_kind, publish):
         current = JOBS.get(pid)
         if current and current['status'] in ('queued', 'running'):
             raise ValueError('Scene clips are already being prepared.')
-        state = {'status': 'queued', 'progress': 0, 'updated': project['updated'], 'source_kind': source_kind, 'detail': 'Preparing scene clips.'}
+        state = {'status': 'queued', 'progress': 0, 'updated': project['updated'], 'source_kind': source_kind, 'naming': 'C', 'detail': 'Preparing scene clips.'}
         JOBS[pid] = state
     thread = threading.Thread(target=_run, args=(Path(root), project, Path(source), state, publish), name='scene-export-' + pid, daemon=True)
     thread.start()

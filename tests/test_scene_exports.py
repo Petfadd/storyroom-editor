@@ -29,7 +29,7 @@ class SceneExportsTest(unittest.TestCase):
         out=self.c.get(f'/api/projects/{self.pid}').get_json();self.assertEqual(out['scene_exports']['source_kind'],'preview')
         archive=self.root/'renders/scene_exports'/state['output'];response=self.c.get(out['scene_exports']['url']);self.assertEqual(response.status_code,200);response.close()
         with zipfile.ZipFile(archive) as z:
-            self.assertEqual(z.namelist(),['S01.mp4','S02.mp4','S03.mp4'])
+            self.assertEqual(z.namelist(),['C01.mp4','C02.mp4','C03.mp4'])
             z.extractall(self.root/'clips')
         source=cv2.VideoCapture(str(self.root/'.cache/continuous_preview/preview.mp4'))
         for i in range(3):
@@ -43,6 +43,6 @@ class SceneExportsTest(unittest.TestCase):
         self.assertEqual(self.c.get(f'/api/projects/{self.pid}').get_json()['scene_exports']['status'],'stale')
         self.assertTrue(archive.exists())
     def test_scene_number_scales_beyond_99(self):
-        self.assertEqual([scene_exports.scene_name(i) for i in [1,9,10,99,100,1000]],['S01.mp4','S09.mp4','S10.mp4','S99.mp4','S100.mp4','S1000.mp4'])
+        self.assertEqual([scene_exports.scene_name(i) for i in [1,9,10,99,100,1000]],['C01.mp4','C09.mp4','C10.mp4','C99.mp4','C100.mp4','C1000.mp4'])
 
 if __name__=='__main__':unittest.main()

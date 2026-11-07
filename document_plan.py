@@ -89,7 +89,7 @@ def script_beats(p):
   if 'Timeline in → out' not in table[0] or 'Src IN → OUT' not in table[0]:continue
   rows=[]
   for row in table:
-   files=re.findall(r'\b(?:v|r)\d+\.(?:mp4|mov)\b',row['Source → file'],re.I)
+   files=re.findall(r'\b(?:s|v|r)\d+\.(?:mp4|mov)\b',row['Source → file'],re.I)
    times=[s.strip() for s in row['Timeline in → out'].split('→')];source=[s.strip() for s in row['Src IN → OUT'].split('→')]
    if len(files)!=1 or len(times)!=2 or len(source)!=2:raise ValueError('A Markdown beat has an ambiguous file or IN/OUT range.')
    treatment=row.get('Treatment · transition','');parts=treatment.rsplit(' · ',1);transition=parts[-1]
@@ -115,7 +115,7 @@ native 30 fps interval is neither stretched nor frozen.
   for i,row in enumerate(table,1):
    timeline=[x.strip() for x in str(row.get('Timeline IN → OUT','')).split('→')]
    source=[x.strip() for x in str(row.get('Source IN/OUT (planned)','')).split('→')]
-   file=re.search(r'\b(?:v|r)\d+\.(?:mp4|mov)\b',str(row.get('Media','')),re.I)
+   file=re.search(r'\b(?:s|v|r)\d+\.(?:mp4|mov)\b',str(row.get('Media','')),re.I)
    if len(timeline)!=2 or len(source)!=2 or not file:raise ValueError('Beat '+str(i)+' has an ambiguous media file or IN/OUT range.')
    start=timecode_ms(timeline[0],'Beat '+str(i)+' timeline IN')
    end=timecode_ms(timeline[1],'Beat '+str(i)+' timeline OUT')

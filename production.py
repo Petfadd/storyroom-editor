@@ -102,9 +102,9 @@ def instructions(p):
  d=structured(p);rows=d.get('scenes',[]);issues=[];result=[]
  if not isinstance(rows,list):issues.append('The script scenes field must be a list.');rows=[]
  if not rows:
-  # Recognize explicit references only; never assume v1.mp4 means scene one.
+  # Recognize explicit references only; never infer a scene from a source number.
   for line in document(p).splitlines():
-   asset=re.search(r'\b(v\d+\.(?:mp4|mov)|r\d+(?:\.(?:mp4|mov))?)\b',line,re.I);block=re.search(r'\b(?:SRT|Scene)\s*#?\s*(\d+)(?:\s*[-–]\s*(\d+))?',line,re.I)
+   asset=re.search(r'\b((?:s|v)\d+\.(?:mp4|mov)|r\d+(?:\.(?:mp4|mov))?)\b',line,re.I);block=re.search(r'\b(?:SRT|Scene)\s*#?\s*(\d+)(?:\s*[-–]\s*(\d+))?',line,re.I)
    if not asset or not block:continue
    start=re.search(r'\b(?:in(?:_s)?|from|start)\s*[:=]?\s*(\d+(?::\d+){0,2}(?:[.,]\d+)?)',line,re.I)
    end=re.search(r'\b(?:out(?:_s)?|to|end)\s*[:=]?\s*(\d+(?::\d+){0,2}(?:[.,]\d+)?)',line,re.I)
