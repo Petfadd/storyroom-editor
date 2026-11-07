@@ -21,4 +21,18 @@ assert(!usePreparedSource(shots[1],footage[0],10.05));
 '''
         subprocess.run(['node','-e',harness],check=True)
 
+    def test_contiguous_same_video_is_not_restarted(self):
+        script=Path('static/editor.js').read_text()
+        function=script[script.index('function showSource('):script.index('function applyImageMotion(')]
+        harness="""
+const assert=require('assert');let sourceScene='previous',sourceReady=true,sourceSeekToken=0,editorPlaying=true,editorMaster=false;
+let paused=0,seeks=0;const sourceNode={currentTime:13.42,seeking:false,readyState:2,pause(){paused++},getAttribute(){return '/clip'},classList:{remove(){} }};
+const s={id:'next',asset_id:'a',frame_in:300,in_s:13.4},a={id:'a',kind:'video',url:'/clip'};
+const scenes=()=>[s],assets=()=>[a],imageNode={hidden:false},$=()=>({hidden:false});
+function usePreparedSource(){return false}function seekSourceAtTimeline(){seeks++}
+"""+function+"""
+showSource(0,10.02);assert.equal(paused,0);assert.equal(seeks,0);assert.equal(sourceScene,'next');
+"""
+        subprocess.run(['node','-e',harness],check=True)
+
 if __name__=='__main__':unittest.main()
