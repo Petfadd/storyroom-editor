@@ -322,3 +322,38 @@ async function saveBlockMap(){
   mapDraft=null;dirty=false;$('#map-editor-dialog').close();renderProject();toast('Block map saved. Rebuild the storyboard to apply it.');
  }catch(e){error.textContent=e.message;error.hidden=false;button.disabled=false}
 }
+
+let understandingTarget='',understandingTimer=null;
+function understandingSources(){return [...(P?.voiceover?[['narration','Narration · '+P.voiceover.name]]:[]),...(P?.assets||[]).filter(a=>a.kind==='video').map(a=>[a.id,'Video · '+a.name])];}
+async function openUnderstanding(){
+ if(!P||!leave())return;
+ understandingTarget=understandingSources()[0]?.[0]||'';
+ $('#understanding-dialog').showModal();await refreshUnderstanding();
+}
+function closeUnderstanding(){clearTimeout(understandingTimer);$('#understanding-dialog').close()}
+$('#understanding-dialog').addEventListener('close',()=>clearTimeout(understandingTimer));
+async function refreshUnderstanding(){
+ clearTimeout(understandingTimer);if(!P||!understandingTarget)return;
+ const id=P.id,target=understandingTarget,body=$('#understanding-body');
+ try{
+  const [cap,result]=await Promise.all([api('/api/local-understanding/capabilities'),api(`/api/projects/${id}/understanding/${target}`)]);
+  if(!$('#understanding-dialog').open||!P||id!==P.id||target!==understandingTarget)return;
+  const stages=result.stages||{};
+  const stage=(key,label,render)=>{const x=stages[key];if(!x)return '';return `<section class="card"><h3>${E(label)} · ${E(x.status)}</h3>${x.detail?`<p class="small">${E(x.detail)}</p>`:''}${x.status==='complete'?render(x.result):''}</section>`};
+  body.innerHTML=`<p class="small">Local processing only. AI descriptions and timestamps are estimates, not verification. Nothing edits your captions or storyboard.</p>
+   <label>Media <select id="understanding-source" onchange="understandingTarget=this.value;refreshUnderstanding()">${understandingSources().map(([k,v])=>`<option value="${E(k)}" ${k===target?'selected':''}>${E(v)}</option>`).join('')}</select></label>
+   <p class="small">Whisper: ${cap.whisper_model_ready&&cap.faster_whisper?'local model available':'local model or package missing'} · PySceneDetect: ${cap.scenedetect?'installed':'missing'} · Librosa: ${cap.librosa?'installed':'missing'} · vision: ${E(cap.vision_model)} on local Ollama (availability checked when run) · diarization: not yet supported.</p>
+   <p>Status: <strong>${E(result.status)}</strong> ${result.detail?E(result.detail):''}</p><button type="button" onclick="runUnderstanding()" ${['queued','running'].includes(result.status)?'disabled':''}>${result.status==='not_started'?'Analyse locally':'Run analysis again'}</button>
+   ${result.status!=='not_started'?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}" target="_blank" rel="noopener">Open JSON report</a>`:''}
+   ${stage('transcript','Transcript',r=>`<p class="small">Language: ${E(r.language)}</p>${(r.segments||[]).map(x=>`<p><strong>${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s</strong> ${E(x.text)}</p>`).join('')||'<p>No speech detected.</p>'}`)}
+   ${stage('scene_changes','Scene changes',r=>`<p>${r.length} detected spans</p><p class="small">${r.map(x=>`${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s`).join(' · ')}</p>`)}
+   ${stage('visual','Visual observations',r=>`<p class="small">${E(r.note)} ${r.sampled_scenes} of ${r.total_scenes} scenes sampled.</p>${r.observations.map(x=>`<p><strong>Frame ${Number(x.frame_time_s).toFixed(2)}s</strong> ${E(x.description)}</p>`).join('')}`)}
+   ${stage('audio_features','Audio signal',r=>`<p class="small">${E(r.note)}</p>${r.windows.map(x=>`<p>${Number(x.start_s).toFixed(1)}–${Number(x.end_s).toFixed(1)}s · RMS ${x.rms} · centroid ${x.spectral_centroid_hz} Hz${x.low_energy?' · low energy':''}</p>`).join('')}`)}
+   ${stage('speakers','Speakers',()=> '')}`;
+  if(['queued','running'].includes(result.status))understandingTimer=setTimeout(refreshUnderstanding,3000);
+ }catch(e){body.textContent='Could not load local analysis: '+e.message}
+}
+async function runUnderstanding(){
+ const id=P.id,target=understandingTarget;
+ try{await api(`/api/projects/${id}/understanding/${target}`,'POST');await refreshUnderstanding()}catch(e){toast(e.message)}
+}

@@ -463,6 +463,14 @@ def perform_upload(pid,key=''):
   update(pid,key,'indexing');save(p)
   from automatic import maybe_queue
   maybe_queue(sys.modules[__name__],p)
+  # Automatic analysis only when explicitly enabled; it never delays the upload or
+  # changes the authored SRT/storyboard. The manual control works independently.
+  if os.environ.get('STORYROOM_UNDERSTANDING_AUTO','0')=='1':
+   try:
+    from local_understanding import enqueue
+    if kind=='voiceover':enqueue(root,'narration',root/p['voiceover']['path'],'audio',p['voiceover']['duration'])
+    elif kind=='asset' and not photo:enqueue(root,aid,dest,'video',duration)
+   except Exception as e:app.logger.warning('Could not queue local understanding: %s',e)
   result=jsonify(public(p));update(pid,key,'done');return result
 @app.delete('/api/projects/<pid>/srt-block-map')
 def remove_block_map(pid):
@@ -914,6 +922,31 @@ def frame_qc_sheet(pid):
 def frame_qc_file(pid,name):
  if not re.fullmatch(r'frame_qc_sheet_\d{2}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
  return send_from_directory(folder(pid)/'.cache/frame_qc',name,conditional=True)
+
+@app.get('/api/local-understanding/capabilities')
+def local_understanding_capabilities():
+ from local_understanding import capabilities
+ return jsonify(capabilities())
+
+def understanding_source(pid,target):
+ p=load(pid);root=folder(pid)
+ if target=='narration':
+  a=p.get('voiceover');kind='audio'
+ else:
+  if not re.fullmatch('[a-f0-9]{16}',target):raise NotFound('Media not found.')
+  a=next((a for a in p['assets'] if a['id']==target and a['kind']=='video'),None);kind='video'
+ if not a:raise NotFound('Media not found.')
+ path=(root/a['path']).resolve()
+ if not path.is_relative_to(root.resolve()) or not path.is_file():raise NotFound('Media file not found.')
+ return root,path,kind,float(a['duration'])
+
+@app.route('/api/projects/<pid>/understanding/<target>',methods=['GET','POST'])
+def local_understanding_report(pid,target):
+ from local_understanding import enqueue,read_result
+ with LOCKS[pid]:
+  root,path,kind,duration=understanding_source(pid,target)
+  if request.method=='POST':enqueue(root,target,path,kind,duration)
+  return jsonify(read_result(root,target,path))
 
 @app.get('/api/projects/<pid>/block-map-editor')
 def block_map_editor(pid):

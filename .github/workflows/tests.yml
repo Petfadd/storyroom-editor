@@ -21,7 +21,7 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Install packages
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-local-ai.txt
       - name: Compile every module
         run: python -m compileall -q . -x '\.venv|__pycache__'
       - name: Import the application

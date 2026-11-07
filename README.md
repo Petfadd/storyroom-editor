@@ -398,3 +398,50 @@ No `LICENSE` file is included. If this is a public repository and you want other
 ## Honest scope
 
 The engine can decode frames and follow explicit machine-readable source intervals. It does not independently certify people, exact exhibits, copyright status, or editorial truth. `YES` flags and automatic approval do not equal visual identity verification.
+
+## Local media understanding (experimental)
+
+Production setup → **Local audio & video understanding** opens an independent,
+per-file report. It does not change the SRT, make editorial approvals, or affect
+storyboard construction. Use **Analyse locally** for narration or an uploaded video.
+The JSON report is also available at `GET /api/projects/<id>/understanding/<target>`
+where target is `narration` or a video asset ID. Results are source-time observations;
+they are not automatically mapped to timeline positions. Replacing a source marks
+its report stale. Processing is serialized to reduce CPU and memory pressure.
+
+Setup on the computer running Storyroom:
+
+1. Install the optional libraries into the app's Python environment:
+   `pip install -r requirements-local-ai.txt`. FFmpeg is supplied by imageio-ffmpeg.
+2. Download a CTranslate2 Faster-Whisper model to a local directory using a model
+   provider's download tooling, and set `STORYROOM_WHISPER_MODEL_DIR` to that directory
+   before starting Storyroom. For example, install a converted `Systran/faster-whisper-small`
+   model (the directory must contain `model.bin`, configuration and tokenizer files).
+   Storyroom loads only local files and uses CPU int8; it never downloads a model.
+3. Install and run Ollama locally, and separately download `qwen3-vl:2b` using
+   `ollama pull qwen3-vl:2b`. Storyroom sends sampled frames only to
+   `http://127.0.0.1:11434`; it does not use a remote endpoint or web inference.
+   `STORYROOM_OLLAMA_MODEL` can select another model already installed locally.
+4. To queue analysis on future uploads, start Storyroom with
+   `STORYROOM_UNDERSTANDING_AUTO=1`. By default use the manual control so additional
+   model workloads do not interrupt existing editing. Analysis can take much longer
+   than the media duration on a small CPU; `STORYROOM_VISION_MAX_FRAMES` controls the
+   number of sampled scenes (default 60, maximum 300).
+
+Model downloads require an internet connection once, but analysis is local and requires
+no paid inference. Ollama and the Faster-Whisper models need extra disk and RAM; the
+Qwen 2B quantized weights alone are approximately 1.9 GB, before runtime memory. This
+sandbox has only 3.8 GiB RAM and two CPU cores, so running this model here may be slow
+or exceed memory. Your own computer's hardware was not assessed. AMD acceleration is
+not configured or verified; the transcription path is explicitly CPU-only.
+
+**Current limits:** this is not yet complete audio/video understanding. The visual
+pass describes one frame per detected scene, up to the sample cap, so it can miss actions
+and text between frames. Descriptions and timestamps can be wrong; names and identities
+are not established. Librosa reports RMS, spectral centroid and coarse low-energy
+windows, not reliable silence boundaries, music recognition or sound-event labels.
+Speaker diarization is not implemented; pyannote models can require separate license
+acceptance and credentials to download even though local inference is possible. Missing
+models/dependencies and failures appear per stage, and partial results are labelled as
+such. Full transcription, visual inference, sound classification and diarization need
+real-model testing before this capability should be treated as complete.
