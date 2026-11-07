@@ -204,7 +204,7 @@ def check(p,final=False):
  if p.get('production_script') and p['scenes'] and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
  # Narration is optional. A programme may be carried by its text alone; what is not
  # allowed is a narration track whose length disagrees with the picture it sits under.
- if not p['scenes']:errors.append('Import an SRT and build the storyboard.')
+ if not p['scenes']:errors.append('Build the storyboard from the imported SRT.' if p.get('srt') else 'Import an SRT and build the storyboard.')
  if p.get('voiceover') and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
  for i,s in enumerate(p['scenes']):
   a=assets.get(s['asset_id'])
