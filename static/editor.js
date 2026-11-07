@@ -1,7 +1,9 @@
 /* The project system lives inside the established media/monitor/inspector/timeline shell. */
 let sourceReady=false,sourceSeekToken=0,editorBuffering=false;
 let timelineZoom=12,editorPlaying=false,editorMuted=false,editorCC=false,editorMaster=false,masterUrl='',sourceScene='',clockBase=0,clockAt=0,editorContext='',activeSRT=-1;
-const masterNode=$('#program-master'),sourceNode=$('#program-source'),imageNode=$('#program-image'),narrNode=$('#program-narration');
+const masterNode=$('#program-master'),imageNode=$('#program-image'),narrNode=$('#program-narration');
+const standbyNode=document.createElement('video');standbyNode.id='program-source-next';standbyNode.muted=true;standbyNode.playsInline=true;standbyNode.preload='auto';standbyNode.disablePictureInPicture=true;standbyNode.setAttribute('disableremoteplayback','');imageNode.before(standbyNode);
+let sourceNode=$('#program-source'),nextSourceNode=standbyNode,preparedScene='',preparedReady=false,prepareToken=0;
 const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>scenes().at(-1)?.frame_out/30||0;
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
@@ -12,7 +14,7 @@ showHome=openProjects;
 function pauseManagementMedia(){document.querySelectorAll('#manage-dialog audio,#manage-dialog video').forEach(node=>node.pause())}
 function closeTools(){pauseManagementMedia();for(const id of ['#projects-dialog','#manage-dialog'])if($(id).open)$(id).close()}
 openProject=async function(id){if(!leave())return;pauseEditor();closeTools();P=await api('/api/projects/'+id);sceneIndex=0;tab='brief';history.replaceState(null,'','#/production/'+id);await list();resetEditor();renderProject()};
-function resetEditor(){editorBuffering=false;sourceSeekToken++;sourceReady=false;sourceScene='';clockBase=0;clockAt=performance.now();masterUrl='';editorMaster=false;masterNode.pause();masterNode.removeAttribute('src');masterNode.load();sourceNode.pause();sourceNode.removeAttribute('src');sourceNode.load();narrNode.pause();narrNode.removeAttribute('src');narrNode.load();$('#timeline-scroll').scrollLeft=0}
+function resetEditor(){clearPreparedSource();editorBuffering=false;sourceSeekToken++;sourceReady=false;sourceScene='';clockBase=0;clockAt=performance.now();masterUrl='';editorMaster=false;masterNode.pause();masterNode.removeAttribute('src');masterNode.load();sourceNode.pause();sourceNode.removeAttribute('src');sourceNode.load();narrNode.pause();narrNode.removeAttribute('src');narrNode.load();$('#timeline-scroll').scrollLeft=0}
 $('#new-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter||$('#new-form button[type=submit]');button.disabled=true;try{pauseEditor();P=await api('/api/projects','POST',Object.fromEntries(new FormData(e.target)));sceneIndex=0;$('#new-dialog').close();history.replaceState(null,'','#/production/'+P.id);resetEditor();await list();renderProject();manage('brief');toast('New production created in the same timeline editor.')}finally{button.disabled=false}};
 function manage(which){if(!['brief','assets','delivery'].includes(which))which='brief';if(!P){toast('Create a production first.');return}if(!leave())return;pauseEditor();tab=which;renderManagement();if(!$('#manage-dialog').open)$('#manage-dialog').showModal()}
 changeTab=manage;
@@ -46,6 +48,34 @@ function renderProgram(){
  }
  const assigned=scenes().length&&assets().some(a=>a.id===scenes()[sceneIndex]?.asset_id);$('#monitor-empty').hidden=!!scenes().length&&(editorMaster||assigned);if(scenes().length&&!assigned&&!editorMaster)$('#monitor-empty').innerHTML='<strong>No visual assigned to this scene</strong><span>Choose uploaded media in the shot inspector, or import case footage.</span><button class="button secondary" onclick="manage(\'assets\')">Import media</button>';else if(!scenes().length){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#monitor-empty').innerHTML=missing.length?`<strong>Storyboard waiting for footage links</strong><span>Script filenames need matching uploads: ${missing.map(x=>E(x.source_file)).join(', ')}. Your imported files are still here.</span><button class="button secondary" onclick="manage('assets')">Resolve script filenames</button>`:P?.srt?'<strong>Storyboard not built yet</strong><span>Your SRT is imported. Build the storyboard in Setup to place picture beats on V1.</span><button class="button secondary" onclick="manage(\'brief\')">Open production setup</button>':'<strong>Keep the editor. Start a new story.</strong><span>Import narration, SRT and case media from Setup.</span><button class="button secondary" onclick="newProduction()">＋ New production</button>';}$('#big-play').hidden=!scenes().length||(!assigned&&!editorMaster)||editorPlaying;$('#preview-mode').textContent=editorMaster?'CONTINUOUS MASTER':'SOURCE PREVIEW';
 }
+function clearPreparedSource(){
+ prepareToken++;preparedScene='';preparedReady=false;nextSourceNode.pause();
+ nextSourceNode.onloadedmetadata=nextSourceNode.onseeked=nextSourceNode.onloadeddata=nextSourceNode.onerror=null;
+ nextSourceNode.removeAttribute('src');nextSourceNode.load();nextSourceNode.classList.remove('is-active');
+}
+function prepareNextSource(i,t){
+ if(editorMaster||!editorPlaying)return;
+ const current=scenes()[i],next=scenes()[i+1],asset=assets().find(a=>a.id===next?.asset_id);
+ if(!current||!next||!asset||asset.kind!=='video'||current.frame_out/30-t>8)return;
+ if(preparedScene===next.id)return;
+ clearPreparedSource();preparedScene=next.id;const token=prepareToken,node=nextSourceNode,target=Number(next.in_s);
+ const valid=()=>token===prepareToken&&preparedScene===next.id&&node===nextSourceNode;
+ const ready=()=>{if(valid()&&!node.seeking&&node.readyState>=2&&Math.abs(node.currentTime-target)<.15)preparedReady=true};
+ const seek=()=>{if(!valid()||node.readyState<1)return;if(!Number.isFinite(target)||target<0||target>node.duration+.034)return;try{node.currentTime=target;ready()}catch{}};
+ node.onloadedmetadata=seek;node.onseeked=ready;node.onloadeddata=ready;node.onerror=()=>{if(valid())preparedReady=false};
+ node.src=asset.url;node.load();
+}
+function usePreparedSource(s,a,t){
+ if(preparedScene!==s.id||!preparedReady||nextSourceNode.getAttribute('src')!==a.url)return false;
+ const offset=Math.max(0,t-s.frame_in/30);if(offset>.18)return false;
+ sourceSeekToken++;sourceNode.pause();sourceNode.classList.remove('is-active');
+ sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
+ const old=sourceNode;sourceNode=nextSourceNode;nextSourceNode=old;prepareToken++;preparedScene='';preparedReady=false;
+ sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
+ sourceReady=true;editorBuffering=false;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
+ if(editorPlaying)sourceNode.play().catch(()=>{if(sourceScene===s.id&&!editorMaster)seekSourceAtTimeline(s,a,editorTime())});
+ return true;
+}
 function seekSourceAtTimeline(s,a,t){
  // Freeze the preview clock while decoding. Never hide the last picture while audio runs.
  const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();
@@ -68,7 +98,7 @@ function showSource(i,t){
  if(sourceScene!==s.id){
   $('#monitor-empty').hidden=true;sourceScene=s.id;sourceNode.pause();
   if(a.kind==='image'){sourceSeekToken++;sourceReady=false;sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;imageNode.src=a.url;imageNode.hidden=false;sourceNode.classList.remove('is-active')}
-  else{seekSourceAtTimeline(s,a,t)}
+  else if(!usePreparedSource(s,a,t)){seekSourceAtTimeline(s,a,t)}
  }
  if(a.kind==='image')applyImageMotion(s,Math.max(0,t-s.frame_in/30));
  else if(editorPlaying&&sourceReady&&!sourceNode.seeking&&Math.abs(sourceNode.currentTime-(Number(s.in_s)+Math.max(0,t-s.frame_in/30)))>.18)seekSourceAtTimeline(s,a,t);
@@ -271,7 +301,7 @@ $('#manage-dialog').addEventListener('cancel',e=>{e.preventDefault();closeManage
 $('#ruler-track').onclick=e=>{const r=$('#ruler-track').getBoundingClientRect();seekEditor((e.clientX-r.left)/timelineZoom,true)};
 document.addEventListener('input',e=>{if(e.target.closest('#scene-form')&&editorPlaying)pauseEditor()});
 document.addEventListener('keydown',e=>{if(e.code==='Space'&&!document.querySelector('dialog[open]')&&!['INPUT','TEXTAREA','SELECT','BUTTON'].includes(document.activeElement.tagName)){e.preventDefault();editorPlaying?pauseEditor():playEditor()}});
-function tickEditor(){if(editorPlaying){const t=editorTime();if(t>=totalTime()){pauseEditor()}else{const i=scenes().findIndex(s=>t>=s.frame_in/30&&t<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;if(!editorMaster)showSource(i,t);renderInspector();markSelected()}if(!editorMaster){showSource(sceneIndex,t);drawBackdrop()}}}else if(!editorMaster)drawBackdrop();updatePosition();requestAnimationFrame(tickEditor)}
+function tickEditor(){if(editorPlaying){const t=editorTime();if(t>=totalTime()){pauseEditor()}else{const i=scenes().findIndex(s=>t>=s.frame_in/30&&t<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;if(!editorMaster)showSource(i,t);renderInspector();markSelected()}if(!editorMaster){showSource(sceneIndex,t);prepareNextSource(sceneIndex,t);drawBackdrop()}}}else if(!editorMaster)drawBackdrop();updatePosition();requestAnimationFrame(tickEditor)}
 setInterval(async()=>{if(!P||dirty||uploading||editorPlaying)return;try{const next=await api('/api/projects/'+P.id);if(next.updated!==P.updated||next.render?.status!==P.render?.status||next.render?.progress!==P.render?.progress||next.render?.output!==P.render?.output){P=next;sceneIndex=Math.min(sceneIndex,Math.max(0,P.scenes.length-1));renderProject()}}catch(e){toast(e.message)}},3000);
 (async()=>{try{await list();const id=location.hash.match(/^#\/production\/([a-f0-9]{16})$/);if(id)await openProject(id[1]);else if(projects[0])await openProject(projects[0].id);else renderEditor();requestAnimationFrame(tickEditor)}catch(e){toast(e.message);renderEditor();requestAnimationFrame(tickEditor)}})();
 
