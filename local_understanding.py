@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -35,7 +36,7 @@ def capabilities():
             'librosa': bool(importlib.util.find_spec('librosa')),
             'ollama_url': 'http://127.0.0.1:11434',
             'vision_model': os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b'),
-            'speaker_diarization': False,
+            'speaker_diarization': bool(importlib.util.find_spec('pyannote') and os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR') and Path(os.environ['STORYROOM_PYANNOTE_MODEL_DIR']).is_dir()),
             'note': 'CPU int8 transcription requires a local Faster-Whisper model directory; visual analysis requires a locally running Ollama with the selected vision model. No models are downloaded by Storyroom.'}
 
 
@@ -121,10 +122,41 @@ def _transcribe(wav):
         del model; gc.collect()
 
 
+def _diarize(wav):
+    """Load an optional local-only community-1 pipeline in an isolated subprocess."""
+    model = os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR', '').strip()
+    if not model or not Path(model).is_dir():
+        raise RuntimeError('Set STORYROOM_PYANNOTE_MODEL_DIR to a downloaded local pyannote community-1 pipeline.')
+    env = dict(os.environ, HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
+               PYANNOTE_METRICS_ENABLED='0', HF_HUB_DISABLE_TELEMETRY='1')
+    with tempfile.TemporaryDirectory(prefix='storyroom-diarization-') as tmp:
+        result = Path(tmp) / 'speakers.json'
+        proc = subprocess.run([sys.executable, str(Path(__file__).with_name('local_diarization.py')),
+                               str(Path(model).resolve()), str(wav), str(result)],
+                              env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=7200)
+        if proc.returncode:
+            raise RuntimeError('Local pyannote failed: ' + proc.stderr.decode(errors='replace')[-500:])
+        return json.loads(result.read_text(encoding='utf-8'))
+
+
+def _align_speakers(transcript, speakers):
+    """Annotate words/segments by strongest overlap; labels are anonymous per file."""
+    turns = speakers.get('turns', [])
+    def label(item):
+        start, end = item.get('start_s'), item.get('end_s')
+        if start is None or end is None: return None
+        overlap = [(max(0, min(end, t['end_s']) - max(start, t['start_s'])), t['speaker']) for t in turns]
+        best = max(overlap, default=(0, None))
+        return best[1] if best[0] > 0 else None
+    for segment in transcript.get('segments', []):
+        segment['speaker'] = label(segment)
+        for word in segment.get('words', []): word['speaker'] = label(word)
+
+
 def _audio_features(wav):
     import numpy as np
     import librosa
-    chunks = []
+    chunks = []; silence = []; quiet_start = None; quiet_end = None
     with wave.open(str(wav), 'rb') as f:
         sr = f.getframerate(); samples = sr * 10; position = 0
         while True:
@@ -137,8 +169,24 @@ def _audio_features(wav):
             centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))) if len(y) >= 2048 else 0.0
             chunks.append({'start_s': round(position / sr, 3), 'end_s': round((position + len(y)) / sr, 3),
                            'rms': round(rms, 5), 'spectral_centroid_hz': round(centroid, 1), 'low_energy': rms < 0.01})
+            # Absolute threshold, 100 ms windows; merge across chunk boundaries.
+            frame = sr // 10
+            for offset in range(0, len(y), frame):
+                fragment = y[offset:offset + frame]
+                low = float(np.sqrt(np.mean(fragment * fragment))) < 0.01
+                start = (position + offset) / sr
+                end = (position + offset + len(fragment)) / sr
+                if low:
+                    if quiet_start is None: quiet_start = start
+                    quiet_end = end
+                elif quiet_start is not None:
+                    if quiet_end - quiet_start >= 0.5: silence.append({'start_s': round(quiet_start, 3), 'end_s': round(quiet_end, 3)})
+                    quiet_start = quiet_end = None
             position += len(y)
-    return {'windows': chunks, 'note': '10-second signal windows; low energy is not a speech, music, or sound-event classification.'}
+    if quiet_start is not None and quiet_end - quiet_start >= 0.5:
+        silence.append({'start_s': round(quiet_start, 3), 'end_s': round(quiet_end, 3)})
+    return {'windows': chunks, 'low_energy_intervals': silence,
+            'note': 'Approximate low-energy intervals use an absolute RMS threshold; they are not guaranteed silence or a music/sound-event classification.'}
 
 
 def _scenes(path, duration):
@@ -148,15 +196,29 @@ def _scenes(path, duration):
     return [{'start_s': round(a.get_seconds(), 3), 'end_s': round(b.get_seconds(), 3)} for a, b in spans]
 
 
+def _sample_frames(scenes, max_frames, interval_s=10):
+    """Spread the budget over the entire source, including within long scenes."""
+    candidates = []
+    for scene in scenes:
+        length = max(0, scene['end_s'] - scene['start_s'])
+        count = max(1, int((length + interval_s - 1e-9) // interval_s))
+        # Bound planning memory even for multi-hour files.
+        count = min(count, max_frames * 10)
+        for i in range(count):
+            candidates.append((scene['start_s'] + length * (i + .5) / count, scene))
+    if len(candidates) > max_frames:
+        candidates = [candidates[int((i + .5) * len(candidates) / max_frames)] for i in range(max_frames)]
+    return candidates
+
+
 def _vision(path, scenes):
     # No arbitrary URL or redirects: image data stays on this computer.
     model = os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b')
     max_frames = max(1, min(300, int(os.environ.get('STORYROOM_VISION_MAX_FRAMES', '60'))))
-    sampled = scenes if len(scenes) <= max_frames else [scenes[int(i * len(scenes) / max_frames)] for i in range(max_frames)]
+    sampled = _sample_frames(scenes, max_frames)
     observations = []
     with tempfile.TemporaryDirectory(prefix='storyroom-frames-') as tmp:
-        for scene in sampled:
-            at = (scene['start_s'] + scene['end_s']) / 2
+        for at, scene in sampled:
             image = Path(tmp) / 'frame.jpg'
             proc = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y', '-ss', str(at), '-i', str(path), '-frames:v', '1', '-vf', 'scale=640:-2', str(image)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
             if proc.returncode or not image.is_file(): raise RuntimeError('Could not extract frame at %.3fs' % at)
@@ -175,7 +237,7 @@ def _vision(path, scenes):
             text = (result.get('message') or {}).get('content', '').strip()
             if not text: raise RuntimeError('Ollama returned no visual description.')
             observations.append({'frame_time_s': round(at, 3), 'scene_start_s': scene['start_s'], 'scene_end_s': scene['end_s'], 'description': text})
-    return {'observations': observations, 'sampled_scenes': len(sampled), 'total_scenes': len(scenes), 'note': 'One sampled frame per selected scene; observations do not describe every moment.'}
+    return {'observations': observations, 'sampled_frames': len(sampled), 'total_scenes': len(scenes), 'note': 'Sampled still frames do not describe every moment or establish identities.'}
 
 
 def _run(root, target, source, data):
@@ -194,6 +256,12 @@ def _run(root, target, source, data):
                 else:
                     _stage(data, report, 'transcript', lambda: _transcribe(wav))
                     _stage(data, report, 'audio_features', lambda: _audio_features(wav))
+                    if os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR'):
+                        _stage(data, report, 'speakers', lambda: _diarize(wav))
+                        if data['stages']['speakers']['status'] == 'complete' and data['stages']['transcript']['status'] == 'complete':
+                            _align_speakers(data['stages']['transcript']['result'], data['stages']['speakers']['result'])
+                    else:
+                        data['stages']['speakers'] = {'status': 'not_requested', 'detail': 'Optional local pyannote speaker diarization is not configured.'}
             if data['kind'] == 'video':
                 _stage(data, report, 'scene_changes', lambda: _scenes(source, data['duration_s']))
                 cuts = data['stages']['scene_changes']
@@ -201,8 +269,9 @@ def _run(root, target, source, data):
                     _stage(data, report, 'visual', lambda: _vision(source, cuts['result']))
                 else:
                     data['stages']['visual'] = {'status':'unavailable','detail':'Scene detection failed; no visual frames analysed.'}
-            data['stages']['speakers'] = {'status': 'unavailable', 'detail': 'Speaker diarization is not yet integrated; speaker identities are not inferred.'}
-            data['status'] = 'complete' if all(x['status'] == 'complete' for x in data['stages'].values()) else 'partial'
+            if 'speakers' not in data['stages']:
+                data['stages']['speakers'] = {'status': 'unavailable', 'detail': 'No decoded audio for diarization.'}
+            data['status'] = 'complete' if all(x['status'] in ('complete', 'not_requested') for x in data['stages'].values()) else 'partial'
             data['finished_at'] = time.time()
             if _signature(source) != data['source_signature']:
                 data['status'] = 'stale'; data['detail'] = 'Source changed during analysis; run again.'

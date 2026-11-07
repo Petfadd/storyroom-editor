@@ -426,7 +426,7 @@ Setup on the computer running Storyroom:
    `STORYROOM_UNDERSTANDING_AUTO=1`. By default use the manual control so additional
    model workloads do not interrupt existing editing. Analysis can take much longer
    than the media duration on a small CPU; `STORYROOM_VISION_MAX_FRAMES` controls the
-   number of sampled scenes (default 60, maximum 300).
+   number of sampled frames (default 60, maximum 300).
 
 Model downloads require an internet connection once, but analysis is local and requires
 no paid inference. Ollama and the Faster-Whisper models need extra disk and RAM; the
@@ -436,12 +436,55 @@ or exceed memory. Your own computer's hardware was not assessed. AMD acceleratio
 not configured or verified; the transcription path is explicitly CPU-only.
 
 **Current limits:** this is not yet complete audio/video understanding. The visual
-pass describes one frame per detected scene, up to the sample cap, so it can miss actions
+pass samples still frames across the video, up to the sample cap, so it can miss actions
 and text between frames. Descriptions and timestamps can be wrong; names and identities
 are not established. Librosa reports RMS, spectral centroid and coarse low-energy
-windows, not reliable silence boundaries, music recognition or sound-event labels.
-Speaker diarization is not implemented; pyannote models can require separate license
-acceptance and credentials to download even though local inference is possible. Missing
+windows and estimated low-energy intervals, not guaranteed silence, music recognition
+or sound-event labels.
+Optional pyannote diarization requires a separately installed local pipeline and has not
+been tested here with real models. Its speaker labels are anonymous, per-file estimates,
+not verified identities. The model may require license acceptance and authentication
+for the one-time download; inference itself is local. Missing
 models/dependencies and failures appear per stage, and partial results are labelled as
 such. Full transcription, visual inference, sound classification and diarization need
 real-model testing before this capability should be treated as complete.
+
+### Windows 11: CPU-first setup
+
+These commands run on **your computer**, not the remote preview. In PowerShell, from
+this repository's folder, with Python 3.11 installed:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-local-ai.txt
+.\.venv\Scripts\hf.exe download Systran/faster-whisper-small --local-dir "$HOME\storyroom-models\faster-whisper-small"
+$env:STORYROOM_WHISPER_MODEL_DIR = "$HOME\storyroom-models\faster-whisper-small"
+```
+
+Install the official Windows Ollama application separately, start it and run
+`ollama pull qwen3-vl:2b`. Then start Storyroom in the **same PowerShell window**:
+
+```powershell
+$env:STORYROOM_UNDERSTANDING_AUTO = "1"  # optional: analyse future uploads automatically
+.\.venv\Scripts\python.exe app.py
+```
+
+Model downloads use the internet but analysis does not send media to a hosted service.
+The automatic option queues each upload, and on CPU may compete with the editor for
+resources; leave it unset to choose when to analyse. Start with short test clips.
+
+Optional speaker diarization (experimental): install
+`.\.venv\Scripts\python.exe -m pip install -r requirements-local-diarization.txt`.
+After accepting the community-1 model's terms with its provider and downloading the
+**complete** `pyannote/speaker-diarization-community-1` repository, set
+`$env:STORYROOM_PYANNOTE_MODEL_DIR` to that local directory before starting Storyroom.
+The diarization subprocess forces Hugging Face offline mode and disables pyannote
+telemetry. No credentials are entered into Storyroom. This path is not yet tested here
+with the actual pipeline, especially on Windows, and may require additional dependency
+setup. `SPEAKER_00` labels are anonymous and cannot be compared across files.
+
+Faster-Whisper and diarization run on CPU. Ollama controls its own device selection;
+AMD GPU support depends on the exact GPU, driver and Ollama version. Consult
+[Ollama's hardware support](https://docs.ollama.com/gpu) and use `ollama ps` while a
+model is loaded to see whether it is using GPU. No AMD acceleration has been verified
+in this environment. On an unsupported GPU, Ollama can fall back to CPU.

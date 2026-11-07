@@ -44,7 +44,45 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertAlmostEqual(scenes[1]['start_s'],2,places=1)
         self.assertGreater(result['stages']['audio_features']['result']['windows'][0]['rms'],0.05)
         self.assertEqual(result['stages']['transcript']['status'],'unavailable')
-        self.assertEqual(result['stages']['speakers']['status'],'unavailable')
+        self.assertEqual(result['stages']['speakers']['status'],'not_requested')
+
+    @unittest.skipUnless(importlib.util.find_spec('librosa'), 'install requirements-local-ai.txt')
+    def test_low_energy_intervals_cross_chunks(self):
+        import wave
+        import numpy as np
+        wav=self.root/'silence.wav'
+        y=np.full(12*16000, 8192, dtype='<i2')
+        y[9*16000:11*16000]=0
+        with wave.open(str(wav),'wb') as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000); f.writeframes(y.tobytes())
+        result=lu._audio_features(wav)
+        self.assertEqual(result['low_energy_intervals'],[{'start_s':9.0,'end_s':11.0}])
+
+    def test_vision_samples_long_scene_and_spreads_budget(self):
+        scenes=[{'start_s':0,'end_s':1000}]
+        samples=lu._sample_frames(scenes,4)
+        self.assertEqual(len(samples),4)
+        self.assertGreater(samples[0][0],0)
+        self.assertGreater(samples[-1][0],850)
+        self.assertLess(samples[-1][0],1000)
+
+    def test_speakers_aligned_by_overlap_without_claiming_identity(self):
+        transcript={'segments':[{'start_s':1,'end_s':3,'words':[{'start_s':1,'end_s':2}, {'start_s':2,'end_s':3}, {'start_s':4,'end_s':5}]}]}
+        speakers={'turns':[{'start_s':0,'end_s':2,'speaker':'SPEAKER_00'},{'start_s':2,'end_s':3,'speaker':'SPEAKER_01'}]}
+        lu._align_speakers(transcript,speakers)
+        self.assertEqual([w['speaker'] for w in transcript['segments'][0]['words']],['SPEAKER_00','SPEAKER_01',None])
+
+    def test_pyannote_runs_in_offline_subprocess(self):
+        from types import SimpleNamespace
+        model=self.root/'pipeline';model.mkdir()
+        wav=self.root/'audio.wav';wav.write_bytes(b'dummy')
+        def runner(args,**kwargs):
+            Path(args[-1]).write_text(json.dumps({'turns':[]}))
+            self.assertEqual(kwargs['env']['HF_HUB_OFFLINE'],'1')
+            self.assertEqual(kwargs['env']['PYANNOTE_METRICS_ENABLED'],'0')
+            return SimpleNamespace(returncode=0,stderr=b'')
+        with patch.dict('os.environ', {'STORYROOM_PYANNOTE_MODEL_DIR':str(model)}), patch.object(lu.subprocess,'run',side_effect=runner):
+            self.assertEqual(lu._diarize(wav),{'turns':[]})
 
     def test_ffmpeg_decodes_mp3(self):
         mp3=self.root/'narration.mp3'; wav=self.root/'decoded.wav'
