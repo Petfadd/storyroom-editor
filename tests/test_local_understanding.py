@@ -90,6 +90,44 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertTrue(windows[1]['too_short'])
         self.assertEqual(windows[1]['predictions'],[])
 
+    @unittest.skipUnless(importlib.util.find_spec('onnxruntime'), 'install requirements-local-ai.txt')
+    def test_dynamic_yamnet_waveform_and_output(self):
+        import wave
+        import numpy as np
+        import onnxruntime as ort
+        from types import SimpleNamespace
+        wav=self.root/'dynamic.wav';model=self.root/'dynamic.onnx';model.write_bytes(b'x')
+        with wave.open(str(wav),'wb') as f:
+            f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000);f.writeframes(bytes(2 * 32000))
+        seen=[]
+        class FakeSession:
+            def __init__(self,*args,**kwargs): pass
+            def get_inputs(self): return [SimpleNamespace(name='waveform',shape=['dynamic'],type='tensor(float)')]
+            def get_outputs(self): return [SimpleNamespace(name='output_0')]
+            def run(self,outputs,feed):
+                seen.append((outputs,feed['waveform'].shape)); result=np.zeros((3,521),dtype=np.float32);result[:,132]=.8;return [result]
+        with patch.dict('os.environ',{'STORYROOM_YAMNET_MODEL':str(model)}),patch.object(ort,'InferenceSession',FakeSession):
+            result=lu._sound_events(wav)
+        self.assertEqual(seen,[(['output_0'],(32000,))]);self.assertEqual(result['windows'][0]['predictions'][0]['label'],'Music')
+
+    def test_sound_only_reanalysis_preserves_other_stages(self):
+        source=self.root/'source.wav';source.write_bytes(b'audio');model=self.root/'model.onnx';model.write_bytes(b'model')
+        report={'status':'partial','source_signature':lu._signature(source),'stages':{'transcript':{'status':'complete','result':{'segments':[{'text':'Keep me'}]}},'visual':{'status':'unavailable'}}}
+        lu._write(lu.result_path(self.root,'narration'),report)
+        with patch.dict('os.environ',{'STORYROOM_YAMNET_MODEL':str(model)}),patch.object(lu,'_decode_audio'),patch.object(lu,'_sound_events',return_value={'windows':[{'start_s':0,'end_s':1}]}):
+            lu.enqueue_sound_events(self.root,'narration',source)
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                result=lu.read_result(self.root,'narration',source)
+                if result['status'] not in ('queued','running'):break
+                time.sleep(.01)
+        self.assertEqual(result['status'],'partial')
+        self.assertEqual(result['stages']['transcript']['result']['segments'][0]['text'],'Keep me')
+        self.assertEqual(result['stages']['sound_events']['status'],'complete')
+        source.write_bytes(b'changed')
+        with patch.dict('os.environ',{'STORYROOM_YAMNET_MODEL':str(model)}):
+            with self.assertRaisesRegex(ValueError,'current'):lu.enqueue_sound_events(self.root,'narration',source)
+
     def test_speakers_aligned_by_overlap_without_claiming_identity(self):
         transcript={'segments':[{'start_s':1,'end_s':3,'words':[{'start_s':1,'end_s':2}, {'start_s':2,'end_s':3}, {'start_s':4,'end_s':5}]}]}
         speakers={'turns':[{'start_s':0,'end_s':2,'speaker':'SPEAKER_00'},{'start_s':2,'end_s':3,'speaker':'SPEAKER_01'}]}

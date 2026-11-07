@@ -507,16 +507,25 @@ in this environment. On an unsupported GPU, Ollama can fall back to CPU.
 
 ### Optional local sound-event tagging
 
-Set `STORYROOM_YAMNET_MODEL` before starting Storyroom to a local YAMNet ONNX graph
-with a float32 waveform input shaped `[1, 48000]` (three seconds at 16 kHz) and a
-`scores` output with 521 AudioSet classes. For example in PowerShell:
+Run `python tools/install_local_yamnet.py` to download and SHA-256 verify a 16 MB
+ONNX model from the [amplify-project/Physiological-Signals repository](https://github.com/amplify-project/Physiological-Signals),
+pinned by Git blob `15658631e3ab2705fbf72dc302b9df8a1304a8fa`. That repository is
+licensed AGPL-3.0 and describes the file as YAMNet but does not document its conversion
+provenance; the original YAMNet is attributed to Google's TensorFlow Models. The weights
+are not bundled. The installer stores them in the local `.cache/storyroom-models` and
+Storyroom detects them automatically. Cache contents can be cleared by the host.
+
+Alternatively, set `STORYROOM_YAMNET_MODEL` before starting Storyroom to a compatible
+local graph: float32 waveform `[1, 48000]` with `scores`, or a dynamic one-dimensional
+float32 waveform with `output_0`, each with 521 score classes. For example in PowerShell:
 
 ```powershell
 $env:STORYROOM_YAMNET_MODEL = "C:\path\to\yamnet_3s.onnx"
 ```
 
-The model file is not bundled or downloaded by Storyroom. Only use a model whose
-license permits your use. Output is an estimated list of sounds and music for each
+The model is never downloaded during analysis. Only use a model whose
+license permits your use. A completed or partial report can run **Analyse sound events only**
+to add these observations without retranscribing or replacing its other results. Output is an estimated list of sounds and music for each
 three-second window; class scores can be wrong, are not verified probabilities, and do
 not identify a sound's source. Short tails are not classified. The compatibility test
 used the `yamnet_3s.onnx` waveform graph from

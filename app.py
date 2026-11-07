@@ -948,6 +948,16 @@ def local_understanding_report(pid,target):
   if request.method=='POST':enqueue(root,target,path,kind,duration)
   return jsonify(read_result(root,target,path))
 
+@app.post('/api/projects/<pid>/understanding/<target>/sound-events')
+def reanalyse_sound_events(pid,target):
+ from local_understanding import enqueue_sound_events
+ with LOCKS[pid]:
+  root,path,_,_=understanding_source(pid,target)
+  try: enqueue_sound_events(root,target,path)
+  except ValueError as e: raise BadRequest(str(e))
+  return jsonify({'status':'queued'})
+
+
 def transcript_srt(report, require_complete=False):
  if report.get('status') in ('stale','not_started','error','interrupted'):raise BadRequest('No current transcript is available for this source.')
  stage=(report.get('stages') or {}).get('transcript') or {}

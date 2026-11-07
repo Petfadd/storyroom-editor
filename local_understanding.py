@@ -41,6 +41,12 @@ def _whisper_model_path():
     return str(Path(__file__).resolve().parent / '.cache' / 'storyroom-models' / 'whisper-small')
 
 
+def _yamnet_model_path():
+    if 'STORYROOM_YAMNET_MODEL' in os.environ:
+        return os.environ['STORYROOM_YAMNET_MODEL'].strip()
+    return str(Path(__file__).resolve().parent / '.cache' / 'storyroom-models' / 'yamnet.onnx')
+
+
 def capabilities():
     model = _whisper_model_path()
     local_model = _whisper_model_ready(model)
@@ -49,7 +55,7 @@ def capabilities():
             'whisper_model_ready': local_model,
             'scenedetect': bool(importlib.util.find_spec('scenedetect')),
             'librosa': bool(importlib.util.find_spec('librosa')),
-            'sound_classifier': bool(importlib.util.find_spec('onnxruntime') and os.environ.get('STORYROOM_YAMNET_MODEL') and Path(os.environ['STORYROOM_YAMNET_MODEL']).is_file()),
+            'sound_classifier': bool(importlib.util.find_spec('onnxruntime') and _yamnet_model_path() and Path(_yamnet_model_path()).is_file()),
             'ollama_url': 'http://127.0.0.1:11434',
             'vision_model': os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b'),
             'speaker_diarization': bool(importlib.util.find_spec('pyannote') and os.environ.get('STORYROOM_PYANNOTE_MODEL_DIR') and Path(os.environ['STORYROOM_PYANNOTE_MODEL_DIR']).is_dir()),
@@ -102,6 +108,53 @@ def enqueue(root, target, path, kind, duration):
         _write(result_path(root, target), data)
         threading.Thread(target=_run, args=(root, target, path, data), daemon=True).start()
         return True
+    except Exception:
+        with _GUARD: _RUNNING.discard(key)
+        raise
+
+
+def enqueue_sound_events(root, target, path):
+    """Reanalyse just sound events, preserving other completed observations."""
+    root, path = Path(root), Path(path)
+    key = (str(root), target)
+    with _GUARD:
+        if key in _RUNNING: raise ValueError('An analysis is already running for this source.')
+        # Read directly under the guard: read_result also takes _GUARD.
+        report = result_path(root, target)
+        if not report.is_file(): raise ValueError('Run a full analysis first.')
+        try: data = json.loads(report.read_text(encoding='utf-8'))
+        except (OSError, ValueError): raise ValueError('Analysis report could not be read.')
+        if data.get('status') not in ('complete', 'partial') or data.get('source_signature') != _signature(path):
+            raise ValueError('A current completed or partial report is required.')
+        model = _yamnet_model_path()
+        if not model or not Path(model).is_file(): raise ValueError('No local YAMNet model is configured.')
+        _RUNNING.add(key)
+    try:
+        data['status'] = 'queued'
+        data['stages']['sound_events'] = {'status': 'queued'}
+        _write(report, data)
+        def run():
+            try:
+                with _WORKER:
+                    data['status'] = 'running'; _write(report, data)
+                    with tempfile.TemporaryDirectory(prefix='storyroom-sound-') as tmp:
+                        wav = Path(tmp) / 'audio.wav'
+                        def classify():
+                            _decode_audio(path, wav)
+                            return _sound_events(wav)
+                        _stage(data, report, 'sound_events', classify)
+                    data['status'] = 'complete' if all(x['status'] in ('complete', 'not_requested') for x in data['stages'].values()) else 'partial'
+                    data['finished_at'] = time.time()
+                    if _signature(path) != data['source_signature']:
+                        data['status'] = 'stale'; data['detail'] = 'Source changed during analysis; run again.'
+                    _write(report, data)
+            except Exception as e:
+                data['status'] = 'partial'; data['stages']['sound_events'] = {'status': 'unavailable', 'detail': str(e)[:600]}
+                try: _write(report, data)
+                except OSError: pass
+            finally:
+                with _GUARD: _RUNNING.discard(key)
+        threading.Thread(target=run, daemon=True).start()
     except Exception:
         with _GUARD: _RUNNING.discard(key)
         raise
@@ -218,7 +271,7 @@ def _sound_events(wav):
     """CPU YAMNet waveform ONNX: independent 3-second source-time windows."""
     import numpy as np
     import onnxruntime as ort
-    model = os.environ.get('STORYROOM_YAMNET_MODEL', '').strip()
+    model = _yamnet_model_path()
     if not model or not Path(model).is_file():
         raise RuntimeError('Set STORYROOM_YAMNET_MODEL to a compatible local YAMNet waveform ONNX model.')
     with (Path(__file__).parent / 'data' / 'yamnet_class_map.csv').open(encoding='utf-8', newline='') as f:
@@ -226,8 +279,13 @@ def _sound_events(wav):
     opts = ort.SessionOptions(); opts.intra_op_num_threads = 2; opts.inter_op_num_threads = 1
     session = ort.InferenceSession(model, sess_options=opts, providers=['CPUExecutionProvider'])
     inputs, outputs = session.get_inputs(), session.get_outputs()
-    if len(inputs) != 1 or inputs[0].shape != [1, 48000] or inputs[0].type != 'tensor(float)' or not any(o.name == 'scores' for o in outputs):
-        raise RuntimeError('Incompatible YAMNet model: expected float32 waveform [1, 48000] and a scores output.')
+    shape = inputs[0].shape if len(inputs) == 1 else []
+    names = [o.name for o in outputs]
+    fixed = shape == [1, 48000] and 'scores' in names
+    dynamic = len(shape) == 1 and not isinstance(shape[0], int) and 'output_0' in names
+    if len(inputs) != 1 or inputs[0].type != 'tensor(float)' or not (fixed or dynamic):
+        raise RuntimeError('Incompatible YAMNet model: expected a supported float32 waveform input and score output.')
+    output_name = 'scores' if fixed else 'output_0'
     windows = []
     with wave.open(str(wav), 'rb') as f:
         if f.getframerate()!=16000 or f.getnchannels()!=1 or f.getsampwidth()!=2:
@@ -241,8 +299,8 @@ def _sound_events(wav):
             top=[]
             # A very short zero-padded tail can be confidently misclassified as silence.
             if length >= 16000:
-                y=np.pad(y, (0, 48000-length))[None, :]
-                scores=np.asarray(session.run(['scores'], {inputs[0].name: y})[0])
+                if fixed: y=np.pad(y, (0, 48000-length))[None, :]
+                scores=np.asarray(session.run([output_name], {inputs[0].name: y})[0])
                 if scores.ndim != 2 or scores.shape[1] != len(labels) or not np.isfinite(scores).all():
                     raise RuntimeError('YAMNet returned incompatible or invalid class scores.')
                 # Score frames cover approximately 0.96 s, starting every 0.48 s.
@@ -339,7 +397,7 @@ def _run(root, target, source, data):
                         _write(report, data)
                     _stage(data, report, 'transcript', lambda: _transcribe(wav, checkpoint_transcript))
                     _stage(data, report, 'audio_features', lambda: _audio_features(wav))
-                    if os.environ.get('STORYROOM_YAMNET_MODEL'):
+                    if _yamnet_model_path() and Path(_yamnet_model_path()).is_file():
                         _stage(data, report, 'sound_events', lambda: _sound_events(wav))
                     else:
                         data['stages']['sound_events'] = {'status': 'not_requested', 'detail': 'Optional local sound-event model is not configured.'}
