@@ -1,7 +1,8 @@
 from __future__ import annotations
-import copy, hashlib, json, math, re, sys, threading, time, uuid, subprocess, os
+import copy, hashlib, json, math, re, sys, threading, time, uuid, subprocess, os, shutil
 from pathlib import Path
 from collections import defaultdict
+from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge
 from types import SimpleNamespace
@@ -79,6 +80,12 @@ def save(p):
  for scene in p['scenes']:
   asset=by_id.get(scene.get('asset_id'));scene['source_label']=asset['source_label'] if asset else '';scene['source_role']='reserve' if asset and asset['reserve'] else 'primary' if asset else ''
  p['updated']=time.time();write(folder(p['id'])/'project.json',p)
+def project_io_lock(func):
+ @wraps(func)
+ def locked(pid,*args,**kwargs):
+  with LOCKS[pid]:return func(pid,*args,**kwargs)
+ return locked
+
 def busy(pid):return pid in JOBS and JOBS[pid].snapshot()['status'] in ['queued','running']
 def editable(pid):
  if busy(pid):raise BadRequest('This production is exporting. Wait or cancel before editing.')
@@ -286,7 +293,9 @@ def cache(response):
 def projects():
  result=[]
  for f in PROJECTS.glob('*/project.json'):
-  p=json.loads(f.read_text());result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project'))})
+  try:p=json.loads(f.read_text())
+  except FileNotFoundError:continue  # A production may have been deleted while listing.
+  result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project'))})
  return jsonify({'projects':sorted(result,key=lambda x:-x['updated']),'profiles':PROFILES})
 @app.post('/api/projects')
 def create():
@@ -311,6 +320,33 @@ def get_project(pid):
   from approval import ensure_automatic_policy
   if ensure_automatic_policy(p):save(p)
   return jsonify(public(p))
+@app.delete('/api/projects/<pid>')
+def delete_project(pid):
+ # The ID is validated by folder(), and all project writers/start operations use this lock.
+ with LOCKS[pid]:
+  root=folder(pid)
+  if (request.get_json(silent=True) or {}).get('confirm') is not True:
+   raise BadRequest('Confirm permanent deletion of the production and its files.')
+  if busy(pid):raise BadRequest('This production is rendering. Wait for it to finish or cancel the render before deleting.')
+  import automatic, preview_render, scene_exports, local_understanding
+  with automatic._QUEUE_LOCK:
+   if pid in automatic._PENDING:raise BadRequest('This production is assembling. Wait for it to finish before deleting.')
+  for module,label in ((preview_render,'preview'),(scene_exports,'scene-clip export')):
+   with module.GUARD:
+    job=module.JOBS.get(pid)
+    if job and job.get('status') in ('queued','running'):raise BadRequest('A '+label+' is being prepared. Wait for it to finish before deleting.')
+  with local_understanding._GUARD:
+   if any(Path(project)==root for project,target in local_understanding._RUNNING):raise BadRequest('Local media analysis is running. Wait for it to finish before deleting.')
+  if root.is_symlink():raise BadRequest('Cannot delete a linked project folder. Remove it manually after checking its location.')
+  try:shutil.rmtree(root)
+  except OSError as e:
+   app.logger.exception('Could not completely delete production %s',pid)
+   raise BadRequest('Deletion could not finish; some project files may remain. Check the project folder and file permissions or close programs using them. '+str(e))
+  JOBS.pop(pid,None)
+  with preview_render.GUARD:preview_render.JOBS.pop(pid,None)
+  with scene_exports.GUARD:scene_exports.JOBS.pop(pid,None)
+  return jsonify({'deleted':True,'id':pid})
+
 @app.patch('/api/projects/<pid>')
 def update_project(pid):
  with LOCKS[pid]:
@@ -1004,6 +1040,7 @@ def export_file(pid,name):
 def bundle(pid):
  response=jsonify(load(pid));response.headers['Content-Disposition']='attachment; filename="production_storyboard.json"';return response
 @app.get('/api/projects/<pid>/assets/<aid>/planned-samples/<bid>')
+@project_io_lock
 def planned_samples(pid,aid,bid):
  from conform import samples
  p=load(pid);a=next((a for a in p['assets'] if a['id']==aid),None)
@@ -1064,6 +1101,7 @@ def candidate_report(pid):
  except ValueError as e:raise BadRequest(str(e))
 
 @app.get('/api/projects/<pid>/frame-qc')
+@project_io_lock
 def frame_qc_sheet(pid):
  from frame_qc import build
  p=load(pid)
@@ -1212,6 +1250,7 @@ def parent_beat_min(value):
  return integer(value,'beat')
 
 @app.get('/api/projects/<pid>/flow-audit')
+@project_io_lock
 def download_flow_audit(pid):
  from picture_flow import csv_rows,apply_flow
  import csv,io
@@ -1226,6 +1265,7 @@ def thumbnail_key(scene,asset,path):
  return scene['id']+'_'+key+'.jpg'
 
 @app.get('/api/projects/<pid>/scenes/<sid>/thumbnail')
+@project_io_lock
 def scene_thumbnail(pid,sid):
  p=load(pid);s=next((s for s in p['scenes'] if s['id']==sid),None)
  if not s:raise NotFound('Scene not found.')

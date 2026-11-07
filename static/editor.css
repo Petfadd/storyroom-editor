@@ -59,3 +59,5 @@
 .inspector-panel .small{display:block;margin-top:6px;font-size:10px;line-height:1.55;color:#93a3b8}
 
 /* Planning aids */.plan-table{width:100%;border-collapse:collapse;margin:10px 0;font-size:11px}.plan-table th,.plan-table td{text-align:left;padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.08);white-space:nowrap}.plan-table th{color:var(--muted);font-weight:500}#plan-body{max-height:70vh;overflow:auto}
+
+.management .project-row{display:flex;align-items:stretch;gap:10px;margin:7px 0;border:1px solid #3c485a;background:#242d3b;border-radius:5px;padding:0 10px 0 0}.management .project-row.active{border-color:#ed4560;background:#33212a}.management .project-row .project-link{flex:1;min-width:0;border:0;background:transparent;margin:0}.management .project-row .project-delete{align-self:center;color:#ffb3c0;border-color:#80505b;background:#38242c;font-weight:600}.management .project-row .project-delete:hover{background:#62313d;color:#fff}.management .project-row button:focus-visible{outline:2px solid #fff;outline-offset:2px}

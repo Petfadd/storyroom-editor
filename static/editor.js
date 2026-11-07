@@ -8,7 +8,23 @@ const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>scenes().at(-1)?.frame_out/30||0;
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
 const editorTime=()=>editorMaster?(masterNode.currentTime||0):(P?.voiceover&&narrNode.getAttribute('src')?narrNode.currentTime:clockBase+(editorPlaying&&!editorBuffering?(performance.now()-clockAt)/1000:0));
-list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<button class="project-link ${P?.id===p.id?'active':''}" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes</small></button>`).join('');return d};
+const deletingProjects=new Set();
+list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<div class="project-row ${P?.id===p.id?'active':''}"><button type="button" class="project-link" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes</small></button><button type="button" class="project-delete" aria-label="Delete ${E(p.title)}" onclick="deleteProduction('${p.id}')" ${deletingProjects.has(p.id)?'disabled':''}>Delete</button></div>`).join('')||'<p class="muted">No productions yet.</p>';return d};
+async function deleteProduction(id){
+ const project=projects.find(p=>p.id===id);if(!project||deletingProjects.has(id))return;
+ if(uploading){toast('Please wait for the import to finish before deleting a production.');return}
+ if(!confirm(`Permanently delete “${project.title}”?\n\nThis deletes the production and all its uploaded files, scripts, previews, and exports stored in this project. This cannot be undone.`))return;
+ const active=P?.id===id;
+ if(active&&!leave())return;
+ deletingProjects.add(id);const button=document.querySelector(`.project-delete[onclick="deleteProduction('${id}')"]`);if(button)button.disabled=true;
+ if(active){pauseEditor();resetEditor()}
+ try{
+  await api('/api/projects/'+id,'DELETE',{confirm:true});
+  if(P?.id===id){P=null;sceneIndex=0;dirty=false;history.replaceState(null,'',location.pathname+location.search);renderProject()}
+  await list();toast('Production and its project files deleted.');
+ }catch(e){if(active&&P?.id===id)renderProject();toast(e.message)}
+ finally{deletingProjects.delete(id);if(button&&button.isConnected)button.disabled=false}
+}
 function openProjects(){if(!leave())return;pauseEditor();list().then(()=>$('#projects-dialog').showModal())}
 showHome=openProjects;
 function pauseManagementMedia(){document.querySelectorAll('#manage-dialog audio,#manage-dialog video').forEach(node=>node.pause())}
@@ -323,7 +339,7 @@ $('#ruler-track').onclick=e=>{const r=$('#ruler-track').getBoundingClientRect();
 document.addEventListener('input',e=>{if(e.target.closest('#scene-form')&&editorPlaying)pauseEditor()});
 document.addEventListener('keydown',e=>{if(e.code==='Space'&&!document.querySelector('dialog[open]')&&!['INPUT','TEXTAREA','SELECT','BUTTON'].includes(document.activeElement.tagName)){e.preventDefault();editorPlaying?pauseEditor():playEditor()}});
 function tickEditor(){if(editorPlaying){const t=editorTime();if(t>=totalTime()){pauseEditor()}else{const i=scenes().findIndex(s=>t>=s.frame_in/30&&t<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;if(!editorMaster)showSource(i,t);renderInspector();markSelected()}if(!editorMaster){showSource(sceneIndex,t);prepareNextSource(sceneIndex,t);drawBackdrop()}}}else if(!editorMaster)drawBackdrop();updatePosition();requestAnimationFrame(tickEditor)}
-setInterval(async()=>{if(!P||dirty||uploading||editorPlaying)return;try{const next=await api('/api/projects/'+P.id);if(next.updated!==P.updated||next.render?.status!==P.render?.status||next.render?.progress!==P.render?.progress||next.render?.output!==P.render?.output||next.preview?.status!==P.preview?.status||next.preview?.progress!==P.preview?.progress||next.scene_exports?.status!==P.scene_exports?.status||next.scene_exports?.progress!==P.scene_exports?.progress){P=next;sceneIndex=Math.min(sceneIndex,Math.max(0,P.scenes.length-1));renderProject()}}catch(e){toast(e.message)}},3000);
+setInterval(async()=>{if(!P||dirty||uploading||editorPlaying||deletingProjects.has(P.id))return;const id=P.id;try{const next=await api('/api/projects/'+id);if(P?.id!==id||deletingProjects.has(id))return;if(next.updated!==P.updated||next.render?.status!==P.render?.status||next.render?.progress!==P.render?.progress||next.render?.output!==P.render?.output||next.preview?.status!==P.preview?.status||next.preview?.progress!==P.preview?.progress||next.scene_exports?.status!==P.scene_exports?.status||next.scene_exports?.progress!==P.scene_exports?.progress){P=next;sceneIndex=Math.min(sceneIndex,Math.max(0,P.scenes.length-1));renderProject()}}catch(e){if(P?.id===id&&!deletingProjects.has(id))toast(e.message)}},3000);
 (async()=>{try{await list();const id=location.hash.match(/^#\/production\/([a-f0-9]{16})$/);if(id)await openProject(id[1]);else if(projects[0])await openProject(projects[0].id);else renderEditor();requestAnimationFrame(tickEditor)}catch(e){toast(e.message);renderEditor();requestAnimationFrame(tickEditor)}})();
 
 // Manual block-map authoring. Only the visible fields are changed; other imported
