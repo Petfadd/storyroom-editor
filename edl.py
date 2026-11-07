@@ -215,11 +215,16 @@ def assemble(p,seed):
     # the file, its change points, and the script's own wording for the picture. Beats that
     # share all three are the same shot and now fall under the same cooldown slot rule.
     declared=str(row.get('footage_group') or '').strip()
+    described=str(row.get('visible_content') or '').strip().casefold()
     if declared:s['footage_group']=declared
-    else:
-     s['footage_group']='shot:'+hashlib.sha256('|'.join([a.get('original_name',''),
-        str(row.get('visible_content') or '').strip().casefold(),
-        str(row.get('parent_beat_id') or '')]).encode()).hexdigest()[:16]
+    elif described:
+     # Only a described picture can be grouped automatically. The key is the file plus the
+     # plan's own wording for what should be on screen - deliberately NOT the row or parent
+     # beat, which is unique per row by construction and would make every group unique and
+     # the rule unreachable. A plan that says nothing about the picture gets no derived
+     # group, because there is no evidence two rows are the same shot and inventing one
+     # would refuse a legitimate build.
+     s['footage_group']='shot:'+hashlib.sha256((a.get('original_name','')+'|'+described).encode()).hexdigest()[:16]
     if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_start+duration+handle))
   if problem:issues.append('Beat '+bid+': '+problem);s['notes']+=' Unresolved: '+problem
   scenes.append(s)

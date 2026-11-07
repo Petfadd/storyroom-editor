@@ -16,10 +16,12 @@ A local Flask application that builds an SRT-driven video storyboard from upload
   no adjacent pairs, never longer than the incoming beat, and the export length never
   changes by a frame.
 - Six-slot cooldown against repeating the same shot or overlapping source interval. The
-  unit is the shot, not the byte offset: a plan can declare `footage_group`, and beats that
-  do not declare one are grouped automatically from the file, the script's wording for the
-  picture and the parent beat, so the same shot cannot slip back in by shifting its
-  in-point.
+  unit is the shot, not the byte offset: two beats playing the same film from different
+  in-points are still the same shot. A plan can declare `footage_group`; when it does not,
+  a beat whose plan describes its picture is grouped by that file plus that description, so
+  the same shot cannot slip back in by shifting its in-point. A plan that says nothing
+  about the picture gets no derived group — there is no evidence two rows are the same
+  shot, and inventing one would refuse a legitimate build.
 - Cut conformance: every picture beat is kept inside one decoded shot of its source, and cuts are eased into the narrator's breaths (see below).
 - Original narration and SRT timing are preserved.
 - Source audio is muted; added captions are off.
