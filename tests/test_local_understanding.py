@@ -114,6 +114,26 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertTrue(seen['word_timestamps'])
         self.assertEqual(result['segments'][0]['words'][0]['start_s'],1.3)
 
+    @unittest.skipUnless(importlib.util.find_spec('faster_whisper'), 'install requirements-local-ai.txt')
+    def test_transcription_checkpoints_before_failure(self):
+        import faster_whisper
+        from types import SimpleNamespace
+        model=self.root/'whisper';model.mkdir()
+        for name in ('model.bin','config.json','tokenizer.json'):(model/name).write_bytes(b'test')
+        def segments():
+            yield SimpleNamespace(start=0,end=1,text=' A line.',words=[])
+            raise RuntimeError('decode failed')
+        class FakeModel:
+            def __init__(self,*args,**kwargs):pass
+            def transcribe(self,*args,**kwargs):return segments(),SimpleNamespace(language='en',language_probability=.9)
+        data={'stages':{}};report=self.root/'partial.json'
+        def checkpoint(result):data['stages']['transcript']={'status':'running','result':result};lu._write(report,data)
+        with patch.dict('os.environ',{'STORYROOM_WHISPER_MODEL_DIR':str(model)}),patch.object(faster_whisper,'WhisperModel',FakeModel):
+            lu._stage(data,report,'transcript',lambda:lu._transcribe(self.root/'audio.wav',checkpoint))
+        stage=json.loads(report.read_text())['stages']['transcript']
+        self.assertEqual(stage['status'],'partial')
+        self.assertEqual(stage['result']['segments'][0]['text'],'A line.')
+
     def test_vision_checkpoints_frames_and_never_targets_remote_host(self):
         from urllib.error import URLError
         path=self.make_video();calls=[]
@@ -208,6 +228,26 @@ class LocalUnderstandingTest(unittest.TestCase):
             self.assertFalse(lu.capabilities()['whisper_model_ready'])
             with self.assertRaisesRegex(RuntimeError,'tokenizer.json'):lu._transcribe(self.root/'audio.wav')
             constructor.assert_not_called()
+
+    def test_srt_download_keeps_source_timings_and_does_not_edit_project(self):
+        import app as server
+        mp3=self.root/'narration.mp3'
+        subprocess.run([self.ff,'-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=3',str(mp3)],check=True)
+        projects=self.root/'projects'; projects.mkdir()
+        with patch.object(server, 'PROJECTS', projects), patch.dict('os.environ', {'STORYROOM_UNDERSTANDING_AUTO':'0'}):
+            client=server.app.test_client();pid=client.post('/api/projects',json={'title':'SRT test'}).get_json()['id']
+            client.post(f'/api/projects/{pid}/upload',data={'kind':'voiceover','file':(io.BytesIO(mp3.read_bytes()),'narration.mp3')},content_type='multipart/form-data')
+            root=projects/pid;source=root/'inputs'/'voiceover.mp3'
+            report={'status':'partial','source_signature':lu._signature(source),'stages':{'transcript':{'status':'complete','result':{'segments':[{'start_s':.25,'end_s':1.5,'text':'Hello there.'},{'start_s':2,'end_s':2.9,'text':'Second line.'}]}}}}
+            lu._write(lu.result_path(root,'narration'),report)
+            r=client.get(f'/api/projects/{pid}/understanding/narration/transcript.srt')
+            self.assertEqual(r.status_code,200)
+            self.assertIn('00:00:00,250 --> 00:00:01,500',r.get_data(as_text=True))
+            self.assertIn('transcript.srt',r.headers['Content-Disposition'])
+            self.assertIsNone(client.get(f'/api/projects/{pid}').get_json()['srt'])
+            report['stages']['transcript']['result']['segments'][1]['start_s']=1
+            lu._write(lu.result_path(root,'narration'),report)
+            self.assertEqual(client.get(f'/api/projects/{pid}/understanding/narration/transcript.srt').status_code,400)
 
     def test_no_remote_whisper_model_download(self):
         with patch.dict('os.environ', {'STORYROOM_WHISPER_MODEL_DIR':''}):

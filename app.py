@@ -948,6 +948,27 @@ def local_understanding_report(pid,target):
   if request.method=='POST':enqueue(root,target,path,kind,duration)
   return jsonify(read_result(root,target,path))
 
+@app.get('/api/projects/<pid>/understanding/<target>/transcript.srt')
+def local_transcript_srt(pid,target):
+ from flask import Response
+ from local_understanding import read_result
+ with LOCKS[pid]:
+  root,path,_,_=understanding_source(pid,target)
+  report=read_result(root,target,path)
+  if report.get('status') in ('stale','not_started','error'):raise BadRequest('No current transcript is available for this source.')
+  stage=(report.get('stages') or {}).get('transcript') or {}
+  segments=(stage.get('result') or {}).get('segments') or []
+  if not segments:raise BadRequest('No transcript segments are available yet.')
+  lines=[];last=0
+  for i,segment in enumerate(segments,1):
+   try:a=round(float(segment['start_s'])*1000);b=round(float(segment['end_s'])*1000)
+   except (ValueError,TypeError,KeyError,OverflowError):raise BadRequest('Transcript has invalid timestamps; review it in the analysis report.')
+   text=' '.join(str(segment.get('text') or '').split())
+   if a<last or a<0 or b<=a or not text:raise BadRequest('Transcript timestamps overlap or are invalid; review the analysis report before making an SRT.')
+   lines.append('%d\n%s --> %s\n%s'%(i,srt_stamp(a),srt_stamp(b),text));last=b
+  suffix='' if stage.get('status')=='complete' else '-partial'
+  return Response('\n\n'.join(lines)+'\n',mimetype='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="transcript'+suffix+'.srt"'})
+
 @app.get('/api/projects/<pid>/scenes/<sid>/understanding')
 def scene_understanding_report(pid,sid):
  from local_understanding import read_result,scene_context

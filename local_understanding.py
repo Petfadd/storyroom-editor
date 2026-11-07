@@ -35,8 +35,14 @@ def _whisper_model_ready(model):
     return root.is_dir() and all((root / name).is_file() for name in ('model.bin', 'config.json', 'tokenizer.json'))
 
 
+def _whisper_model_path():
+    if 'STORYROOM_WHISPER_MODEL_DIR' in os.environ:
+        return os.environ['STORYROOM_WHISPER_MODEL_DIR'].strip()
+    return str(Path(__file__).resolve().parent / '.cache' / 'storyroom-models' / 'whisper-small')
+
+
 def capabilities():
-    model = os.environ.get('STORYROOM_WHISPER_MODEL_DIR', '').strip()
+    model = _whisper_model_path()
     local_model = _whisper_model_ready(model)
     return {'ffmpeg': bool(imageio_ffmpeg.get_ffmpeg_exe()),
             'faster_whisper': bool(importlib.util.find_spec('faster_whisper')),
@@ -119,17 +125,24 @@ def _decode_audio(source, wav):
     if proc.returncode: raise RuntimeError('No decodable audio stream: ' + proc.stderr.decode(errors='replace')[-300:])
 
 
-def _transcribe(wav):
-    model_path = os.environ.get('STORYROOM_WHISPER_MODEL_DIR', '').strip()
+def _transcribe(wav, on_progress=None):
+    model_path = _whisper_model_path()
     if not _whisper_model_ready(model_path):
         raise RuntimeError('Set STORYROOM_WHISPER_MODEL_DIR to a complete local Faster-Whisper model directory containing model.bin, config.json and tokenizer.json. No download is attempted.')
     from faster_whisper import WhisperModel
     model = WhisperModel(model_path, device='cpu', compute_type='int8', cpu_threads=max(1, min(2, os.cpu_count() or 1)), local_files_only=True)
     try:
         segments, info = model.transcribe(str(wav), beam_size=3, vad_filter=True, word_timestamps=True)
-        items = [{'start_s': round(s.start, 3), 'end_s': round(s.end, 3), 'text': s.text.strip(),
-                  'words': [{'start_s': round(w.start, 3) if w.start is not None else None, 'end_s': round(w.end, 3) if w.end is not None else None, 'text': w.word} for w in (s.words or [])]} for s in segments]
-        return {'language': info.language, 'language_probability': info.language_probability, 'segments': items}
+        items = []
+        def snapshot():
+            return {'language': info.language, 'language_probability': info.language_probability, 'segments': list(items)}
+        checkpoint_at = time.monotonic()
+        for s in segments:
+            items.append({'start_s': round(s.start, 3), 'end_s': round(s.end, 3), 'text': s.text.strip(),
+                          'words': [{'start_s': round(w.start, 3) if w.start is not None else None, 'end_s': round(w.end, 3) if w.end is not None else None, 'text': w.word} for w in (s.words or [])]})
+            if on_progress and (len(items) == 1 or time.monotonic() - checkpoint_at >= 5):
+                on_progress(snapshot()); checkpoint_at = time.monotonic()
+        return snapshot()
     finally:
         del model; gc.collect()
 
@@ -321,7 +334,10 @@ def _run(root, target, source, data):
                         data['stages'][stage] = {'status': 'unavailable', 'detail': str(e)[:600]}
                     _write(report, data)
                 else:
-                    _stage(data, report, 'transcript', lambda: _transcribe(wav))
+                    def checkpoint_transcript(result):
+                        data['stages']['transcript'] = {'status': 'running', 'result': result}
+                        _write(report, data)
+                    _stage(data, report, 'transcript', lambda: _transcribe(wav, checkpoint_transcript))
                     _stage(data, report, 'audio_features', lambda: _audio_features(wav))
                     if os.environ.get('STORYROOM_YAMNET_MODEL'):
                         _stage(data, report, 'sound_events', lambda: _sound_events(wav))

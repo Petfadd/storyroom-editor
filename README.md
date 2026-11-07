@@ -405,7 +405,9 @@ Production setup → **Local audio & video understanding** opens an independent,
 per-file report. It does not change the SRT, make editorial approvals, or affect
 storyboard construction. Use **Analyse locally** for narration or an uploaded video.
 The JSON report is also available at `GET /api/projects/<id>/understanding/<target>`
-where target is `narration` or a video asset ID. The shot inspector also shows source
+where target is `narration` or a video asset ID. A completed or partial transcript can
+be downloaded as an SRT from the analysis panel; it does not replace the project's
+authored SRT, and should be reviewed before use. The shot inspector also shows source
 observations that overlap the saved beat, mapped to its timeline times; these do not
 change the edit. Replacing a source marks its report stale. Processing is serialized to reduce CPU and memory pressure.
 
@@ -413,8 +415,11 @@ Setup on the computer running Storyroom:
 
 1. Install the optional libraries into the app's Python environment:
    `pip install -r requirements-local-ai.txt`. FFmpeg is supplied by imageio-ffmpeg.
-2. Download a CTranslate2 Faster-Whisper model to a local directory using a model
-   provider's download tooling, and set `STORYROOM_WHISPER_MODEL_DIR` to that directory
+2. Install the pinned CPU Whisper-small model with
+   `python tools/install_local_whisper.py` (about 484 MB, one-time GitHub download).
+   The installer verifies SHA-256 hashes and stores it under `.cache/storyroom-models`;
+   Storyroom detects that location automatically. Alternatively download a CTranslate2
+   Faster-Whisper model yourself and set `STORYROOM_WHISPER_MODEL_DIR` to its directory
    before starting Storyroom. For example, install a converted `Systran/faster-whisper-small`
    model (the directory must contain `model.bin`, `config.json` and `tokenizer.json`).
    Storyroom checks for these files to prevent Faster-Whisper's tokenizer download
@@ -429,8 +434,11 @@ Setup on the computer running Storyroom:
    than the media duration on a small CPU; `STORYROOM_VISION_MAX_FRAMES` controls the
    number of sampled frames (default 60, maximum 300).
 
-Model downloads require an internet connection once, but analysis is local and requires
-no paid inference. Ollama and the Faster-Whisper models need extra disk and RAM; the
+The installer uses the MIT-licensed Systran Whisper-small conversion from a pinned
+[GitHub mirror](https://github.com/YankS1/faster-whisper-mirror), with hashes checked
+before installation. The model weights are not committed and cache contents may be
+cleared by the host; rerun the installer if necessary. Model downloads require an
+internet connection once, but analysis is local and requires no paid inference. Ollama and the Faster-Whisper models need extra disk and RAM; the
 Qwen 2B quantized weights alone are approximately 1.9 GB, before runtime memory. This
 sandbox has only 3.8 GiB RAM and two CPU cores, so running this model here may be slow
 or exceed memory. Your own computer's hardware was not assessed. AMD acceleration is
@@ -448,8 +456,9 @@ been tested here with real models. Its speaker labels are anonymous, per-file es
 not verified identities. The model may require license acceptance and authentication
 for the one-time download; inference itself is local. Missing
 models/dependencies and failures appear per stage, and partial results are labelled as
-such. Full transcription, visual inference and diarization need real-model testing before
-this capability should be treated as complete. The optional sound classifier was tested
+such. Whisper-small transcription has been smoke-tested with real project media; accuracy
+still requires editorial review. Visual inference and diarization need real-model
+testing before this capability should be treated as complete. The optional sound classifier was tested
 on a handful of sample files, not benchmarked for real-world accuracy.
 
 ### Windows 11: CPU-first setup
