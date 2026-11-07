@@ -27,9 +27,17 @@ _GUARD = threading.Lock()
 _RUNNING = set()
 
 
+def _whisper_model_ready(model):
+    # Faster-Whisper can call Tokenizer.from_pretrained even with local_files_only
+    # when tokenizer.json is absent. Refuse before loading to prevent network access.
+    if not model: return False
+    root = Path(model)
+    return root.is_dir() and all((root / name).is_file() for name in ('model.bin', 'config.json', 'tokenizer.json'))
+
+
 def capabilities():
     model = os.environ.get('STORYROOM_WHISPER_MODEL_DIR', '').strip()
-    local_model = bool(model and Path(model).is_dir() and (Path(model) / 'model.bin').is_file())
+    local_model = _whisper_model_ready(model)
     return {'ffmpeg': bool(imageio_ffmpeg.get_ffmpeg_exe()),
             'faster_whisper': bool(importlib.util.find_spec('faster_whisper')),
             'whisper_model_ready': local_model,
@@ -98,7 +106,9 @@ def _stage(data, report, name, fn):
     try:
         data['stages'][name] = {'status': 'complete', 'result': fn()}
     except Exception as e:
-        data['stages'][name] = {'status': 'unavailable', 'detail': str(e)[:600]}
+        partial = data['stages'][name].get('result')
+        data['stages'][name] = {'status': 'partial' if partial else 'unavailable', 'detail': str(e)[:600]}
+        if partial: data['stages'][name]['result'] = partial
     _write(report, data)
 
 
@@ -111,8 +121,8 @@ def _decode_audio(source, wav):
 
 def _transcribe(wav):
     model_path = os.environ.get('STORYROOM_WHISPER_MODEL_DIR', '').strip()
-    if not model_path or not (Path(model_path) / 'model.bin').is_file():
-        raise RuntimeError('Set STORYROOM_WHISPER_MODEL_DIR to a downloaded Faster-Whisper CTranslate2 model directory.')
+    if not _whisper_model_ready(model_path):
+        raise RuntimeError('Set STORYROOM_WHISPER_MODEL_DIR to a complete local Faster-Whisper model directory containing model.bin, config.json and tokenizer.json. No download is attempted.')
     from faster_whisper import WhisperModel
     model = WhisperModel(model_path, device='cpu', compute_type='int8', cpu_threads=max(1, min(2, os.cpu_count() or 1)), local_files_only=True)
     try:
@@ -255,33 +265,46 @@ def _sample_frames(scenes, max_frames, interval_s=10):
     return candidates
 
 
-def _vision(path, scenes):
+def _vision(path, scenes, on_progress=None):
     # No arbitrary URL or redirects: image data stays on this computer.
     model = os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b')
     max_frames = max(1, min(300, int(os.environ.get('STORYROOM_VISION_MAX_FRAMES', '60'))))
     sampled = _sample_frames(scenes, max_frames)
     observations = []
-    with tempfile.TemporaryDirectory(prefix='storyroom-frames-') as tmp:
-        for at, scene in sampled:
-            image = Path(tmp) / 'frame.jpg'
-            proc = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y', '-ss', str(at), '-i', str(path), '-frames:v', '1', '-vf', 'scale=640:-2', str(image)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
-            if proc.returncode or not image.is_file(): raise RuntimeError('Could not extract frame at %.3fs' % at)
-            payload = {'model': model, 'stream': False, 'keep_alive': '0', 'options': {'num_ctx': 2048, 'num_thread': 2}, 'messages': [{'role': 'user',
-                'content': 'Describe only what is visibly supported: activity, objects, people, setting, and readable text. Say when uncertain; do not infer real identities.',
-                'images': [base64.b64encode(image.read_bytes()).decode('ascii')]}]}
-            req = urllib.request.Request('http://127.0.0.1:11434/api/chat', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'}, method='POST')
-            # Disable environment proxies and redirects so media cannot be sent off-host.
-            class NoRedirect(urllib.request.HTTPRedirectHandler):
-                def redirect_request(self, *args, **kwargs): return None
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    def snapshot():
+        return {'observations': list(observations), 'sampled_frames': len(observations),
+                'planned_frames': len(sampled), 'total_scenes': len(scenes),
+                'note': 'Sampled still frames do not describe every moment or establish identities.'}
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs): return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        with tempfile.TemporaryDirectory(prefix='storyroom-frames-') as tmp:
+            for at, scene in sampled:
+                image = Path(tmp) / 'frame.jpg'
+                proc = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y', '-ss', str(at), '-i', str(path), '-frames:v', '1', '-vf', 'scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2', str(image)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+                if proc.returncode or not image.is_file(): raise RuntimeError('Could not extract frame at %.3fs' % at)
+                payload = {'model': model, 'stream': False, 'keep_alive': '2m', 'options': {'num_ctx': 2048, 'num_thread': 2, 'num_predict': 256}, 'messages': [{'role': 'user',
+                    'content': 'Describe only what is visibly supported: activity, objects, people, setting, and readable text. Say when uncertain; do not infer real identities.',
+                    'images': [base64.b64encode(image.read_bytes()).decode('ascii')]}]}
+                req = urllib.request.Request('http://127.0.0.1:11434/api/chat', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'}, method='POST')
+                try:
+                    with opener.open(req, timeout=300) as response: result = json.load(response)
+                except (OSError, urllib.error.URLError) as e:
+                    raise RuntimeError('Local Ollama unavailable or model missing: ' + str(e)) from e
+                text = (result.get('message') or {}).get('content', '').strip()
+                if not text: raise RuntimeError('Ollama returned no visual description.')
+                observations.append({'frame_time_s': round(at, 3), 'scene_start_s': scene['start_s'], 'scene_end_s': scene['end_s'], 'description': text})
+                if on_progress: on_progress(snapshot())
+        return snapshot()
+    finally:
+        if observations:
+            # Keep the model warm between frames, then release it to conserve RAM.
+            request = urllib.request.Request('http://127.0.0.1:11434/api/generate',
+                data=json.dumps({'model': model, 'keep_alive': 0}).encode(), headers={'Content-Type': 'application/json'}, method='POST')
             try:
-                with opener.open(req, timeout=300) as response: result = json.load(response)
-            except (OSError, urllib.error.URLError) as e:
-                raise RuntimeError('Local Ollama unavailable or model missing: ' + str(e)) from e
-            text = (result.get('message') or {}).get('content', '').strip()
-            if not text: raise RuntimeError('Ollama returned no visual description.')
-            observations.append({'frame_time_s': round(at, 3), 'scene_start_s': scene['start_s'], 'scene_end_s': scene['end_s'], 'description': text})
-    return {'observations': observations, 'sampled_frames': len(sampled), 'total_scenes': len(scenes), 'note': 'Sampled still frames do not describe every moment or establish identities.'}
+                with opener.open(request, timeout=10): pass
+            except (OSError, urllib.error.URLError): pass
 
 
 def _run(root, target, source, data):
@@ -314,7 +337,10 @@ def _run(root, target, source, data):
                 _stage(data, report, 'scene_changes', lambda: _scenes(source, data['duration_s']))
                 cuts = data['stages']['scene_changes']
                 if cuts['status'] == 'complete':
-                    _stage(data, report, 'visual', lambda: _vision(source, cuts['result']))
+                    def checkpoint_visual(result):
+                        data['stages']['visual'] = {'status': 'running', 'result': result}
+                        _write(report, data)
+                    _stage(data, report, 'visual', lambda: _vision(source, cuts['result'], checkpoint_visual))
                 else:
                     data['stages']['visual'] = {'status':'unavailable','detail':'Scene detection failed; no visual frames analysed.'}
             if 'sound_events' not in data['stages']:
@@ -358,7 +384,7 @@ def scene_context(report, scene):
         return found
     def data(name):
         stage = stages.get(name) or {}
-        return stage.get('result', {}) if stage.get('status') == 'complete' else {}
+        return stage.get('result', {}) if stage.get('status') in ('complete', 'partial') else {}
     result['transcript'] = interval(data('transcript').get('segments', []))
     result['sound_events'] = interval(data('sound_events').get('windows', []))
     for item in data('visual').get('observations', []):

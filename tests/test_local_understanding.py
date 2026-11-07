@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import io
 import time
@@ -95,6 +96,49 @@ class LocalUnderstandingTest(unittest.TestCase):
         lu._align_speakers(transcript,speakers)
         self.assertEqual([w['speaker'] for w in transcript['segments'][0]['words']],['SPEAKER_00','SPEAKER_01',None])
 
+    @unittest.skipUnless(importlib.util.find_spec('faster_whisper'), 'install requirements-local-ai.txt')
+    def test_whisper_uses_only_local_model_and_preserves_word_times(self):
+        import faster_whisper
+        from types import SimpleNamespace
+        model=self.root/'whisper';model.mkdir()
+        for name in ('model.bin','config.json','tokenizer.json'):(model/name).write_bytes(b'test')
+        seen={}
+        class FakeModel:
+            def __init__(self, path, **kwargs):seen.update(path=path,**kwargs)
+            def transcribe(self, path, **kwargs):
+                seen.update(kwargs)
+                return iter([SimpleNamespace(start=1.25,end=2.1,text=' Hello',words=[SimpleNamespace(start=1.3,end=2.0,word=' Hello')])]),SimpleNamespace(language='en',language_probability=.9)
+        with patch.dict('os.environ',{'STORYROOM_WHISPER_MODEL_DIR':str(model)}), patch.object(faster_whisper,'WhisperModel',FakeModel):
+            result=lu._transcribe(self.root/'sound.wav')
+        self.assertEqual(seen['device'],'cpu');self.assertTrue(seen['local_files_only'])
+        self.assertTrue(seen['word_timestamps'])
+        self.assertEqual(result['segments'][0]['words'][0]['start_s'],1.3)
+
+    def test_vision_checkpoints_frames_and_never_targets_remote_host(self):
+        from urllib.error import URLError
+        path=self.make_video();calls=[]
+        class FakeOpener:
+            def open(self, request, timeout):
+                payload=json.loads(request.data);calls.append((request.full_url,payload))
+                self_test.assertTrue(request.full_url.startswith('http://127.0.0.1:11434/'))
+                if request.full_url.endswith('/api/generate'):return io.BytesIO(b'{}')
+                self_test.assertEqual(payload['model'],'qwen3-vl:2b')
+                self_test.assertTrue(base64.b64decode(payload['messages'][0]['images'][0]).startswith(b'\xff\xd8'))
+                if sum(url.endswith('/api/chat') for url,_ in calls)==2:raise URLError('offline')
+                return io.BytesIO(b'{"message":{"content":"A red frame"}}')
+        self_test=self
+        data={'stages':{}};report=self.root/'report.json';scenes=[{'start_s':0,'end_s':2},{'start_s':2,'end_s':4}]
+        def checkpoint(result):
+            data['stages']['visual']={'status':'running','result':result};lu._write(report,data)
+        with patch.object(lu.urllib.request,'build_opener',return_value=FakeOpener()):
+            lu._stage(data,report,'visual',lambda:lu._vision(path,scenes,checkpoint))
+        saved=json.loads(report.read_text())['stages']['visual']
+        self.assertEqual(saved['status'],'partial')
+        self.assertEqual(saved['result']['sampled_frames'],1)
+        self.assertEqual(saved['result']['planned_frames'],2)
+        self.assertEqual(saved['result']['observations'][0]['frame_time_s'],1.0)
+        self.assertTrue(calls[-1][0].endswith('/api/generate'))
+
     def test_pyannote_runs_in_offline_subprocess(self):
         from types import SimpleNamespace
         model=self.root/'pipeline';model.mkdir()
@@ -155,6 +199,15 @@ class LocalUnderstandingTest(unittest.TestCase):
             project=client.get(f'/api/projects/{pid}').get_json()
             self.assertIsNone(project['srt'])
             self.assertEqual(project['scenes'],[])
+
+    @unittest.skipUnless(importlib.util.find_spec('faster_whisper'), 'install requirements-local-ai.txt')
+    def test_incomplete_model_never_calls_tokenizer_download(self):
+        import faster_whisper
+        model=self.root/'incomplete';model.mkdir();(model/'model.bin').write_bytes(b'test')
+        with patch.dict('os.environ', {'STORYROOM_WHISPER_MODEL_DIR':str(model)}), patch.object(faster_whisper,'WhisperModel') as constructor:
+            self.assertFalse(lu.capabilities()['whisper_model_ready'])
+            with self.assertRaisesRegex(RuntimeError,'tokenizer.json'):lu._transcribe(self.root/'audio.wav')
+            constructor.assert_not_called()
 
     def test_no_remote_whisper_model_download(self):
         with patch.dict('os.environ', {'STORYROOM_WHISPER_MODEL_DIR':''}):

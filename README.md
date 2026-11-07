@@ -416,8 +416,9 @@ Setup on the computer running Storyroom:
 2. Download a CTranslate2 Faster-Whisper model to a local directory using a model
    provider's download tooling, and set `STORYROOM_WHISPER_MODEL_DIR` to that directory
    before starting Storyroom. For example, install a converted `Systran/faster-whisper-small`
-   model (the directory must contain `model.bin`, configuration and tokenizer files).
-   Storyroom loads only local files and uses CPU int8; it never downloads a model.
+   model (the directory must contain `model.bin`, `config.json` and `tokenizer.json`).
+   Storyroom checks for these files to prevent Faster-Whisper's tokenizer download
+   fallback, loads only local files and uses CPU int8; it never downloads a model.
 3. Install and run Ollama locally, and separately download `qwen3-vl:2b` using
    `ollama pull qwen3-vl:2b`. Storyroom sends sampled frames only to
    `http://127.0.0.1:11434`; it does not use a remote endpoint or web inference.
