@@ -522,7 +522,8 @@ def scene_context(report, scene):
     source_out = source_in + duration
     result = {'status': report.get('status'), 'source_in_s': round(source_in, 3),
               'source_out_s': round(source_out, 3), 'timeline_in_s': round(timeline_in, 3),
-              'transcript': [], 'sound_events': [], 'visual': [],
+              'transcript': [], 'sound_events': [], 'visual': [], 'speakers': [],
+              'scene_changes': [], 'audio_features': [], 'low_energy_intervals': [], 'stage_status': {},
               'note': 'Source observations are estimates; timeline times are mapped from the saved in-point and not editorial verification.'}
     if report.get('status') not in ('complete', 'partial'): return result
     stages = report.get('stages') or {}
@@ -539,8 +540,17 @@ def scene_context(report, scene):
     def data(name):
         stage = stages.get(name) or {}
         return stage.get('result', {}) if stage.get('status') in ('complete', 'partial') else {}
+    result['stage_status'] = {name: stage.get('status', 'unknown') for name, stage in stages.items()}
     result['transcript'] = interval(data('transcript').get('segments', []))
+    for segment in result['transcript']:
+        # Keep original words unchanged; map only words with known overlapping times.
+        segment['timeline_words'] = interval([word for word in segment.get('words', [])
+                                              if word.get('start_s') is not None and word.get('end_s') is not None])
     result['sound_events'] = interval(data('sound_events').get('windows', []))
+    result['speakers'] = interval(data('speakers').get('turns', []))
+    result['scene_changes'] = interval(data('scene_changes') or [])
+    result['audio_features'] = interval(data('audio_features').get('windows', []))
+    result['low_energy_intervals'] = interval(data('audio_features').get('low_energy_intervals', []))
     for item in data('visual').get('observations', []):
         at = float(item['frame_time_s'])
         if source_in <= at < source_out:

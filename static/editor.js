@@ -107,10 +107,14 @@ async function loadSceneUnderstanding(sceneId){
   if(!['partial','complete'].includes(r.status)){
    node.innerHTML=`<div class="inspector-group"><label>Source understanding</label><p class="small">${E(r.status==='not_started'?'No local analysis yet. Run it from Production setup.':r.status)}</p></div>`;return;
   }
-  const rows=[...r.transcript.map(x=>`<p class="small">${Number(x.timeline_start_s).toFixed(2)}s · Dialogue: ${E(x.text)}</p>`),
-   ...r.visual.map(x=>`<p class="small">${Number(x.timeline_time_s).toFixed(2)}s · Frame: ${E(x.description)}</p>`),
-   ...r.sound_events.filter(x=>x.predictions.length).map(x=>`<p class="small">${Number(x.timeline_start_s).toFixed(2)}s · Sounds: ${x.predictions.map(p=>E(p.label)).join(', ')}</p>`)];
-  node.innerHTML=`<div class="inspector-group"><label>Source understanding · timeline times</label><p class="small">Estimated observations, not verified. Only sampled frames and overlapping source intervals are shown.</p>${rows.slice(0,12).join('')||'<p class="small">No observations overlap this beat.</p>'}${rows.length>12?'<p class="small">More observations are available in the full report.</p>':''}</div>`;
+  const entry=(time,text)=>({time:Number(time),html:`<p class="small">${Number(time).toFixed(2)}s · ${text}</p>`});
+  const rows=[...r.transcript.map(x=>entry(x.timeline_start_s,`Dialogue: ${E(x.text)}`)),
+   ...r.visual.map(x=>entry(x.timeline_time_s,`Frame: ${E(x.description)}`)),
+   ...r.sound_events.filter(x=>x.predictions.length).map(x=>entry(x.timeline_start_s,`Sounds: ${x.predictions.map(p=>E(p.label)).join(', ')}`)),
+   ...(r.speakers||[]).map(x=>entry(x.timeline_start_s,`Speaker: ${E(x.speaker)}`)),
+   ...(r.low_energy_intervals||[]).map(x=>entry(x.timeline_start_s,'Low-energy audio (estimate)')),
+   ...(r.scene_changes||[]).filter(x=>x.start_s>=r.source_in_s).map(x=>entry(x.timeline_start_s,'Detected source scene start'))].sort((a,b)=>a.time-b.time);
+  node.innerHTML=`<div class="inspector-group"><label>Source understanding · timeline times</label><p class="small">Estimated observations, not verified. Only sampled frames and overlapping source intervals are shown; dialogue text may extend outside this beat.</p>${r.stage_status?.visual==='unavailable'?'<p class="small">Visual analysis unavailable for this source.</p>':''}${rows.slice(0,12).map(x=>x.html).join('')||'<p class="small">No observations overlap this beat.</p>'}${rows.length>12?'<p class="small">More observations are available in the full report.</p>':''}</div>`;
  }catch(e){/* A missing or changed video leaves the existing inspector usable. */}
 }
 

@@ -293,6 +293,32 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertEqual(len(context['visual']),1)
         self.assertEqual(lu.scene_context({'status':'stale'},scene)['transcript'],[])
 
+    def test_timeline_context_maps_each_stage_for_short_and_long_media(self):
+        for duration in (60,600,1800,3600):
+            with self.subTest(duration=duration):
+                start=duration-10
+                report={'status':'partial','stages':{
+                    'transcript':{'status':'complete','result':{'segments':[{'start_s':start-1,'end_s':start+4,'text':'partial overlap',
+                        'words':[{'start_s':start-1,'end_s':start,'text':'outside'},{'start_s':start+1,'end_s':start+2,'text':'inside'},{'start_s':None,'end_s':None,'text':'unknown'}]}]}},
+                    'scene_changes':{'status':'complete','result':[{'start_s':start-2,'end_s':start+1},{'start_s':start+1,'end_s':duration}]},
+                    'audio_features':{'status':'complete','result':{'windows':[{'start_s':start,'end_s':duration,'rms':.01}],'low_energy_intervals':[{'start_s':start+2,'end_s':start+8}]}},
+                    'speakers':{'status':'complete','result':{'turns':[{'start_s':start-2,'end_s':start+5,'speaker':'SPEAKER_00'}]}},
+                    'sound_events':{'status':'complete','result':{'windows':[{'start_s':start,'end_s':start+3,'predictions':[]}]}},
+                    'visual':{'status':'partial','result':{'observations':[{'frame_time_s':start+1,'description':'visible'},{'frame_time_s':start+5,'description':'outside'}]}}}}
+                scene={'in_s':start,'frame_in':900,'frame_out':1050}
+                result=lu.scene_context(report,scene)
+                self.assertEqual(result['transcript'][0]['timeline_start_s'],30)
+                self.assertEqual(result['transcript'][0]['timeline_end_s'],34)
+                self.assertEqual(len(result['transcript'][0]['words']),3)
+                self.assertEqual([w['text'] for w in result['transcript'][0]['timeline_words']],['inside'])
+                self.assertEqual(result['transcript'][0]['timeline_words'][0]['timeline_start_s'],31)
+                self.assertEqual((result['speakers'][0]['timeline_start_s'],result['speakers'][0]['timeline_end_s']),(30,35))
+                self.assertEqual([(x['timeline_start_s'],x['timeline_end_s']) for x in result['scene_changes']],[(30,31),(31,35)])
+                self.assertEqual(result['low_energy_intervals'][0]['timeline_end_s'],35)
+                self.assertEqual(len(result['visual']),1)
+                self.assertEqual(result['stage_status']['visual'],'partial')
+                self.assertNotIn('timeline_start_s',report['stages']['transcript']['result']['segments'][0]['words'][1])
+
     def test_stale_results_not_returned_for_changed_media(self):
         source=self.root/'audio.wav';source.write_bytes(b'first')
         lu._write(lu.result_path(self.root,'narration'), {'status':'complete','source_signature':lu._signature(source)})

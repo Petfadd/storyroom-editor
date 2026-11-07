@@ -413,7 +413,9 @@ It replaces any existing SRT and clears the storyboard and approvals, like an SR
 a ready automatic build may start. Source timestamps are not padded to cover silence,
 so verify text, timing, and coverage before building or exporting. The shot inspector also shows source
 observations that overlap the saved beat, mapped to its timeline times; these do not
-change the edit. Replacing a source marks its report stale. Processing is serialized to reduce CPU and memory pressure.
+change the edit. The scene-understanding API also maps word timestamps, anonymous
+speaker turns, scene spans, signal windows and low-energy intervals. Original source
+times remain available alongside the clipped timeline times; word times may be absent. Replacing a source marks its report stale. Processing is serialized to reduce CPU and memory pressure.
 
 Setup on the computer running Storyroom:
 
