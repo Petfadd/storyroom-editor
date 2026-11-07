@@ -128,6 +128,28 @@ class LocalUnderstandingTest(unittest.TestCase):
         with patch.dict('os.environ',{'STORYROOM_YAMNET_MODEL':str(model)}):
             with self.assertRaisesRegex(ValueError,'current'):lu.enqueue_sound_events(self.root,'narration',source)
 
+    def test_visual_only_reanalysis_preserves_results_and_old_frames_on_failure(self):
+        source=self.root/'source.mp4';source.write_bytes(b'video')
+        report={'status':'partial','source_signature':lu._signature(source),'stages':{
+            'transcript':{'status':'complete','result':{'segments':[{'text':'Keep me'}]}},
+            'scene_changes':{'status':'complete','result':[{'start_s':0,'end_s':3}]},
+            'visual':{'status':'complete','result':{'observations':[{'description':'Old observation'}]}}}}
+        lu._write(lu.result_path(self.root,'video'),report)
+        with patch.object(lu,'_vision',side_effect=RuntimeError('No model')):
+            lu.enqueue_visual(self.root,'video',source)
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                result=lu.read_result(self.root,'video',source)
+                if result['status'] not in ('queued','running'):break
+                time.sleep(.01)
+        self.assertEqual(result['status'],'partial')
+        self.assertEqual(result['stages']['transcript']['result']['segments'][0]['text'],'Keep me')
+        self.assertEqual(result['stages']['visual']['result']['observations'][0]['description'],'Old observation')
+        self.assertEqual(result['stages']['visual']['status'],'partial')
+        self.assertIn('No model',result['stages']['visual']['detail'])
+        source.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'current'):lu.enqueue_visual(self.root,'video',source)
+
     def test_speakers_aligned_by_overlap_without_claiming_identity(self):
         transcript={'segments':[{'start_s':1,'end_s':3,'words':[{'start_s':1,'end_s':2}, {'start_s':2,'end_s':3}, {'start_s':4,'end_s':5}]}]}
         speakers={'turns':[{'start_s':0,'end_s':2,'speaker':'SPEAKER_00'},{'start_s':2,'end_s':3,'speaker':'SPEAKER_01'}]}
@@ -177,9 +199,13 @@ class LocalUnderstandingTest(unittest.TestCase):
         path=self.make_video();calls=[]
         class FakeOpener:
             def open(self, request, timeout):
-                payload=json.loads(request.data);calls.append((request.full_url,payload))
-                self_test.assertTrue(request.full_url.startswith('http://127.0.0.1:11434/'))
-                if request.full_url.endswith('/api/generate'):return io.BytesIO(b'{}')
+                url=request if isinstance(request,str) else request.full_url
+                payload=json.loads(request.data) if not isinstance(request,str) else None
+                calls.append((url,payload))
+                self_test.assertTrue(url.startswith('http://127.0.0.1:11434/'))
+                if url.endswith('/api/status'):return io.BytesIO(b'{"cloud":{"disabled":true}}')
+                if url.endswith('/api/show'):return io.BytesIO(b'{"capabilities":["vision"]}')
+                if url.endswith('/api/generate'):return io.BytesIO(b'{}')
                 self_test.assertEqual(payload['model'],'qwen3-vl:2b')
                 self_test.assertTrue(base64.b64decode(payload['messages'][0]['images'][0]).startswith(b'\xff\xd8'))
                 if sum(url.endswith('/api/chat') for url,_ in calls)==2:raise URLError('offline')
@@ -196,6 +222,45 @@ class LocalUnderstandingTest(unittest.TestCase):
         self.assertEqual(saved['result']['planned_frames'],2)
         self.assertEqual(saved['result']['observations'][0]['frame_time_s'],1.0)
         self.assertTrue(calls[-1][0].endswith('/api/generate'))
+
+    def test_vision_refuses_cloud_unverified_or_nonvisual_models_before_sending_frames(self):
+        path=self.make_video();scenes=[{'start_s':0,'end_s':2}]
+        for status, details in [
+            ({'cloud':{'disabled':False}},{}),
+            ({'cloud':{'disabled':True}},{'remote_host':'https://example.invalid'}),
+            ({'cloud':{'disabled':True}},{'remote_model':'hosted'}),
+            ({'cloud':{'disabled':True}},{'capabilities':['completion']}),
+            ({},{}),
+        ]:
+            with self.subTest(status=status,details=details):
+                calls=[]
+                class FakeOpener:
+                    def open(self,request,timeout):
+                        url=request if isinstance(request,str) else request.full_url
+                        calls.append(url)
+                        if url.endswith('/api/status'):return io.BytesIO(json.dumps(status).encode())
+                        if url.endswith('/api/show'):return io.BytesIO(json.dumps(details).encode())
+                        raise AssertionError('image or unload must not be sent')
+                with patch.object(lu.urllib.request,'build_opener',return_value=FakeOpener()):
+                    with self.assertRaises(RuntimeError):lu._vision(path,scenes)
+                self.assertFalse(any(url.endswith('/api/chat') for url in calls))
+        with patch.dict('os.environ',{'STORYROOM_OLLAMA_MODEL':'model:cloud'}),patch.object(lu.urllib.request,'build_opener') as opener:
+            with self.assertRaisesRegex(RuntimeError,'Cloud'):lu._vision(path,scenes)
+            opener.return_value.open.assert_not_called()
+
+    def test_vision_unloads_after_failed_first_request(self):
+        from urllib.error import URLError
+        path=self.make_video();calls=[]
+        class FakeOpener:
+            def open(self,request,timeout):
+                url=request if isinstance(request,str) else request.full_url;calls.append(url)
+                if url.endswith('/api/status'):return io.BytesIO(b'{"cloud":{"disabled":true}}')
+                if url.endswith('/api/show'):return io.BytesIO(b'{"capabilities":["vision"]}')
+                if url.endswith('/api/chat'):raise URLError('timeout')
+                return io.BytesIO(b'{}')
+        with patch.object(lu.urllib.request,'build_opener',return_value=FakeOpener()):
+            with self.assertRaises(RuntimeError):lu._vision(path,[{'start_s':0,'end_s':2}])
+        self.assertTrue(calls[-1].endswith('/api/generate'))
 
     def test_pyannote_runs_in_offline_subprocess(self):
         from types import SimpleNamespace

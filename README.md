@@ -430,8 +430,14 @@ Setup on the computer running Storyroom:
    fallback, loads only local files and uses CPU int8; it never downloads a model.
 3. Install and run Ollama locally, and separately download `qwen3-vl:2b` using
    `ollama pull qwen3-vl:2b`. Storyroom sends sampled frames only to
-   `http://127.0.0.1:11434`; it does not use a remote endpoint or web inference.
-   `STORYROOM_OLLAMA_MODEL` can select another model already installed locally.
+   `http://127.0.0.1:11434`. Start the Ollama **server** with `OLLAMA_NO_CLOUD=1`:
+   loopback alone does not prevent Ollama from forwarding to a cloud model. Before
+   each frame Storyroom requires `/api/status` to report cloud disabled and checks
+   `/api/show` for remote model metadata. If these checks fail, no frame is sent.
+   This requires a recent Ollama version that supports `/api/status`.
+   `STORYROOM_OLLAMA_MODEL` can select another vision model already installed locally.
+   A completed or partial video report offers **Analyse video frames only**, preserving
+   the transcript, sound observations and other stages.
 4. To queue analysis on future uploads, start Storyroom with
    `STORYROOM_UNDERSTANDING_AUTO=1`. By default use the manual control so additional
    model workloads do not interrupt existing editing. Analysis can take much longer
@@ -477,8 +483,17 @@ py -3.11 -m venv .venv
 $env:STORYROOM_WHISPER_MODEL_DIR = "$HOME\storyroom-models\faster-whisper-small"
 ```
 
-Install the official Windows Ollama application separately, start it and run
-`ollama pull qwen3-vl:2b`. Then start Storyroom in the **same PowerShell window**:
+Install the official Windows Ollama application separately and run
+`ollama pull qwen3-vl:2b`. Fully quit any Ollama server already running, then start
+a recent Ollama server in a separate PowerShell window with cloud disabled:
+
+```powershell
+$env:OLLAMA_NO_CLOUD = "1"
+ollama serve
+```
+
+Leave that window running. If the port is already in use, quit the existing Ollama
+instance before starting it again with the setting. Then start Storyroom:
 
 ```powershell
 $env:STORYROOM_UNDERSTANDING_AUTO = "1"  # optional: analyse future uploads automatically

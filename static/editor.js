@@ -362,6 +362,7 @@ async function refreshUnderstanding(){
    <p>Status: <strong>${E(result.status)}</strong> ${result.detail?E(result.detail):''}</p><button type="button" onclick="runUnderstanding()" ${['queued','running'].includes(result.status)?'disabled':''}>${result.status==='not_started'?'Analyse locally':'Run analysis again'}</button>
    ${result.status!=='not_started'?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}" target="_blank" rel="noopener">Open JSON report</a>`:''}
    ${cap.sound_classifier&&['complete','partial'].includes(result.status)?'<button type="button" onclick="runSoundEvents()">Analyse sound events only</button>':''}
+   ${target!=='narration'&&['complete','partial'].includes(result.status)&&stages.scene_changes?.status==='complete'?'<button type="button" onclick="runVisualOnly()">Analyse video frames only</button>':''}
    ${stage('transcript','Transcript',r=>`<p class="small">Language: ${E(r.language)} · Review transcription before use; downloading does not change the project SRT.</p>${r.segments?.length?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}/transcript.srt" download>Download ${stages.transcript.status==='complete'?'':'partial '}SRT</a>`:''}${target==='narration'&&stages.transcript.status==='complete'&&r.segments?.length?'<button type="button" onclick="applyNarrationTranscript()">Use as project SRT</button>':''}${(r.segments||[]).map(x=>`<p><strong>${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s</strong> ${x.speaker?`<span>${E(x.speaker)} · </span>`:''}${E(x.text)}</p>`).join('')||'<p>No speech detected.</p>'}`)}
    ${stage('scene_changes','Scene changes',r=>`<p>${r.length} detected spans</p><p class="small">${r.map(x=>`${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s`).join(' · ')}</p>`)}
    ${stage('visual','Visual observations',r=>`<p class="small">${E(r.note)} ${r.sampled_frames} frames across ${r.total_scenes} detected scenes.</p>${r.observations.map(x=>`<p><strong>Frame ${Number(x.frame_time_s).toFixed(2)}s</strong> ${E(x.description)}</p>`).join('')}`)}
@@ -396,4 +397,10 @@ async function runSoundEvents(){
  if(!P||!understandingTarget)return;
  const id=P.id,target=understandingTarget;
  try{await api(`/api/projects/${id}/understanding/${target}/sound-events`,'POST');await refreshUnderstanding()}catch(e){toast(e.message)}
+}
+
+async function runVisualOnly(){
+ if(!P||!understandingTarget||understandingTarget==='narration')return;
+ const id=P.id,target=understandingTarget;
+ try{await api(`/api/projects/${id}/understanding/${target}/visual`,'POST');await refreshUnderstanding()}catch(e){toast(e.message)}
 }

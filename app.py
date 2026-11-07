@@ -958,6 +958,17 @@ def reanalyse_sound_events(pid,target):
   return jsonify({'status':'queued'})
 
 
+@app.post('/api/projects/<pid>/understanding/<target>/visual')
+def reanalyse_visual(pid,target):
+ from local_understanding import enqueue_visual
+ with LOCKS[pid]:
+  root,path,kind,_=understanding_source(pid,target)
+  if kind != 'video': raise BadRequest('Visual analysis requires a video source.')
+  try: enqueue_visual(root,target,path)
+  except ValueError as e: raise BadRequest(str(e))
+  return jsonify({'status':'queued'})
+
+
 def transcript_srt(report, require_complete=False):
  if report.get('status') in ('stale','not_started','error','interrupted'):raise BadRequest('No current transcript is available for this source.')
  stage=(report.get('stages') or {}).get('transcript') or {}

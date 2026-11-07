@@ -160,6 +160,58 @@ def enqueue_sound_events(root, target, path):
         raise
 
 
+def enqueue_visual(root, target, path):
+    """Reanalyse visual frames without retranscribing or replacing other stages."""
+    root, path = Path(root), Path(path)
+    key = (str(root), target)
+    with _GUARD:
+        if key in _RUNNING: raise ValueError('An analysis is already running for this source.')
+        report = result_path(root, target)
+        if not report.is_file(): raise ValueError('Run a full analysis first.')
+        try: data = json.loads(report.read_text(encoding='utf-8'))
+        except (OSError, ValueError): raise ValueError('Analysis report could not be read.')
+        if data.get('status') not in ('complete', 'partial') or data.get('source_signature') != _signature(path):
+            raise ValueError('A current completed or partial report is required.')
+        cuts = (data.get('stages') or {}).get('scene_changes') or {}
+        if cuts.get('status') != 'complete' or not cuts.get('result'):
+            raise ValueError('A completed scene-change analysis is required.')
+        previous = (data['stages'].get('visual') or {}).get('result')
+        _RUNNING.add(key)
+    try:
+        data['status'] = 'queued'; data['stages']['visual'] = {'status': 'queued'}
+        if previous: data['stages']['visual']['result'] = previous
+        _write(report, data)
+        def run():
+            try:
+                with _WORKER:
+                    data['status'] = 'running'; _write(report, data)
+                    def checkpoint(result):
+                        data['stages']['visual'] = {'status': 'running', 'result': result}; _write(report, data)
+                    _stage(data, report, 'visual', lambda: _vision(path, cuts['result'], checkpoint))
+                    # _stage clears the pending value. Preserve old observations if
+                    # the new attempt failed before producing its first frame.
+                    if data['stages']['visual']['status'] == 'unavailable' and previous:
+                        data['stages']['visual']['status'] = 'partial'
+                        data['stages']['visual']['result'] = previous
+                    data['status'] = 'complete' if all(x['status'] in ('complete', 'not_requested') for x in data['stages'].values()) else 'partial'
+                    data['finished_at'] = time.time()
+                    if _signature(path) != data['source_signature']:
+                        data['status'] = 'stale'; data['detail'] = 'Source changed during analysis; run again.'
+                    _write(report, data)
+            except Exception as e:
+                data['status'] = 'partial'; data['stages']['visual'] = {'status': 'unavailable', 'detail': str(e)[:600]}
+                if previous:
+                    data['stages']['visual'].update(status='partial', result=previous)
+                try: _write(report, data)
+                except OSError: pass
+            finally:
+                with _GUARD: _RUNNING.discard(key)
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        with _GUARD: _RUNNING.discard(key)
+        raise
+
+
 def _stage(data, report, name, fn):
     data['stages'][name] = {'status': 'running'}; _write(report, data)
     try:
@@ -336,12 +388,38 @@ def _sample_frames(scenes, max_frames, interval_s=10):
     return candidates
 
 
+def _require_offline_ollama(opener, model):
+    """Fail closed before sending image data to a loopback Ollama server.
+
+    Loopback alone is insufficient: Ollama can forward cloud models remotely.
+    Require the server's cloud-disabled status and reject remote model metadata.
+    """
+    if not model or model.lower().endswith((':cloud', '-cloud')):
+        raise RuntimeError('Cloud Ollama models are not permitted for local analysis.')
+    try:
+        with opener.open('http://127.0.0.1:11434/api/status', timeout=10) as response:
+            status = json.load(response)
+        if not isinstance(status, dict) or not isinstance(status.get('cloud'), dict) or status['cloud'].get('disabled') is not True:
+            raise RuntimeError('Ollama cloud must be disabled before analysing frames. Start Ollama with OLLAMA_NO_CLOUD=1.')
+        request = urllib.request.Request('http://127.0.0.1:11434/api/show',
+            data=json.dumps({'model': model}).encode(), headers={'Content-Type': 'application/json'}, method='POST')
+        with opener.open(request, timeout=10) as response: details = json.load(response)
+    except (OSError, urllib.error.URLError, ValueError) as e:
+        raise RuntimeError('Cannot verify Ollama local-only status and model. Use a recent Ollama with OLLAMA_NO_CLOUD=1: ' + str(e)) from e
+    if not isinstance(details, dict) or details.get('remote_host') or details.get('remote_model'):
+        raise RuntimeError('Ollama model is remote or its local status could not be verified.')
+    capabilities = details.get('capabilities')
+    if capabilities is not None and (not isinstance(capabilities, list) or 'vision' not in capabilities):
+        raise RuntimeError('The selected local Ollama model does not report vision support.')
+
+
 def _vision(path, scenes, on_progress=None):
     # No arbitrary URL or redirects: image data stays on this computer.
     model = os.environ.get('STORYROOM_OLLAMA_MODEL', 'qwen3-vl:2b')
     max_frames = max(1, min(300, int(os.environ.get('STORYROOM_VISION_MAX_FRAMES', '60'))))
     sampled = _sample_frames(scenes, max_frames)
     observations = []
+    attempted_chat = False
     def snapshot():
         return {'observations': list(observations), 'sampled_frames': len(observations),
                 'planned_frames': len(sampled), 'total_scenes': len(scenes),
@@ -352,6 +430,7 @@ def _vision(path, scenes, on_progress=None):
     try:
         with tempfile.TemporaryDirectory(prefix='storyroom-frames-') as tmp:
             for at, scene in sampled:
+                _require_offline_ollama(opener, model)
                 image = Path(tmp) / 'frame.jpg'
                 proc = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y', '-ss', str(at), '-i', str(path), '-frames:v', '1', '-vf', 'scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2', str(image)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
                 if proc.returncode or not image.is_file(): raise RuntimeError('Could not extract frame at %.3fs' % at)
@@ -360,6 +439,7 @@ def _vision(path, scenes, on_progress=None):
                     'images': [base64.b64encode(image.read_bytes()).decode('ascii')]}]}
                 req = urllib.request.Request('http://127.0.0.1:11434/api/chat', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'}, method='POST')
                 try:
+                    attempted_chat = True
                     with opener.open(req, timeout=300) as response: result = json.load(response)
                 except (OSError, urllib.error.URLError) as e:
                     raise RuntimeError('Local Ollama unavailable or model missing: ' + str(e)) from e
@@ -369,7 +449,7 @@ def _vision(path, scenes, on_progress=None):
                 if on_progress: on_progress(snapshot())
         return snapshot()
     finally:
-        if observations:
+        if attempted_chat:
             # Keep the model warm between frames, then release it to conserve RAM.
             request = urllib.request.Request('http://127.0.0.1:11434/api/generate',
                 data=json.dumps({'model': model, 'keep_alive': 0}).encode(), headers={'Content-Type': 'application/json'}, method='POST')
