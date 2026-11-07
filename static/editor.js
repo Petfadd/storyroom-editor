@@ -70,15 +70,16 @@ function usePreparedSource(s,a,t){
  const offset=Math.max(0,t-s.frame_in/30);if(offset>.18)return false;
  sourceSeekToken++;sourceNode.pause();sourceNode.classList.remove('is-active');
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
- const old=sourceNode;sourceNode=nextSourceNode;nextSourceNode=old;prepareToken++;preparedScene='';preparedReady=false;
+ const wasBuffering=editorBuffering;const old=sourceNode;sourceNode=nextSourceNode;nextSourceNode=old;prepareToken++;preparedScene='';preparedReady=false;
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
- sourceReady=true;editorBuffering=false;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
+ sourceReady=true;editorBuffering=false;clockAt=performance.now();sourceNode.playbackRate=1;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
+ if(editorPlaying&&wasBuffering&&P?.voiceover){narrNode.muted=editorMuted;narrNode.play().catch(()=>pauseEditor())}
  if(editorPlaying)sourceNode.play().catch(()=>{if(sourceScene===s.id&&!editorMaster)seekSourceAtTimeline(s,a,editorTime())});
  return true;
 }
 function seekSourceAtTimeline(s,a,t){
  // Freeze the preview clock while decoding. Never hide the last picture while audio runs.
- const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();
+ const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();sourceNode.playbackRate=1;
  if(sourceNode.readyState>=2&&sourceNode.classList.contains('is-active')){
   try{const c=document.createElement('canvas');c.width=sourceNode.videoWidth;c.height=sourceNode.videoHeight;c.getContext('2d').drawImage(sourceNode,0,0);imageNode.src=c.toDataURL('image/jpeg',.88);imageNode.style.transform='none';imageNode.hidden=false}catch{}
  }
@@ -93,6 +94,19 @@ function seekSourceAtTimeline(s,a,t){
  if(sourceNode.getAttribute('src')!==a.url){sourceNode.src=a.url;sourceNode.load()}else if(sourceNode.readyState>=1)seek();
 }
 
+// If the active video actually starves, hold narration until decoding resumes.
+for(const node of [sourceNode,nextSourceNode]){
+ node.addEventListener('waiting',()=>{
+  if(node!==sourceNode||editorMaster||!editorPlaying||!sourceReady||editorBuffering)return;
+  const now=editorTime();editorBuffering=true;clockBase=now;clockAt=performance.now();narrNode.pause();
+ });
+ node.addEventListener('playing',()=>{
+  if(node!==sourceNode||editorMaster||!editorPlaying||!sourceReady||!editorBuffering)return;
+  editorBuffering=false;clockAt=performance.now();
+  if(P?.voiceover){narrNode.muted=editorMuted;narrNode.play().catch(()=>pauseEditor())}
+ });
+}
+
 function showSource(i,t){
  if(editorMaster)return;const s=scenes()[i],a=assets().find(a=>a.id===s?.asset_id);if(!s||!a){sourceSeekToken++;sourceReady=false;sourceNode.pause();sourceNode.classList.remove('is-active');if(sourceNode.getAttribute('src')){sourceNode.removeAttribute('src');sourceNode.load()}imageNode.hidden=true;sourceScene='';$('#blur-backdrop').getContext('2d').clearRect(0,0,960,540);if(s){$('#monitor-empty').hidden=false;$('#monitor-empty').innerHTML='<strong>No visual assigned to this scene</strong><span>Select uploaded media in the shot inspector.</span>'}return}
  if(sourceScene!==s.id){
@@ -102,7 +116,12 @@ function showSource(i,t){
   else if(!usePreparedSource(s,a,t)){seekSourceAtTimeline(s,a,t)}
  }
  if(a.kind==='image')applyImageMotion(s,Math.max(0,t-s.frame_in/30));
- else if(editorPlaying&&sourceReady&&!sourceNode.seeking&&Math.abs(sourceNode.currentTime-(Number(s.in_s)+Math.max(0,t-s.frame_in/30)))>.18)seekSourceAtTimeline(s,a,t);
+ else if(editorPlaying&&sourceReady&&!sourceNode.seeking){
+  // Small browser clock differences are normal. Correct them gradually rather than
+  // repeatedly pausing narration and seeking the picture on every animation frame.
+  const drift=sourceNode.currentTime-(Number(s.in_s)+Math.max(0,t-s.frame_in/30));
+  sourceNode.playbackRate=Math.abs(drift)<.06?1:Math.max(.85,Math.min(1.15,1-drift*.12));
+ }
 }
 
 function applyImageMotion(s,elapsed){const m=s.motion_plan;if(!m)return;const p=Math.max(0,Math.min(1,elapsed/m.duration_s)),q=m.easing==='linear'?p:m.easing==='quick_settle'?(p<.08?p*p/.1472:p>.92?1-(1-p)*(1-p)/.1472:(p-.04)/.92):m.easing==='sine'?.5-.5*Math.cos(Math.PI*p):m.easing==='smootherstep'?p*p*p*(p*(p*6-15)+10):p*p*(3-2*p);const z=m.zoom_start+(m.zoom_end-m.zoom_start)*q,x=m.x_start+(m.x_end-m.x_start)*q,y=m.y_start+(m.y_end-m.y_start)*q;imageNode.style.transform=`translate(${(.5-x)*(z-1)*100}%,${(.5-y)*(z-1)*100}%) scale(${z})`}

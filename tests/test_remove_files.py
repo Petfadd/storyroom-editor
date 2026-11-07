@@ -19,6 +19,14 @@ class RemoveFilesTest(unittest.TestCase):
         aid='a'*16;path=self.root/'sources'/f'{aid}.mp4';path.write_bytes(b'video')
         p=server.load(self.pid);p['assets'].append({'id':aid,'name':'test.mp4','original_name':'test.mp4','path':f'sources/{aid}.mp4','kind':'video','duration':10,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':''});server.save(p)
         return aid,path
+    def test_stale_automatic_status_is_not_reported_as_working(self):
+        server.write(self.root/'automatic_status.json',{'status':'studying','detail':'Working'})
+        r=self.client.get(f'/api/projects/{self.pid}');self.assertEqual(r.get_json()['automatic_status']['status'],'interrupted')
+        from automatic import _QUEUE_LOCK,_PENDING
+        with _QUEUE_LOCK:_PENDING.add(self.pid)
+        try:self.assertEqual(self.client.get(f'/api/projects/{self.pid}').get_json()['automatic_status']['status'],'studying')
+        finally:
+            with _QUEUE_LOCK:_PENDING.discard(self.pid)
     def test_remove_only_confirmed_asset_and_its_report(self):
         aid,path=self.asset();report=lu.result_path(self.root,aid);lu._write(report,{'test':True})
         other=self.root/'sources'/'unrelated.mp4';other.write_bytes(b'keep')

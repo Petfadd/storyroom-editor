@@ -21,8 +21,14 @@ function automaticStatusHTML(){
    :'';
   return `<div class="notice warn"><strong>Automatic assembly is not running — ${E({blocked:'inputs are missing',needs_plan:'there is no plan yet',manual:'manual edits take precedence',paused:'it is switched off for this production'}[ready.status])}.</strong><p>${E(ready.detail||s.detail||'')}</p>${action}</div>`;
  }
- if(s.status==='error')return `<div class="notice error"><strong>Automatic assembly stopped.</strong><p>${E(s.detail||'Review the uploaded files and build the storyboard again.')}</p></div>`;
- if(P.scenes.length)return `<div class="notice"><strong>${P.scenes.length} clean-cut picture slots are ready.</strong><p>Source study, six-slot repetition checks and continuous narration checks are complete. ${['running','queued'].includes(r.status)?'The continuous master is rendering. The Program monitor will switch to it when ready.':'Automatic continuous-master rendering is enabled. The Program monitor uses the rendered master for smooth playback.'}</p></div>`;
+ if(P.scenes.length){
+  const errors=P.validation?.errors||[];
+  if(['running','queued'].includes(r.status))return `<div class="notice"><strong>${P.scenes.length} picture slots built · continuous master rendering.</strong><p>The Program monitor can use the rendered master when it is ready.</p></div>`;
+  if(r.status==='done'&&r.current)return `<div class="notice"><strong>Continuous master ready.</strong><p>The Program monitor can play the rendered MP4.</p></div>`;
+  if(errors.length)return `<div class="notice warn"><strong>Continuous master not rendered · ${errors.length} issue(s) need attention.</strong><p>The Program monitor is using source preview, which can pause while loading footage.</p>${errors.slice(0,6).map(x=>`<p class="small">${E(x)}</p>`).join('')}</div>`;
+  return `<div class="notice"><strong>${P.scenes.length} picture slots built · no current continuous master.</strong><p>${E(s.status==='error'?s.detail:'Use Review & export to start a render. Until then the Program monitor uses source preview.')}</p></div>`;
+ }
+ if(s.status==='error'||s.status==='interrupted')return `<div class="notice error"><strong>Automatic assembly stopped.</strong><p>${E(s.detail||'Review the uploaded files and build the storyboard again.')}</p></div>`;
  if(working)return `<div class="notice"><strong>Working automatically — please allow processing time.</strong><p>${E(s.detail||'Studying the complete source videos before assembly.')}</p><p class="small">The timeline will appear here when the background job finishes. You can leave this page open.</p></div>`;
  if(P.inputs_ready)return `<div class="notice"><strong>All required inputs are present.</strong><p>Use <em>Build storyboard →</em> below, or wait for automatic assembly. The system studies every uploaded MP4 before placing clean cuts.</p></div>`;
  return `<div class="notice"><strong>Import the production script, original narration, SRT and MP4 footage.</strong><p>After those inputs are present, the storyboard is assembled automatically. An SRT supplies timing and text, not pictures.</p></div>`;

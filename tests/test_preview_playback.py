@@ -18,6 +18,11 @@ prepareNextSource(0,5);assert.equal(preparedScene,'s2');nextSourceNode.onloadedm
 assert(preparedReady);const queued=nextSourceNode,old=sourceNode;
 assert(usePreparedSource(shots[1],footage[0],10.05));assert.strictEqual(sourceNode,queued);assert.strictEqual(nextSourceNode,old);assert(sourceReady);assert.equal(sourceNode.plays,1);
 assert(!usePreparedSource(shots[1],footage[0],10.05));
+// A prepared cut may arrive while an earlier seek is buffering: narration must resume.
+let P={voiceover:{}},editorMuted=false;let narrNode=player();function pauseEditor(){throw Error('unexpected pause')}
+prepareNextSource(0,5);nextSourceNode.onloadedmetadata();editorBuffering=true;
+assert(usePreparedSource(shots[1],footage[0],10.05));assert.equal(narrNode.plays,1);
+
 '''
         subprocess.run(['node','-e',harness],check=True)
 
@@ -31,7 +36,7 @@ const s={id:'next',asset_id:'a',frame_in:300,in_s:13.4},a={id:'a',kind:'video',u
 const scenes=()=>[s],assets=()=>[a],imageNode={hidden:false},$=()=>({hidden:false});
 function usePreparedSource(){return false}function seekSourceAtTimeline(){seeks++}
 """+function+"""
-showSource(0,10.02);assert.equal(paused,0);assert.equal(seeks,0);assert.equal(sourceScene,'next');
+showSource(0,10.02);assert.equal(paused,0);assert.equal(seeks,0);assert.equal(sourceScene,'next');sourceNode.currentTime=14;showSource(0,10.02);assert.equal(seeks,0);assert(sourceNode.playbackRate<1);
 """
         subprocess.run(['node','-e',harness],check=True)
 

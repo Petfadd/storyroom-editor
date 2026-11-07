@@ -243,6 +243,11 @@ def public(p):
  status_path=folder(p['id'])/'automatic_status.json'
  try:d['automatic_status']=json.loads(status_path.read_text()) if status_path.exists() else {'status':'idle','detail':''}
  except (OSError,ValueError):d['automatic_status']={'status':'idle','detail':''}
+ # Persisted progress is not proof of a live thread after a server restart or crash.
+ from automatic import _QUEUE_LOCK, _PENDING
+ with _QUEUE_LOCK:auto_active=p['id'] in _PENDING
+ if d['automatic_status'].get('status') in ('queued','working','studying','storyboard_ready','rendering') and not auto_active and not busy(p['id']):
+  d['automatic_status']={'status':'interrupted','detail':'The previous automatic job stopped. Check the storyboard and export validation before retrying.'}
  d['inputs_ready']=bool(p.get('srt') and p.get('production_script') and p.get('assets'))
  d['picture_flow']=p.get('picture_flow') or None
  d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]

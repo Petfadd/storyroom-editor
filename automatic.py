@@ -242,7 +242,7 @@ def maybe_queue(studio,p):
   studio.write(root/'automatic_status.json',dict(payload,at=time.time()))
  def status_only(state_,detail):
   publish({'status':state_,'detail':detail})
- if state['status']!='ready':
+ if state['status']!='ready' and not (state['status']=='built' and state['auto_enabled'] and not state['manual_edits']):
   # Say why, loudly, instead of sitting idle.
   publish({'status':state['status'],'detail':state['detail'],'missing':state['missing'],'plan':state['plan']})
   return
@@ -276,7 +276,8 @@ def maybe_queue(studio,p):
     status_only('rendering','Storyboard is ready. Starting the continuous MP4 master automatically.')
     with studio.app.test_client() as client:
      result=client.post('/api/projects/'+pid+'/render',json={'final':False})
-     if result.status_code>=400:raise RuntimeError((result.get_json() or {}).get('error','Automatic rendering failed.'))
+     if result.status_code>=400:
+      problem=result.get_json() or {};raise RuntimeError(problem.get('error') or '; '.join(problem.get('errors',[])[:3]) or 'Automatic rendering failed.')
      monitor_render(studio,pid,status_only)
      status_only('done','Continuous master rendering is active. The Program monitor will switch to the rendered MP4 when ready.')
    except Exception as e:status_only('error',str(e))
