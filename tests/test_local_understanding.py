@@ -274,6 +274,21 @@ class LocalUnderstandingTest(unittest.TestCase):
         with patch.dict('os.environ', {'STORYROOM_PYANNOTE_MODEL_DIR':str(model)}), patch.object(lu.subprocess,'run',side_effect=runner):
             self.assertEqual(lu._diarize(wav),{'turns':[]})
 
+    def test_delayed_video_audio_preserves_source_timeline(self):
+        import wave
+        import numpy as np
+        video=self.root/'delayed.mp4';wav=self.root/'delayed.wav'
+        subprocess.run([self.ff,'-v','error','-y','-f','lavfi','-i','color=c=black:s=160x90:r=10:d=5',
+                        '-itsoffset','2','-f','lavfi','-i','sine=frequency=440:sample_rate=16000:duration=2',
+                        '-map','0:v','-map','1:a','-c:v','mpeg4','-c:a','aac',str(video)],check=True)
+        lu._decode_audio(video,wav)
+        with wave.open(str(wav),'rb') as f:
+            self.assertEqual(f.getframerate(),16000)
+            audio=np.frombuffer(f.readframes(f.getnframes()),dtype='<i2').astype(np.float32)
+        self.assertGreater(len(audio),int(3.9*16000))
+        self.assertLess(np.sqrt(np.mean(audio[:int(1.8*16000)]**2)),10)
+        self.assertGreater(np.sqrt(np.mean(audio[int(2.2*16000):int(3.8*16000)]**2)),1000)
+
     def test_ffmpeg_decodes_mp3(self):
         mp3=self.root/'narration.mp3'; wav=self.root/'decoded.wav'
         subprocess.run([self.ff,'-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=1',str(mp3)],check=True)
@@ -318,6 +333,16 @@ class LocalUnderstandingTest(unittest.TestCase):
                 self.assertEqual(len(result['visual']),1)
                 self.assertEqual(result['stage_status']['visual'],'partial')
                 self.assertNotIn('timeline_start_s',report['stages']['transcript']['result']['segments'][0]['words'][1])
+
+    def test_pre_alignment_reports_warn_without_losing_observations(self):
+        source=self.root/'audio.wav';source.write_bytes(b'audio')
+        report={'status':'complete','source_signature':lu._signature(source),'stages':{'transcript':{'status':'complete','result':{'segments':[{'start_s':0,'end_s':1,'text':'Hello'}]}}}}
+        lu._write(lu.result_path(self.root,'narration'),report)
+        result=lu.read_result(self.root,'narration',source)
+        self.assertIn('delayed-audio',result['timing_warning'])
+        self.assertEqual(result['stages']['transcript']['result']['segments'][0]['text'],'Hello')
+        report['audio_timing_version']=2;lu._write(lu.result_path(self.root,'narration'),report)
+        self.assertNotIn('timing_warning',lu.read_result(self.root,'narration',source))
 
     def test_stale_results_not_returned_for_changed_media(self):
         source=self.root/'audio.wav';source.write_bytes(b'first')

@@ -88,6 +88,8 @@ def read_result(root, target, path):
         result = json.loads(p.read_text(encoding='utf-8'))
         if result.get('source_signature') != _signature(path):
             return {'status': 'stale', 'detail': 'Source changed; run the analysis again.'}
+        if result.get('audio_timing_version') != 2:
+            result['timing_warning'] = 'Audio stages were generated before the delayed-audio alignment fix. Reanalyse if this source has a delayed audio track.'
         with _GUARD: active = (str(root), target) in _RUNNING
         if result.get('status') in ('queued', 'running') and not active:
             result['status'] = 'interrupted'
@@ -104,7 +106,7 @@ def enqueue(root, target, path, kind, duration):
         _RUNNING.add(key)
     try:
         data = {'status': 'queued', 'source_signature': _signature(path), 'source': path.name,
-                'kind': kind, 'duration_s': duration, 'stages': {}, 'started_at': time.time()}
+                'kind': kind, 'duration_s': duration, 'stages': {}, 'started_at': time.time(), 'audio_timing_version': 2}
         _write(result_path(root, target), data)
         threading.Thread(target=_run, args=(root, target, path, data), daemon=True).start()
         return True
@@ -224,8 +226,14 @@ def _stage(data, report, name, fn):
 
 
 def _decode_audio(source, wav):
-    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y', '-i', str(source),
-           '-map', '0:a:0', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', str(wav)]
+    # Preserve audio's start relative to the media timeline. Otherwise FFmpeg's
+    # WAV muxer starts a delayed stream at zero and every observation shifts early.
+    # start_at_zero anchors to the container start, not the audio stream start;
+    # aresample inserts silence or trims negative samples against that origin.
+    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-v', 'error', '-y',
+           '-copyts', '-start_at_zero', '-i', str(source), '-map', '0:a:0',
+           '-af', 'aresample=async=1:first_pts=0', '-ac', '1', '-ar', '16000',
+           '-c:a', 'pcm_s16le', str(wav)]
     proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=7200)
     if proc.returncode: raise RuntimeError('No decodable audio stream: ' + proc.stderr.decode(errors='replace')[-300:])
 
@@ -524,7 +532,8 @@ def scene_context(report, scene):
               'source_out_s': round(source_out, 3), 'timeline_in_s': round(timeline_in, 3),
               'transcript': [], 'sound_events': [], 'visual': [], 'speakers': [],
               'scene_changes': [], 'audio_features': [], 'low_energy_intervals': [], 'stage_status': {},
-              'note': 'Source observations are estimates; timeline times are mapped from the saved in-point and not editorial verification.'}
+              'note': 'Source observations are estimates; timeline times are mapped from the saved in-point and not editorial verification.',
+              'timing_warning': report.get('timing_warning')}
     if report.get('status') not in ('complete', 'partial'): return result
     stages = report.get('stages') or {}
     def interval(rows):
