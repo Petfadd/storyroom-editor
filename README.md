@@ -15,13 +15,10 @@ A local Flask application that builds an SRT-driven video storyboard from upload
   allows them (`transition_policy`), and are validated: no dissolve off the last scene,
   no adjacent pairs, never longer than the incoming beat, and the export length never
   changes by a frame.
-- Six-slot cooldown against repeating the same shot or overlapping source interval. The
-  unit is the shot, not the byte offset: two beats playing the same film from different
-  in-points are still the same shot. A plan can declare `footage_group`; when it does not,
-  a beat whose plan describes its picture is grouped by that file plus that description, so
-  the same shot cannot slip back in by shifting its in-point. A plan that says nothing
-  about the picture gets no derived group — there is no evidence two rows are the same
-  shot, and inventing one would refuse a legitimate build.
+- Six-slot cooldown for overlapping source intervals, available perceptual hashes and
+  explicitly declared `footage_group` labels. A group identifies a shot even when its
+  intervals do not overlap. Matching filenames and descriptions alone do not prove two
+  intervals are the same shot; they are not automatically grouped.
 - Cut conformance: every picture beat is kept inside one decoded shot of its source, and cuts are eased into the narrator's breaths (see below).
 - Original narration and SRT timing are preserved.
 - Source audio is muted; added captions are off.
@@ -343,6 +340,17 @@ The block-map reader accepts the ways people actually write timecodes and column
 - a plan row without a `block` column is read as a beat table instead of a block map.
 
 ## Optional SRT block map
+
+In **Production setup → SRT block map**, choose **Create block map** after importing
+an SRT, or **Edit block map** to revise an existing map. Navigate one block at a time,
+choose or type the original source filename, and enter source IN and exclusive OUT as
+`HH:MM:SS.mmm`. Leave a source blank with a gap note if it is not ready. Optional picture
+description and `footage_group` record editorial intent; use the same group only for
+intervals you have established belong to the same shot. Other imported instructions are
+preserved. Save stores the map and resets storyboard approvals; rebuild to apply it.
+The editor does not verify content or automatically choose footage. If the SRT changes
+while a draft is open, saving is refused so the new timing can be reviewed.
+
 
 `srt_block_map.csv` is the only picture plan the editor accepts: one row per caption
 block (`block,start,end,beat,media_file,source_in,source_out`), with an optional parent

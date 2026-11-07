@@ -207,24 +207,11 @@ def assemble(p,seed):
     elif not p.get('allow_archive_reuse') and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
    if not problem:
     s.update(asset_id=a['id'],in_s=source_start)
-    # What the cooldown actually has to protect: not the byte offsets, but the SHOT. Two
-    # beats can play the very same stretch of film from different in-points - shifted by a
-    # second, or trimmed at either end - and an overlap test on intervals will not notice,
-    # because the intervals do not have to overlap. A group is therefore either declared by
-    # the plan (footage_group) or derived from what the plan already states about the shot:
-    # the file, its change points, and the script's own wording for the picture. Beats that
-    # share all three are the same shot and now fall under the same cooldown slot rule.
+    # Grouping is an editorial assertion, not something a filename and a repeated
+    # description can establish: a single file may contain many distinct shots.
     declared=str(row.get('footage_group') or '').strip()
-    described=str(row.get('visible_content') or '').strip().casefold()
     if declared:s['footage_group']=declared
-    elif described:
-     # Only a described picture can be grouped automatically. The key is the file plus the
-     # plan's own wording for what should be on screen - deliberately NOT the row or parent
-     # beat, which is unique per row by construction and would make every group unique and
-     # the rule unreachable. A plan that says nothing about the picture gets no derived
-     # group, because there is no evidence two rows are the same shot and inventing one
-     # would refuse a legitimate build.
-     s['footage_group']='shot:'+hashlib.sha256((a.get('original_name','')+'|'+described).encode()).hexdigest()[:16]
+    else:s.pop('footage_group',None)
     if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_start+duration+handle))
   if problem:issues.append('Beat '+bid+': '+problem);s['notes']+=' Unresolved: '+problem
   scenes.append(s)

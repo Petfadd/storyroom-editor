@@ -6,6 +6,7 @@ PY=.venv/bin/python
 [ -x "$PY" ] || PY=python3
 "$PY" -m compileall -q . -x '\.venv|__pycache__'
 "$PY" -c "import app; assert app.app.test_client().get('/').status_code == 200; print('app serves')"
+"$PY" -m unittest discover -s tests -v
 PORT=${STORYROOM_PORT:-8123}
 STORYROOM_URL="http://127.0.0.1:$PORT" "$PY" -c "
 import os, app

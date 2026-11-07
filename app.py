@@ -391,6 +391,9 @@ def perform_upload(pid,key=''):
    (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[];p.pop('srt_recovery',None)
   elif kind=='srt_block_map':
    from edl import parse,srt_signature
+   expected_srt=request.form.get('expected_srt_signature')
+   if expected_srt and (not p.get('srt') or expected_srt!=srt_signature(p)):
+    raise BadRequest('The SRT changed while you were editing the block map. Reopen the editor to review the current SRT.')
    try:
     from automatic import link_frame_csv
     payload=f.read(4_000_001);payload=link_frame_csv(payload,p) if ext=='.csv' else payload
@@ -911,6 +914,20 @@ def frame_qc_sheet(pid):
 def frame_qc_file(pid,name):
  if not re.fullmatch(r'frame_qc_sheet_\d{2}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
  return send_from_directory(folder(pid)/'.cache/frame_qc',name,conditional=True)
+
+@app.get('/api/projects/<pid>/block-map-editor')
+def block_map_editor(pid):
+ from edl import srt_signature
+ from shot_plan import prefill
+ p=load(pid)
+ try: rows=prefill(p,parent_beat_min(1))
+ except ValueError as e:raise BadRequest(str(e))
+ existing=p.get('srt_block_map')
+ if existing:
+  if existing.get('based_on_srt')!=srt_signature(p):
+   raise BadRequest('The SRT changed since this map was imported. Review and re-upload a matching map, or remove it before starting a new one.')
+  rows=existing['beats']
+ return jsonify(rows=rows,srt_signature=srt_signature(p),existing=bool(existing))
 
 @app.get('/api/projects/<pid>/block-map-template')
 def block_map_template(pid):

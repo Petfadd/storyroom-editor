@@ -254,3 +254,71 @@ document.addEventListener('keydown',e=>{if(e.code==='Space'&&!document.querySele
 function tickEditor(){if(editorPlaying){const t=editorTime();if(t>=totalTime()){pauseEditor()}else{const i=scenes().findIndex(s=>t>=s.frame_in/30&&t<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;if(!editorMaster)showSource(i,t);renderInspector();markSelected()}if(!editorMaster){showSource(sceneIndex,t);drawBackdrop()}}}else if(!editorMaster)drawBackdrop();updatePosition();requestAnimationFrame(tickEditor)}
 setInterval(async()=>{if(!P||dirty||uploading||editorPlaying)return;try{const next=await api('/api/projects/'+P.id);if(next.updated!==P.updated||next.render?.status!==P.render?.status||next.render?.progress!==P.render?.progress||next.render?.output!==P.render?.output){P=next;sceneIndex=Math.min(sceneIndex,Math.max(0,P.scenes.length-1));renderProject()}}catch(e){toast(e.message)}},3000);
 (async()=>{try{await list();const id=location.hash.match(/^#\/production\/([a-f0-9]{16})$/);if(id)await openProject(id[1]);else if(projects[0])await openProject(projects[0].id);else renderEditor();requestAnimationFrame(tickEditor)}catch(e){toast(e.message);renderEditor();requestAnimationFrame(tickEditor)}})();
+
+// Manual block-map authoring. Only the visible fields are changed; other imported
+// production instructions stay on the row. A draft remains in memory until Save.
+let mapDraft=null;
+async function openBlockMapEditor(){
+ if(!P||!leave())return;
+ const id=P.id;
+ try{
+  const data=await api(`/api/projects/${id}/block-map-editor`);
+  if(!P||P.id!==id)return;
+  mapDraft={id,signature:data.srt_signature,rows:data.rows,index:0,changed:false};
+  renderMapEditor();$('#map-editor-dialog').showModal();
+ }catch(e){toast(e.message)}
+}
+function mapValue(row,key){
+ if(Object.hasOwn(row,'_edit_'+key))return row['_edit_'+key];
+ if(key==='beat')return row.parent_beat_id??row.beat??'1';
+ if(key==='media_file')return row.source_file??row.media_file??'';
+ if(key==='source_in')return row.source_in??(row.source_in_ms==null?'':mapClock(row.source_in_ms));
+ if(key==='source_out')return row.source_out??(row.source_out_ms==null?'':mapClock(row.source_out_ms));
+ if(key==='status')return row.status??row.visual_status??'';
+ return row[key]??'';
+}
+function mapClock(ms){const n=Math.round(Number(ms)),h=Math.floor(n/3600000),m=Math.floor(n/60000)%60,s=Math.floor(n/1000)%60;return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(n%1000).padStart(3,'0')}`}
+function renderMapEditor(){
+ const d=mapDraft,r=d.rows[d.index],block=P.srt?.blocks.find(b=>Number(b.number)===Number(r.block??r.srt_blocks?.[0]));
+ const field=(label,key,placeholder='')=>`<label>${label}<input data-map-field="${key}" value="${E(mapValue(r,key))}" placeholder="${E(placeholder)}"></label>`;
+ $('#map-editor-body').innerHTML=`<p class="small">Choose footage and exact source times for each SRT block. Nothing is selected automatically. Leave a source blank and explain the gap if footage is not ready. Save the map, then rebuild the storyboard; saving resets existing approvals.</p>
+ <div class="inline"><button type="button" onclick="mapStep(-1)" ${d.index===0?'disabled':''}>← Previous</button><label>Block <select onchange="mapGo(this.value)">${d.rows.map((row,i)=>`<option value="${i}" ${i===d.index?'selected':''}>${E(row.block??row.srt_blocks?.[0]??i+1)}${mapValue(row,'media_file')?'':' · gap'}</option>`).join('')}</select></label><button type="button" onclick="mapStep(1)" ${d.index===d.rows.length-1?'disabled':''}>Next →</button></div>
+ <div class="notice"><strong>${E(block?.start_ms!=null?mapClock(block.start_ms):r.start)} → ${E(block?.end_ms!=null?mapClock(block.end_ms):r.end)}</strong><p>${E(block?.text||'Narration not found for this block; review the map against the SRT.')}</p></div>
+ <form id="map-row-form" onsubmit="event.preventDefault();saveBlockMap()"><div class="two">${field('Parent beat number','beat','1')}<label>Source filename<input data-map-field="media_file" list="map-source-files" value="${E(mapValue(r,'media_file'))}" placeholder="Select or type original filename"></label>${field('Source IN','source_in','00:00:00.000')}${field('Source OUT (exclusive)','source_out','00:00:04.000')}${field('Status (optional)','status','VIDEO, STILL or CTX')}${field('Footage group (optional)','footage_group','Same label for the same shot')}</div>${field('Picture description (optional)','visible_content','What the picture should show')}<label>Gap note (required if no source)<textarea data-map-field="gap_note" rows="2">${E(mapValue(r,'gap_note'))}</textarea></label><datalist id="map-source-files">${P.assets.map(a=>`<option value="${E(a.original_name||a.name)}"></option>`).join('')}</datalist><p class="small">Use HH:MM:SS.mmm for source times. OUT must follow IN; a moving interval must fit the block duration. Existing extra map instructions are preserved.</p><div id="map-save-error" class="notice warn" role="alert" hidden></div><div class="dialog-actions"><button type="button" onclick="closeBlockMapEditor()">Cancel</button><button class="new" type="submit">Save block map</button></div></form>`;
+ $('#map-row-form').addEventListener('input',e=>{
+  const key=e.target.dataset.mapField;if(!key)return;
+  r['_edit_'+key]=e.target.value;d.changed=true;dirty=true;
+ });
+ // Show in-memory changes when returning to a row.
+ $('#map-row-form').querySelectorAll('[data-map-field]').forEach(el=>{const k=el.dataset.mapField;if(Object.hasOwn(r,'_edit_'+k))el.value=r['_edit_'+k]});
+}
+function mapGo(i){mapDraft.index=Number(i);renderMapEditor()}
+function mapStep(delta){mapGo(mapDraft.index+delta)}
+function closeBlockMapEditor(){if(mapDraft?.changed&&!confirm('Discard unsaved block-map edits?'))return;mapDraft=null;dirty=false;$('#map-editor-dialog').close()}
+$('#map-editor-dialog').addEventListener('cancel',e=>{e.preventDefault();closeBlockMapEditor()});
+function mapSaveRows(rows){
+ return rows.map(original=>{
+  const r={...original},value=k=>r['_edit_'+k]??mapValue(r,k);
+  const file=value('media_file').trim(),inside=value('source_in').trim(),out=value('source_out').trim(),beat=value('beat').trim(),status=value('status').trim();
+  const description=value('visible_content'),group=value('footage_group'),gap=value('gap_note');
+  // Normalized imports contain aliases and derived millisecond values. Remove them
+  // before re-parsing edited clocks, otherwise the old values conflict with the edits.
+  for(const key of Object.keys(r))if(key.startsWith('_edit_'))delete r[key];
+  for(const key of ['beat_id','scene','local_file','media_filename','media','file','source','source_file_name','media_file_name','in','out','source_in_time','source_out_time','source_in_ms','source_out_ms','source_out_excl','source_in_ms_planned','source_out_ms_excl_planned'])delete r[key];
+  r.beat=beat;r.media_file=file;r.source_file=file;r.source_in=inside;r.source_out=out;
+  r.status=status;r.visual_status=status;r.visible_content=description;if('required_visual' in r)r.required_visual=description;r.footage_group=group;r.gap_note=gap;
+  return r;
+ });
+}
+async function saveBlockMap(){
+ const d=mapDraft;if(!d||!P||P.id!==d.id)return;
+ if(P.scenes.length&&!confirm('Saving the map resets storyboard approvals. Rebuild to apply the changes. Continue?'))return;
+ const form=$('#map-row-form'),button=form.querySelector('button[type=submit]'),error=$('#map-save-error');button.disabled=true;error.hidden=true;
+ try{
+  const data=new FormData();data.append('kind','srt_block_map');data.append('expected_srt_signature',d.signature);
+  data.append('file',new Blob([JSON.stringify(mapSaveRows(d.rows))],{type:'application/json'}),'authored-block-map.json');
+  const result=await api(`/api/projects/${d.id}/upload`,'POST',data);
+  if(P?.id===d.id)P=result;
+  mapDraft=null;dirty=false;$('#map-editor-dialog').close();renderProject();toast('Block map saved. Rebuild the storyboard to apply it.');
+ }catch(e){error.textContent=e.message;error.hidden=false;button.disabled=false}
+}
