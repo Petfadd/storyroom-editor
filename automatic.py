@@ -374,7 +374,7 @@ def repetition_errors(p):
  errors=[];recent=[];assets={a['id']:a for a in p['assets']};tolerance=CONTINUATION_TOLERANCE
  for i,s in enumerate(p['scenes'],1):
   a=assets.get(s.get('asset_id'));m=s.get('automatic_match') or {}
-  group=m.get('footage_group') or (a or {}).get('footage_group')
+  group=m.get('footage_group') or s.get('footage_group') or (a or {}).get('footage_group')
   source=m.get('original_source_file') or ((a or {}).get('original_full_source') or {}).get('file') or (a or {}).get('original_name')
   duration=(s['frame_out']-s['frame_in'])/30
   start=m.get('original_source_in_s',((a or {}).get('original_full_source') or {}).get('source_in_s',0)+s.get('in_s',0));end=start+duration
@@ -387,11 +387,12 @@ def repetition_errors(p):
    continue
   for j,g,src,inside,outside,prior_hashes,twin in recent[-window:]:
    if group and group==g:
-    errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.')
+    errors.append(f'Scene {i}: repeats the same shot as scene {j} inside the {window}-slot cooldown.')
     break
    overlap=min(end,outside)-max(start,inside)
    if src==source and overlap>tolerance:
-    errors.append(f'Scene {i}: repeats footage from scene {j} inside the {window}-slot cooldown.')
+    errors.append(f'Scene {i}: replays source footage from scene {j} inside the {window}-slot cooldown '
+                  f'(the intervals overlap by {overlap:.2f}s).')
     break
    hs=m.get('perceptual_hashes') or []
    if hs and prior_hashes and min((int(x,16)^int(y,16)).bit_count() for x in hs for y in prior_hashes)<=int(policy.get('visual_hash_max_distance',4)):

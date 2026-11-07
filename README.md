@@ -15,7 +15,11 @@ A local Flask application that builds an SRT-driven video storyboard from upload
   allows them (`transition_policy`), and are validated: no dissolve off the last scene,
   no adjacent pairs, never longer than the incoming beat, and the export length never
   changes by a frame.
-- Six-slot cooldown against repeating the same shot or overlapping source interval.
+- Six-slot cooldown against repeating the same shot or overlapping source interval. The
+  unit is the shot, not the byte offset: a plan can declare `footage_group`, and beats that
+  do not declare one are grouped automatically from the file, the script's wording for the
+  picture and the parent beat, so the same shot cannot slip back in by shifting its
+  in-point.
 - Cut conformance: every picture beat is kept inside one decoded shot of its source, and cuts are eased into the narrator's breaths (see below).
 - Original narration and SRT timing are preserved.
 - Source audio is muted; added captions are off.

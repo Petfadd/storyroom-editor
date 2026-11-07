@@ -123,7 +123,10 @@ def make_clips(directory, count, length, width=1280, height=720):
         target = directory / f'src{index}.mp4'
         if target.exists():
             continue
-        colour = '0x%02x%02x%02x' % (20 + index * 6, 70 + index * 5, 130 + index * 4)
+        # Each channel is masked to a byte: past about 40 clips the unmasked arithmetic
+        # overflowed a channel into three hex digits and ffmpeg rejected the colour, which
+        # only showed up when a sweep needed a large source pool.
+        colour = '0x%02x%02x%02x' % ((20 + index * 6) % 256, (70 + index * 5) % 256, (130 + index * 4) % 256)
         subprocess.run([ffmpeg(), '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
                         '-i', f'color=c={colour}:size={width}x{height}:rate={FPS}:duration={length}',
                         '-vf', ("drawbox=x='mod(t*40\\,900)':y='mod(t*25+40\\,500)':w=220:h=180:color=white@0.85:t=fill,"
@@ -145,7 +148,12 @@ def write_map(path, blocks, sources, clip_length):
             raise SystemExit(f'runtime needs more footage than {len(sources)} x {clip_length}s holds '
                              f'(failed at block {number}, a {length:.1f}s beat); raise --sources or --clip-seconds')
         offset = cursor[chosen.name]
-        cursor[chosen.name] = offset + length + 0.05
+        # A whole second of gutter between two uses of the same file. The 0.05 s that used
+        # to be here was finer than the rounding the pipeline applies (source clocks are
+        # written to the millisecond and beats are laid on whole frames), so consecutive
+        # intervals occasionally overlapped by a quarter second and the engine correctly -
+        # though confusingly - reported a genuine repeat in its own footage.
+        cursor[chosen.name] = offset + length + 1.0
         rows.append({'block': number, 'start': start, 'end': end, 'beat': len(rows) + 1,
                      'media_file': chosen.name, 'source_in': round(offset, 3), 'source_out': round(offset + length, 3)})
     with open(path, 'w', newline='') as handle:

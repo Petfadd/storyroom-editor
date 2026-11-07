@@ -207,6 +207,19 @@ def assemble(p,seed):
     elif not p.get('allow_archive_reuse') and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
    if not problem:
     s.update(asset_id=a['id'],in_s=source_start)
+    # What the cooldown actually has to protect: not the byte offsets, but the SHOT. Two
+    # beats can play the very same stretch of film from different in-points - shifted by a
+    # second, or trimmed at either end - and an overlap test on intervals will not notice,
+    # because the intervals do not have to overlap. A group is therefore either declared by
+    # the plan (footage_group) or derived from what the plan already states about the shot:
+    # the file, its change points, and the script's own wording for the picture. Beats that
+    # share all three are the same shot and now fall under the same cooldown slot rule.
+    declared=str(row.get('footage_group') or '').strip()
+    if declared:s['footage_group']=declared
+    else:
+     s['footage_group']='shot:'+hashlib.sha256('|'.join([a.get('original_name',''),
+        str(row.get('visible_content') or '').strip().casefold(),
+        str(row.get('parent_beat_id') or '')]).encode()).hexdigest()[:16]
     if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_start+duration+handle))
   if problem:issues.append('Beat '+bid+': '+problem);s['notes']+=' Unresolved: '+problem
   scenes.append(s)
