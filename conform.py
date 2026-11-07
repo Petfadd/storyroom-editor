@@ -25,9 +25,15 @@ def stills(p,root,rows):
  """
  out=copy.deepcopy(rows);root=Path(root)
  for row in out:
-  matches=matching_assets(p,row.get('source_file',''))
+  matches=matching_assets(dict(p,source_bindings={}) if row.get('strict_production') else p,row.get('source_file',''))
   status=str(row.get('visual_status','')).upper()
+  if len(matches)==1 and matches[0]['kind']=='image' and row.get('requested_treatment')=='EDITORIAL FREEZE-FRAME':
+   row.setdefault('import_blockers',[]).append('Editorial freeze-frame requires a video source, not a photograph.')
+   continue
   if len(matches)==1 and matches[0]['kind']=='image':
+   if row.get('strict_production') and status!='STILL':
+    row.setdefault('import_blockers',[]).append('A video treatment cannot use a still image.')
+    continue
    # An uploaded photograph covers the whole beat at native length.
    row['source_in_ms']=0;row['source_out_ms']=row['timeline_out_ms']-row['timeline_in_ms']
    row['visual_status']='PHOTOGRAPH'

@@ -181,12 +181,14 @@ def assemble(p,seed):
   s['mentioned_person']=s.get('person','');s['person']=str(row.get('shown_person') or '');s['focus']=str(row.get('visible_content') or s.get('category') or 'Case footage')
   s['notes']='Optional picture-plan instruction. '+str(row.get('match_reason') or '')+' '+str(row.get('gap_note') or '')+' Review: '+str(row.get('coverage_review') or '')+' Treatment: '+str(row.get('picture_treatment') or '')+' Transition requested: '+str(row.get('transition_requested_text') or '')+' Limit on implication: '+str(row.get('limit_on_implication') or '')
   if str(row.get('visual_status','')).upper()=='CTX':s['context_only']=True
+  if row.get('strict_production') and row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+   s['script_camera']={'move':'static','amount':0,'basis':'Still/frame is held without invented camera motion.'}
   if row.get('visible_content'):s['focus']=str(row['visible_content'])[:5000]
   treatment=str(row.get('picture_treatment','')).lower();amount=re.search(r'(\d+(?:\.\d+)?)%',treatment)
   if amount and float(amount[1])<=10:
    direction='static' if 'hold static' in treatment else 'push' if 'push' in treatment else 'pull' if 'pull' in treatment else 'pan-right' if 'drift to the right' in treatment else ''
    if direction:s['script_camera']={'move':direction,'amount':float(amount[1])/100,'basis':'explicit percentage/move in production treatment; image center, not face tracking','phase_start':row.get('camera_phase_start',0),'phase_end':row.get('camera_phase_end',1)}
-  matches=matching_assets(p,row['source_file'])
+  matches=matching_assets(dict(p,source_bindings={}) if row.get('strict_production') else p,row['source_file'])
   problem=''
   if row.get('import_blockers'):problem=' '.join(row['import_blockers'])
   elif not row['source_file']:problem=str(row['gap_note'])
@@ -204,7 +206,7 @@ def assemble(p,seed):
     if str(row.get('visual_status','')).upper()=='STILL':problem='A still frame was requested from this video but no extracted frame is registered. Set picture policy to photographs and stills so the frame can be extracted, or choose a moving interval.'
     elif abs((source_end-source_start)-duration)>1/30+.001:problem='Source interval and picture duration differ; no automatic trimming, stretching, looping or freezing.'
     elif max(source_end,source_start+duration)+handle>a['duration']+.001:problem='Source file is too short, including transition handles.'
-    elif not p.get('allow_archive_reuse') and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
+    elif not p.get('allow_archive_reuse') and row.get('requested_treatment')!='ARCHIVAL REUSE' and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
    if not problem:
     s.update(asset_id=a['id'],in_s=source_start)
     # Grouping is an editorial assertion, not something a filename and a repeated

@@ -1,4 +1,5 @@
 """Create individually named scene clips from a current, already rendered timeline."""
+import re
 import json
 import shutil
 import subprocess
@@ -17,6 +18,11 @@ GUARD = threading.Lock()
 
 def scene_name(index):
     return f'C{index:02d}.mp4'
+
+
+def clip_filename(scene, index):
+    row=scene.get('plan_row') or {}
+    return row.get('clip_id', '') + '.mp4' if row.get('strict_production') else scene_name(index)
 
 
 def status(root, pid, updated):
@@ -59,6 +65,9 @@ def _run(root, project, source, state, publish):
         scenes = project['scenes']
         if not scenes or not source.is_file():
             raise ValueError('The selected timeline video is unavailable.')
+        names=[clip_filename(scene,i) for i,scene in enumerate(scenes,1)]
+        if any(not re.fullmatch(r'C\d+\.mp4',name) for name in names) or len(set(name.casefold() for name in names))!=len(names):
+            raise ValueError('The script reuses a clip reference across shots. Separate exports cannot safely use the same C filename twice; use the full master until those clips are defined uniquely.')
         last = 0
         for i, scene in enumerate(scenes):
             if scene['frame_in'] != last or scene['frame_out'] <= last:
@@ -74,20 +83,20 @@ def _run(root, project, source, state, publish):
         update(status='running')
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED, allowZip64=True) as z:
             for i, scene in enumerate(scenes, 1):
-                update(progress=round((i-1)*100/len(scenes), 1), detail=f'Preparing {scene_name(i)} ({i} of {len(scenes)})')
+                update(progress=round((i-1)*100/len(scenes), 1), detail=f'Preparing {names[i-1]} ({i} of {len(scenes)})')
                 frames = scene['frame_out'] - scene['frame_in'];duration = frames / 30
-                path = work / scene_name(i)
+                path = work / names[i-1]
                 cmd = [ff, '-nostdin', '-y', '-v', 'error', '-ss', f"{scene['frame_in']/30:.9f}", '-i', str(source),
                        '-t', f'{duration:.9f}', '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'libx264',
                        '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-threads', '2',
                        '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', str(path)]
                 completed = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=max(120, duration*20))
                 if completed.returncode:
-                    raise ValueError(f'{scene_name(i)} could not be created: ' + completed.stderr.decode(errors='replace')[-400:])
+                    raise ValueError(f'{names[i-1]} could not be created: ' + completed.stderr.decode(errors='replace')[-400:])
                 cap = cv2.VideoCapture(str(path));actual = int(cap.get(cv2.CAP_PROP_FRAME_COUNT));cap.release()
                 if actual != frames:
-                    raise ValueError(f'{scene_name(i)} has {actual} frames instead of {frames}; no incomplete archive was saved.')
-                z.write(path, scene_name(i));path.unlink()
+                    raise ValueError(f'{names[i-1]} has {actual} frames instead of {frames}; no incomplete archive was saved.')
+                z.write(path, names[i-1]);path.unlink()
         if publish(project['updated'], archive, output_name, state['source_kind']):
             update(status='done', progress=100, detail=f'{len(scenes)} scene clips ready.', output=output_name)
         else:

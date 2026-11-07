@@ -383,6 +383,9 @@ def repetition_errors(p):
   previous=recent[-1] if recent else None
   continues=bool(previous and previous[0]==i-1 and previous[2]==source and
                  (abs(previous[4]-start)<=tolerance or (still and previous[6]==a['id'])))
+  if (s.get('plan_row') or {}).get('requested_treatment')=='ARCHIVAL REUSE':
+   recent.append((i,group,source,start,end,m.get('perceptual_hashes') or [],a['id'] if a else None))
+   continue
   if continues:
    recent.append((i,group,source,start,end,m.get('perceptual_hashes') or [],a['id'] if a else None))
    continue
@@ -412,7 +415,7 @@ def source_capacity_errors(p):
  assets={a['id']:a for a in p['assets']};demand={}
  for i,s in enumerate(p['scenes'],1):
   a=assets.get(s.get('asset_id'))
-  if not a or a.get('kind')!='video':continue
+  if not a or a.get('kind')!='video' or (s.get('plan_row') or {}).get('requested_treatment')=='ARCHIVAL REUSE':continue
   handle=(s.get('transition_handle_frames') or 0)/30 if s.get('transition')=='dissolve' else 0
   record=demand.setdefault(a['id'],{'name':a.get('original_name') or a.get('name'),'needed':0.0,'beats':0,'duration':float(a.get('duration') or 0)})
   record['needed']+=(s['frame_out']-s['frame_in'])/30+handle;record['beats']+=1

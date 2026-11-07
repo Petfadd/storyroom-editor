@@ -84,6 +84,9 @@ def srt_outline_blocks(text):
  return [{'number':n,'start_ms':a,'end_ms':b,'text':t} for n,a,b,t in rows],[]
 
 def script_beats(p):
+ from detailed_script import parse_detailed
+ detailed=parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[]))
+ if detailed:return detailed
  from edl import parse
  for table in tables(document(p)):
   if 'Timeline in → out' not in table[0] or 'Src IN → OUT' not in table[0]:continue
@@ -163,9 +166,12 @@ def source_register(p):
 
 def base_rows_for(p):
  return_rows=script_beats(p)
- return return_rows,'production_script_table' if return_rows else ''
+ return return_rows,('detailed_production_script' if return_rows and return_rows[0].get('strict_production') else 'production_script_table') if return_rows else ''
 
 def rows_for(p):
+ if p.get('srt_block_map'):
+  from detailed_script import parse_detailed
+  if parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[])):raise ValueError('A detailed production script and SRT block map are both present. Remove the block map before building; the script must control its own shots.')
  if p.get('srt_block_map'):
   rows,mode=[],'srt_block_map'
  else:
@@ -198,22 +204,22 @@ def synchronize(p):
  except ValueError as e:rows=[];register=[];mode='';error=str(e)
  files={a['id']:a for a in p['assets']};matched=0
  for a in p['assets']:
-  planned=[r for r in rows if any(m['id']==a['id'] for m in matching_assets(p,str(r.get('source_file') or '')))]
+  planned=[r for r in rows if any(m['id']==a['id'] for m in matching_assets(dict(p,source_bindings={}) if r.get('strict_production') else p,str(r.get('source_file') or '')))]
   records=[r for r in register if any(m['id']==a['id'] for m in matching_assets(p,r['source_file']))]
   links=list(dict.fromkeys([str(r.get('youtube_url') or '') for r in planned+records if r.get('youtube_url')]))
   labels=list(dict.fromkeys(str(r.get('source_id') or '') for r in planned+records if r.get('source_id')))
   a['document_plan']={'cuts':[{'beat_id':r['beat_id'],'timeline_in_ms':r['timeline_in_ms'],'timeline_out_ms':r['timeline_out_ms'],'source_in_ms':r['source_in_ms'],'source_out_ms':r['source_out_ms'],'visible_content':r.get('visible_content',''),'visual_status':r.get('visual_status',''),'review':r.get('coverage_review',''),'picture_treatment':r.get('picture_treatment','')} for r in planned], 'source_ids':labels,'youtube_urls':links,'register':records,'visual_verification':'not_established_by_documents'}
   if (not a.get('source','').strip() or (a.get('approval_record') and a.get('source','').startswith('User-provided file: '))) and len(links)==1:a['source']=links[0]
   if planned:matched+=1
- missing=[r['source_file'] for r in rows if r.get('source_file') and not matching_assets(p,r['source_file'])]
+ missing=[r['source_file'] for r in rows if r.get('source_file') and not matching_assets(dict(p,source_bindings={}) if r.get('strict_production') else p,r['source_file'])]
  p['document_plan_summary']={'mode':mode,'beats':len(rows),'registered_sources':len(register),'matched_media':matched,'missing_files':list(dict.fromkeys(missing)),'error':error,'provisional':bool(re.search(r'could not watch|could not view|every source.*provisional|nominal allocation',document(p),re.I)),'note':'Document-declared content and provisional times are not visual verification. Inspect planned-cut samples before approving.'}
  return p
 
 def match_report(p):
- try:rows,_=rows_for(p)
+ try:rows,mode=rows_for(p)
  except ValueError:return []
  names=list(dict.fromkeys(r['source_file'] for r in rows if r.get('source_file')));result=[]
  for name in names:
-  exact=[a for a in p['assets'] if asset_matches(a,name)];effective=matching_assets(p,name);binding=(p.get('source_bindings') or {}).get(name.strip().casefold())
+  exact=[a for a in p['assets'] if asset_matches(a,name)];effective=matching_assets(dict(p,source_bindings={}) if mode=='detailed_production_script' else p,name);binding=None if mode=='detailed_production_script' else (p.get('source_bindings') or {}).get(name.strip().casefold())
   result.append({'source_file':name,'original_name_match_count':len(exact),'effective_match_count':len(effective),'selected_asset_id':binding or (effective[0]['id'] if len(effective)==1 else None),'explicit':bool(binding),'status':'selected' if binding and len(effective)==1 else 'matched' if len(effective)==1 else 'missing' if not effective else 'ambiguous','candidate_ids':[a['id'] for a in exact],'beats':sum(r.get('source_file')==name for r in rows)})
  return result

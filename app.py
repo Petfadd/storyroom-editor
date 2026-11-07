@@ -181,7 +181,7 @@ def scene_review(p,i,s,a,ranges,last,final=False):
   end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
   if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
   for start,stop,number in ranges.get(a['id'],[]):
-   if not p.get('allow_archive_reuse') and s['in_s']<stop and end_s>start:errors.append(pre+f'source interval overlaps scene {number}.')
+   if ((s.get('plan_row') or {}).get('strict_production') or not p.get('allow_archive_reuse')) and (s.get('plan_row') or {}).get('requested_treatment')!='ARCHIVAL REUSE' and s['in_s']<stop and end_s>start:errors.append(pre+f'source interval overlaps scene {number}.')
  if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
  if not s['focus'].strip():errors.append(pre+'set the story focus.')
  if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
@@ -210,6 +210,14 @@ def check(p,final=False):
  for i,s in enumerate(p['scenes']):
   a=assets.get(s['asset_id'])
   scene_errors,scene_notes=scene_review(p,i,s,a,ranges,last,final)
+  row=s.get('plan_row') or {}
+  if row.get('strict_production'):
+   if not s.get('approved'):scene_errors.append(f'Scene {i+1}: inspect the picture, identity, context and official source provenance before approval.')
+   if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001:
+    scene_errors.append(f'Scene {i+1}: edited timing or transition differs from the production script.')
+   if a and a.get('original_name',a.get('name','')).casefold()!=row['source_file'].casefold():scene_errors.append(f'Scene {i+1}: selected source differs from the production script.')
+   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and (s.get('script_camera') or {}).get('move')!='static':scene_errors.append(f'Scene {i+1}: still must remain a static hold.')
+   if row.get('requested_treatment')=='CONTEXT VIDEO' and not s.get('context_only'):scene_errors.append(f'Scene {i+1}: context footage must remain labelled as context.')
   errors.extend(scene_errors);notes.extend(scene_notes)
   last=s['frame_out']
   if a and a['kind']=='video':
@@ -680,13 +688,19 @@ def build(pid):
    known={b['number'] for b in p['srt']['blocks']}
    unknown=[n for n in scope if n not in known]
    if unknown:raise BadRequest('These SRT blocks do not exist: '+', '.join(map(str,unknown[:8]))+'.')
+  from document_plan import rows_for
+  try:preflight_rows,preflight_mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production plan: '+str(e))
+  if preflight_mode=='detailed_production_script':
+   blockers=[f"{r['shot_id']}: {issue}" for r in preflight_rows for issue in r.get('import_blockers',[])]
+   if blockers:raise BadRequest('Detailed script needs attention: '+' '.join(blockers[:8]))
   from automatic import restore_reviewed,full_source_analysis,carry_previous_review
   previous=copy.deepcopy(p.get('scenes') or [])
   full_source_analysis(p,folder(pid))
   # A cached timeline may only stand in for a whole rebuild. On a block-range rebuild it
   # would replace the entire storyboard with the cached one, so a request that named three
   # blocks would silently rebuild (and resequence) all of them.
-  if not scope and restore_reviewed(p,folder(pid)):
+  if not scope and preflight_mode!='detailed_production_script' and restore_reviewed(p,folder(pid)):
    save(p);return jsonify(public(p))
   from production import infer
   detected=infer(p);p['profile']=detected['profile']
@@ -743,10 +757,14 @@ def build(pid):
       row['timeline_in_ms']=round((hit['frame_in']-first)/30*1000)
       row['timeline_out_ms']=round((hit['frame_out']-first)/30*1000)
      adopted_surfaces=len(saved)
+   if plan_mode=='detailed_production_script' and scope:raise BadRequest('Detailed shot scripts require a whole-timeline rebuild; partial rebuilding could change shot order.')
+   if plan_mode=='detailed_production_script' and policy(p)!='mixed' and any(r.get('visual_status')=='STILL' for r in decisions):raise BadRequest('This script requests still holds or freeze-frames. Allow photographs and stills, or revise the script; no substitute was chosen.')
    still_plan=stills(p,folder(pid),copy.deepcopy(decisions))
    extracted=sum(bool(a.get('derived_from')) for a in p['assets'])
-   still_plan=native_rows(p,still_plan)
-   p['allow_archive_reuse']=True
+   if plan_mode!='detailed_production_script':
+    still_plan=native_rows(p,still_plan)
+    p['allow_archive_reuse']=True
+   else:p['allow_archive_reuse']=False
    original=p.get('picture_plan')
    p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1,'partial':bool(scope)}
    try:
@@ -764,10 +782,12 @@ def build(pid):
   p['assembly_signature']=signature(p)
   p['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
   from picture_flow import apply_flow
-  p['picture_flow']=apply_flow(p,folder(pid))
+  if plan_mode=='detailed_production_script':
+   p['picture_flow']={'note':'Exact script timings retained; no automatic source conform or breath snapping.'}
+  else:p['picture_flow']=apply_flow(p,folder(pid))
   from automatic import validate_assembly
   decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
-  if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join(decoded['errors'][:3]))
+  if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join((p.get('script_application') or {}).get('issues',[])[:3]+decoded['errors'][:3]))
   # An incremental rebuild: restore the review state of every beat whose picture the
   # rebuild reproduced exactly, and leave the rest unapproved. `scope` narrows this to a
   # block range, so editing one region does not disturb approvals elsewhere.
