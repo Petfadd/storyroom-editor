@@ -402,12 +402,16 @@ The engine can decode frames and follow explicit machine-readable source interva
 ## Local media understanding (experimental)
 
 Production setup → **Local audio & video understanding** opens an independent,
-per-file report. It does not change the SRT, make editorial approvals, or affect
-storyboard construction. Use **Analyse locally** for narration or an uploaded video.
+per-file report. Analysis itself does not change the SRT, make editorial approvals,
+or affect storyboard construction. Use **Analyse locally** for narration or an uploaded video.
 The JSON report is also available at `GET /api/projects/<id>/understanding/<target>`
 where target is `narration` or a video asset ID. A completed or partial transcript can
 be downloaded as an SRT from the analysis panel; it does not replace the project's
-authored SRT, and should be reviewed before use. The shot inspector also shows source
+authored SRT, and should be reviewed before use. For completed narration transcripts,
+**Use as project SRT** explicitly applies the machine transcript after confirmation.
+It replaces any existing SRT and clears the storyboard and approvals, like an SRT upload;
+a ready automatic build may start. Source timestamps are not padded to cover silence,
+so verify text, timing, and coverage before building or exporting. The shot inspector also shows source
 observations that overlap the saved beat, mapped to its timeline times; these do not
 change the edit. Replacing a source marks its report stale. Processing is serialized to reduce CPU and memory pressure.
 

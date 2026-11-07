@@ -948,26 +948,51 @@ def local_understanding_report(pid,target):
   if request.method=='POST':enqueue(root,target,path,kind,duration)
   return jsonify(read_result(root,target,path))
 
+def transcript_srt(report, require_complete=False):
+ if report.get('status') in ('stale','not_started','error','interrupted'):raise BadRequest('No current transcript is available for this source.')
+ stage=(report.get('stages') or {}).get('transcript') or {}
+ if require_complete and stage.get('status')!='complete':raise BadRequest('Wait for transcription to finish before using it as the project SRT.')
+ segments=(stage.get('result') or {}).get('segments') or []
+ if not segments:raise BadRequest('No transcript segments are available yet.')
+ lines=[];last=0
+ for i,segment in enumerate(segments,1):
+  try:a=round(float(segment['start_s'])*1000);b=round(float(segment['end_s'])*1000)
+  except (ValueError,TypeError,KeyError,OverflowError):raise BadRequest('Transcript has invalid timestamps; review it in the analysis report.')
+  text=' '.join(str(segment.get('text') or '').split())
+  if a<last or a<0 or b<=a or not text:raise BadRequest('Transcript timestamps overlap or are invalid; review the analysis report before making an SRT.')
+  lines.append('%d\n%s --> %s\n%s'%(i,srt_stamp(a),srt_stamp(b),text));last=b
+ return '\n\n'.join(lines)+'\n', stage.get('status')=='complete'
+
 @app.get('/api/projects/<pid>/understanding/<target>/transcript.srt')
 def local_transcript_srt(pid,target):
  from flask import Response
  from local_understanding import read_result
  with LOCKS[pid]:
   root,path,_,_=understanding_source(pid,target)
-  report=read_result(root,target,path)
-  if report.get('status') in ('stale','not_started','error'):raise BadRequest('No current transcript is available for this source.')
-  stage=(report.get('stages') or {}).get('transcript') or {}
-  segments=(stage.get('result') or {}).get('segments') or []
-  if not segments:raise BadRequest('No transcript segments are available yet.')
-  lines=[];last=0
-  for i,segment in enumerate(segments,1):
-   try:a=round(float(segment['start_s'])*1000);b=round(float(segment['end_s'])*1000)
-   except (ValueError,TypeError,KeyError,OverflowError):raise BadRequest('Transcript has invalid timestamps; review it in the analysis report.')
-   text=' '.join(str(segment.get('text') or '').split())
-   if a<last or a<0 or b<=a or not text:raise BadRequest('Transcript timestamps overlap or are invalid; review the analysis report before making an SRT.')
-   lines.append('%d\n%s --> %s\n%s'%(i,srt_stamp(a),srt_stamp(b),text));last=b
-  suffix='' if stage.get('status')=='complete' else '-partial'
-  return Response('\n\n'.join(lines)+'\n',mimetype='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="transcript'+suffix+'.srt"'})
+  text,complete=transcript_srt(read_result(root,target,path))
+  suffix='' if complete else '-partial'
+  return Response(text,mimetype='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="transcript'+suffix+'.srt"'})
+
+@app.post('/api/projects/<pid>/understanding/narration/apply-srt')
+def apply_narration_transcript(pid):
+ from local_understanding import read_result
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if d.get('confirm_generated') is not True:raise BadRequest('Confirm that this is an unverified machine transcript before applying it.')
+  if (p.get('srt') or p.get('scenes')) and d.get('confirm_replace') is not True:
+   raise BadRequest('Confirm replacement: this replaces the current SRT and clears the storyboard.')
+  root,path,_,_=understanding_source(pid,'narration')
+  text,_=transcript_srt(read_result(root,'narration',path),require_complete=True)
+  blocks=parse_srt(text)
+  # Match normal SRT upload semantics, but only after the user confirms. No timestamps
+  # are stretched to match narration and old block maps remain detectably stale.
+  (root/'inputs/captions.srt').write_text(text,encoding='utf-8')
+  p['srt']={'blocks':blocks,'name':'Machine transcript · review required.srt'}
+  p['scenes']=[];p.pop('srt_recovery',None)
+  save(p)
+  from automatic import maybe_queue
+  maybe_queue(sys.modules[__name__],p)
+  return jsonify(public(p))
 
 @app.get('/api/projects/<pid>/scenes/<sid>/understanding')
 def scene_understanding_report(pid,sid):

@@ -249,6 +249,32 @@ class LocalUnderstandingTest(unittest.TestCase):
             lu._write(lu.result_path(root,'narration'),report)
             self.assertEqual(client.get(f'/api/projects/{pid}/understanding/narration/transcript.srt').status_code,400)
 
+    def test_apply_narration_requires_complete_and_explicit_replacement(self):
+        import app as server
+        mp3=self.root/'narration.mp3'
+        subprocess.run([self.ff,'-v','error','-y','-f','lavfi','-i','sine=frequency=440:duration=3',str(mp3)],check=True)
+        projects=self.root/'projects';projects.mkdir()
+        with patch.object(server,'PROJECTS',projects), patch.dict('os.environ',{'STORYROOM_UNDERSTANDING_AUTO':'0'}), patch('automatic.maybe_queue'):
+            client=server.app.test_client();pid=client.post('/api/projects',json={'title':'Apply test'}).get_json()['id']
+            client.post(f'/api/projects/{pid}/upload',data={'kind':'voiceover','file':(io.BytesIO(mp3.read_bytes()),'narration.mp3')},content_type='multipart/form-data')
+            original=b'1\n00:00:00,000 --> 00:00:02,000\nOriginal caption.\n'
+            client.post(f'/api/projects/{pid}/upload',data={'kind':'srt','file':(io.BytesIO(original),'original.srt')},content_type='multipart/form-data')
+            root=projects/pid;source=root/'inputs/voiceover.mp3';out=root/'inputs/captions.srt'
+            report={'status':'partial','source_signature':lu._signature(source),'stages':{'transcript':{'status':'running','result':{'segments':[{'start_s':.25,'end_s':2.9,'text':'Machine text.'}]}}}}
+            lu._write(lu.result_path(root,'narration'),report)
+            url=f'/api/projects/{pid}/understanding/narration/apply-srt'
+            self.assertEqual(client.post(url,json={}).status_code,400)
+            self.assertEqual(client.post(url,json={'confirm_generated':True}).status_code,400)
+            self.assertEqual(client.post(url,json={'confirm_generated':True,'confirm_replace':True}).status_code,400)
+            self.assertEqual(out.read_bytes(),original)
+            report['stages']['transcript']['status']='complete';lu._write(lu.result_path(root,'narration'),report)
+            response=client.post(url,json={'confirm_generated':True,'confirm_replace':True})
+            self.assertEqual(response.status_code,200)
+            self.assertIn('00:00:00,250 --> 00:00:02,900',out.read_text())
+            self.assertEqual(response.get_json()['srt']['blocks'][0]['text'],'Machine text.')
+            source.write_bytes(source.read_bytes()+b'changed')
+            self.assertEqual(client.post(url,json={'confirm_generated':True,'confirm_replace':True}).status_code,400)
+
     def test_no_remote_whisper_model_download(self):
         with patch.dict('os.environ', {'STORYROOM_WHISPER_MODEL_DIR':''}):
             with self.assertRaisesRegex(RuntimeError,'model directory'):

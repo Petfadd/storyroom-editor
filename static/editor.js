@@ -356,12 +356,12 @@ async function refreshUnderstanding(){
   if(!$('#understanding-dialog').open||!P||id!==P.id||target!==understandingTarget)return;
   const stages=result.stages||{};
   const stage=(key,label,render)=>{const x=stages[key];if(!x)return '';return `<section class="card"><h3>${E(label)} · ${E(x.status)}</h3>${x.detail?`<p class="small">${E(x.detail)}</p>`:''}${x.result&&['complete','partial','running'].includes(x.status)?render(x.result):''}</section>`};
-  body.innerHTML=`<p class="small">Local processing only. AI descriptions and timestamps are estimates, not verification. Nothing edits your captions or storyboard.</p>
+  body.innerHTML=`<p class="small">Local processing only. AI descriptions and timestamps are estimates, not verification. Analysis does not edit your captions or storyboard unless you explicitly apply the narration transcript.</p>
    <label>Media <select id="understanding-source" onchange="understandingTarget=this.value;refreshUnderstanding()">${understandingSources().map(([k,v])=>`<option value="${E(k)}" ${k===target?'selected':''}>${E(v)}</option>`).join('')}</select></label>
    <p class="small">Whisper: ${cap.whisper_model_ready&&cap.faster_whisper?'local model available':'local model or package missing'} · PySceneDetect: ${cap.scenedetect?'installed':'missing'} · Librosa: ${cap.librosa?'installed':'missing'} · vision: ${E(cap.vision_model)} on local Ollama (availability checked when run) · sound events: ${cap.sound_classifier?'local model configured':'optional model not configured'} · diarization: ${cap.speaker_diarization?'local pipeline configured':'optional pipeline not configured'}.</p>
    <p>Status: <strong>${E(result.status)}</strong> ${result.detail?E(result.detail):''}</p><button type="button" onclick="runUnderstanding()" ${['queued','running'].includes(result.status)?'disabled':''}>${result.status==='not_started'?'Analyse locally':'Run analysis again'}</button>
    ${result.status!=='not_started'?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}" target="_blank" rel="noopener">Open JSON report</a>`:''}
-   ${stage('transcript','Transcript',r=>`<p class="small">Language: ${E(r.language)} · Review transcription before use; downloading does not change the project SRT.</p>${r.segments?.length?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}/transcript.srt" download>Download ${stages.transcript.status==='complete'?'':'partial '}SRT</a>`:''}${(r.segments||[]).map(x=>`<p><strong>${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s</strong> ${x.speaker?`<span>${E(x.speaker)} · </span>`:''}${E(x.text)}</p>`).join('')||'<p>No speech detected.</p>'}`)}
+   ${stage('transcript','Transcript',r=>`<p class="small">Language: ${E(r.language)} · Review transcription before use; downloading does not change the project SRT.</p>${r.segments?.length?`<a class="button" href="/api/projects/${E(id)}/understanding/${E(target)}/transcript.srt" download>Download ${stages.transcript.status==='complete'?'':'partial '}SRT</a>`:''}${target==='narration'&&stages.transcript.status==='complete'&&r.segments?.length?'<button type="button" onclick="applyNarrationTranscript()">Use as project SRT</button>':''}${(r.segments||[]).map(x=>`<p><strong>${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s</strong> ${x.speaker?`<span>${E(x.speaker)} · </span>`:''}${E(x.text)}</p>`).join('')||'<p>No speech detected.</p>'}`)}
    ${stage('scene_changes','Scene changes',r=>`<p>${r.length} detected spans</p><p class="small">${r.map(x=>`${Number(x.start_s).toFixed(2)}–${Number(x.end_s).toFixed(2)}s`).join(' · ')}</p>`)}
    ${stage('visual','Visual observations',r=>`<p class="small">${E(r.note)} ${r.sampled_frames} frames across ${r.total_scenes} detected scenes.</p>${r.observations.map(x=>`<p><strong>Frame ${Number(x.frame_time_s).toFixed(2)}s</strong> ${E(x.description)}</p>`).join('')}`)}
    ${stage('audio_features','Audio signal',r=>`<p class="small">${E(r.note)}</p>${(r.low_energy_intervals||[]).length?`<p>Low-energy intervals: ${r.low_energy_intervals.map(x=>`${Number(x.start_s).toFixed(1)}–${Number(x.end_s).toFixed(1)}s`).join(' · ')}</p>`:''}${r.windows.map(x=>`<p>${Number(x.start_s).toFixed(1)}–${Number(x.end_s).toFixed(1)}s · RMS ${x.rms} · centroid ${x.spectral_centroid_hz} Hz${x.low_energy?' · low energy':''}</p>`).join('')}`)}
@@ -373,4 +373,20 @@ async function refreshUnderstanding(){
 async function runUnderstanding(){
  const id=P.id,target=understandingTarget;
  try{await api(`/api/projects/${id}/understanding/${target}`,'POST');await refreshUnderstanding()}catch(e){toast(e.message)}
+}
+
+async function applyNarrationTranscript(){
+ if(!P||understandingTarget!=='narration'||uploading)return;
+ const id=P.id, replacing=!!(P.srt||P.scenes.length);
+ const warning=replacing
+  ? 'This machine transcript is unverified. Applying it replaces the existing SRT and clears the storyboard and its approvals. A ready automatic build may start. Continue?'
+  : 'This machine transcript is unverified. Use it as the project SRT? A ready automatic build may start. Review the text and timing before export.';
+ if(!confirm(warning))return;
+ uploading=true;
+ try{
+  const updated=await api(`/api/projects/${id}/understanding/narration/apply-srt`,'POST',{confirm_generated:true,confirm_replace:replacing});
+  if(P?.id!==id)return;
+  P=updated;clearTimeout(understandingTimer);$('#understanding-dialog').close();renderProject();await list();
+  toast('Machine transcript applied as SRT. Review text and timing before export.');
+ }catch(e){toast(e.message)}finally{uploading=false}
 }
