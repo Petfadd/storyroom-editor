@@ -83,3 +83,5 @@
 .management .setup-next{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:#aab8c9;font-size:11px}
 .management #upload-feedback:not([hidden]){position:sticky;top:0;z-index:20;box-shadow:0 8px 20px #0005}
 @media(max-width:760px){.management .setup-grid{grid-template-columns:1fr}.management .setup-footage{grid-column:auto}}
+
+.monitor-source-detail{padding:7px 15px;color:#b5c4d5;font:11px/1.4 system-ui;overflow-wrap:anywhere}.monitor-source-detail[hidden]{display:none}
