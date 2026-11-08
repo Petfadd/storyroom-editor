@@ -806,7 +806,7 @@ def moving_review(pid):
     scene['asset_id']=None;scene['approved']=False;scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
   p['script_moving_only']=True
   p['script_application'].update(mode='moving_video_review',placed_scenes=moving,
-   issues=[str(len(missing))+' shots specify a single still/frame, not a video IN/OUT range. Source OUT times are needed; no video segment was guessed.'],
+   issues=[str(len(missing))+' shots specify a single still/frame, not a video IN/OUT range. Moving-video IN and OUT times are needed; no video segment was guessed.'],
    note='Moving-video review only: no loops, no still holds and no invented source ranges. The original script, SRT, filenames and narration are unchanged; captions/layout remain unimplemented and export is blocked.')
   save(p);return jsonify(public(p))
 
