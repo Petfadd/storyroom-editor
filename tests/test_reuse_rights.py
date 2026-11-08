@@ -18,3 +18,11 @@ class ReuseRightsTest(unittest.TestCase):
  def test_invalid_identifier_and_revocation(self):
   self.assertEqual(self.c.put(f'/api/projects/{self.pid}/assets/no-such/reuse-rights',json={'decision':'unreviewed'}).status_code,404)
   self.put({'decision':'approved','basis':'permission','details':'Written permission from rights holder','attested':True});self.assertEqual(self.put({'decision':'unreviewed'}).status_code,200);self.assertEqual(server.load(self.pid)['assets'][0]['reuse_review']['decision'],'unreviewed')
+ def test_bulk_approval_atomic_and_stale_list(self):
+  p=server.load(self.pid);p['assets'].append({'id':'b','name':'b.mp4','original_name':'b.mp4','path':'sources/b.mp4','kind':'video','duration':20,'source':'second','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':''});server.save(p)
+  url=f'/api/projects/{self.pid}/assets/reuse-rights';data={'asset_ids':['a','b'],'basis':'other','details':'Permissions for both files for this production','attested':True}
+  for invalid in [dict(data,attested=False),dict(data,details=' '),dict(data,asset_ids=['a']),dict(data,asset_ids=['a','a'])]:
+   self.assertEqual(self.c.put(url,json=invalid).status_code,400);self.assertTrue(all('reuse_review' not in a for a in server.load(self.pid)['assets']))
+  self.assertEqual(self.c.put(url,json=data).status_code,200);p=server.load(self.pid)
+  self.assertTrue(all(a['reuse_review']['decision']=='approved' and a['reuse_review']['details']==data['details'] and not a['reuse_review']['independent_verification'] for a in p['assets']));self.assertFalse(p['scenes'][0]['approved']);self.assertEqual((self.root/'sources/a.mp4').read_bytes(),b'original')
+  self.assertEqual(self.c.put(url,json=dict(data,details='Updated permissions')).status_code,200);self.assertEqual(server.load(self.pid)['assets'][0]['reuse_review_history'][0]['details'],data['details'])

@@ -758,6 +758,25 @@ def set_asset_reuse_rights(pid,aid):
    if scene.get('asset_id')==aid:scene['approved']=False
   save(p);return jsonify(public(p))
 
+@app.put('/api/projects/<pid>/assets/reuse-rights')
+def set_all_asset_reuse_rights(pid):
+ """Apply one expressly attested decision to the exact set shown to the user."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {};assets=p['assets'];ids=d.get('asset_ids')
+  if not assets:raise BadRequest('There are no uploaded sources to review.')
+  if not isinstance(ids,list) or len(ids)!=len(assets) or any(not isinstance(i,str) for i in ids) or set(ids)!={a['id'] for a in assets}:raise BadRequest('The uploaded sources changed. Refresh and review the list before approving.')
+  basis=d.get('basis','');details=str(d.get('details') or '').strip()
+  if d.get('attested') is not True:raise BadRequest('Confirm that your decision applies to every listed file.')
+  if basis not in ('permission','license','public_domain','other'):raise BadRequest('Choose the basis for your reuse decision.')
+  if not details or len(details)>5000:raise BadRequest('Provide supporting details and limits, up to 5,000 characters.')
+  now=time.time()
+  for a in assets:
+   if a.get('reuse_review'):a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+   a['reuse_review']={'decision':'approved','basis':basis,'details':details,'at':now,'attested':True,'independent_verification':False}
+  for scene in p['scenes']:
+   if scene.get('asset_id') in ids:scene['approved']=False
+  save(p);return jsonify(public(p))
+
 @app.patch('/api/projects/<pid>/assets/<aid>')
 def update_asset(pid,aid):
  with LOCKS[pid]:
