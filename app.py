@@ -249,11 +249,11 @@ def script_reading(p, include_shots=False):
   matches=[a for a in p['assets'] if asset_matches(a,row['source_file'])]
   if len(matches)!=1 or not (folder(p['id'])/matches[0]['path']).is_file():missing.append(row['source_file']);continue
   asset=matches[0]
-  if asset.get('kind')=='video' and (row['source_in_ms']/1000>=float(asset.get('duration') or 0) or (row['visual_status']=='VIDEO' and row['source_out_ms']/1000>float(asset.get('duration') or 0)+.001)):short.append(row['shot_id'])
+  if asset.get('kind')=='video' and (row['source_in_ms']/1000>=float(asset.get('duration') or 0) or ((row['visual_status']=='VIDEO' or row.get('native_static_interval')) and row['source_out_ms']/1000>float(asset.get('duration') or 0)+.001)):short.append(row['shot_id'])
  mismatches=sorted({b for row in rows if row.get('narration_mismatch') for b in row['srt_blocks']})
  result={'status':'read','shots':len(rows),'blocks':len({n for row in rows for n in row['srt_blocks']}),'duration_ms':rows[-1]['timeline_out_ms'],
          'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,
-         'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
+         'native_static_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval')), 'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
          'video_shots':sum(r.get('requested_treatment') in ('VIDEO','CONTEXT VIDEO','ARCHIVAL REUSE') for r in rows),
          'caption_shots':sum(bool(r.get('required_caption')) for r in rows),'narration_mismatch_blocks':mismatches,
          'blocker_count':sum(bool(r.get('import_blockers')) for r in rows)}
@@ -813,7 +813,9 @@ def script_draft(pid):
   if moving_only:
    prepared=draft_rows
    for row in prepared:
-    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+    if row.get('native_static_interval'):
+     row['native_static_review']=True
+    elif row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
      row['import_blockers']=['Still/freeze placement is omitted from this moving-video review; no frame or clip was substituted.']
   else:prepared=stills(p,folder(pid),draft_rows)
   original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
@@ -830,13 +832,54 @@ def script_draft(pid):
   if moving_only:
    p['script_moving_only']=True
    for scene in p['scenes']:
-    if (scene.get('plan_row') or {}).get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):scene['missing_video_out']=True
+    row=scene.get('plan_row') or {}
+    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval'):scene['missing_video_out']=True
   p['script_application']['mode']='moving_video_review' if moving_only else 'script_review_draft'
   p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
   p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()
   p['assembly_signature']=signature(p)
   update(pid,key,'saving_storyboard',detail='Saving the review timeline and its unresolved-shot report.')
   save(p);result=jsonify(public(p));update(pid,key,'done',detail=f'Review timeline saved: {p["script_application"]["placed_scenes"]} of {len(p["scenes"])} shots assigned.');return result
+
+@app.post('/api/projects/<pid>/native-static-review')
+def update_native_static_review(pid):
+ """Enable explicit native intervals in an existing untouched review, without rebuilding it."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('review_only_draft') or not p.get('script_moving_only') or p.get('manual_scene_edits'):
+   raise BadRequest('An unmodified moving-video review is required; existing edits were not changed.')
+  if p.get('edit_script_hash')!=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest():
+   raise BadRequest('The production script changed; existing shots were not changed.')
+  from document_plan import rows_for
+  from production import matching_assets
+  try:rows,mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production script: '+str(e))
+  if mode!='detailed_production_script':raise BadRequest('The script cannot be safely read.')
+  by_shot={r['shot_id']:r for r in rows};placed=[];unresolved=[]
+  for scene in p['scenes']:
+   old=scene.get('plan_row') or {};row=by_shot.get(old.get('shot_id'))
+   if not row or not row.get('native_static_interval'):continue
+   if scene.get('asset_id') or not scene.get('missing_video_out') or any(old.get(k)!=row.get(k) for k in ('shot_id','source_file','source_in_ms','source_out_ms','timeline_in_ms','timeline_out_ms')):
+    unresolved.append(row['shot_id']+': existing shot differs or is already assigned; left unchanged.');continue
+   matches=matching_assets(dict(p,source_bindings={}),row['source_file'])
+   if len(matches)!=1 or matches[0].get('kind')!='video' or not (folder(pid)/matches[0]['path']).is_file():
+    unresolved.append(row['shot_id']+': exact source missing or ambiguous.');continue
+   asset=matches[0];start=row['source_in_ms']/1000;end=row['source_out_ms']/1000
+   if end>float(asset.get('duration') or 0)+.001:
+    unresolved.append(row['shot_id']+': source video is too short.');continue
+   if any(other is not scene and other.get('asset_id')==asset['id'] and start < float((other.get('plan_row') or {}).get('source_out_ms',0))/1000 and end > float((other.get('plan_row') or {}).get('source_in_ms',0))/1000 for other in p['scenes']):
+    unresolved.append(row['shot_id']+': source interval overlaps another assigned shot.');continue
+   old.update(native_static_interval=True,native_static_review=True)
+   old['review_warnings']=[x for x in old.get('review_warnings',[]) if 'omitted from moving-only' not in x]+['Native static interval: count toward still allowance; identity, eligibility and rights need review.']
+   scene['asset_id']=asset['id'];scene['in_s']=start;scene['missing_video_out']=False;scene['approved']=False
+   scene['notes']+=' Native static interval is played directly for review; still eligibility, budget, identity and rights are unverified.'
+   placed.append(row['shot_id'])
+  info=p.get('script_application') or {};info['placed_scenes']=sum(bool(s.get('asset_id')) for s in p['scenes'])
+  info['issues']=[issue for issue in info.get('issues',[]) if not any(issue.startswith('Beat '+sid+':') for sid in placed)]
+  p['script_application']=info
+  if placed:save(p)
+  result=public(p);result['native_static_update']={'placed':placed,'unresolved':unresolved,'note':'Native intervals remain unverified still candidates, not genuine motion.'}
+  return jsonify(result)
 
 @app.post('/api/projects/<pid>/moving-review')
 def moving_review(pid):
@@ -850,11 +893,11 @@ def moving_review(pid):
   assets={a['id']:a for a in p['assets']};missing=[];moving=0
   for scene in p['scenes']:
    row=scene.get('plan_row') or {};asset=assets.get(scene.get('asset_id'))
-   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval'):
     if scene.get('asset_id'):scene['review_previous_asset_id']=scene['asset_id']
     scene['asset_id']=None;scene['in_s']=0;scene['approved']=False;scene.pop('script_camera',None)
     scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
-   elif row.get('requested_treatment')=='VIDEO' and asset and asset.get('kind')=='video':
+   elif (row.get('requested_treatment')=='VIDEO' or row.get('native_static_interval')) and asset and asset.get('kind')=='video':
     scene['missing_video_out']=False;moving+=1
    else:
     scene['asset_id']=None;scene['approved']=False;scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))

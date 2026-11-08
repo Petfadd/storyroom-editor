@@ -37,3 +37,21 @@ class PlainScriptTest(unittest.TestCase):
   with self.assertRaises(ValueError):rows_for(p)
   p.pop('srt_block_map');p['srt']['blocks'][0]['end_ms']=3999
   with self.assertRaises(ValueError):rows_for(p)
+
+class NativeStaticReviewTest(unittest.TestCase):
+ def test_preview_uses_original_interval_and_upgrades_old_gap(self):
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Synthetic'}).get_json()['id'];root=Path(tmp)/pid
+   p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':SCRIPT};
+   for name in ('First video.mp4','S02.mp4'):
+    path=root/'sources'/name;path.write_bytes(b'placeholder');p['assets'].append({'id':name,'name':name,'original_name':name,'kind':'video','duration':20,'path':'sources/'+name,'verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''})
+   server.save(p)
+   response=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True});self.assertEqual(response.status_code,200,response.get_data(as_text=True))
+   saved=server.load(pid);native=saved['scenes'][1];self.assertEqual(native['asset_id'],'S02.mp4');self.assertEqual(native['in_s'],5);self.assertTrue(native['plan_row']['native_static_interval']);self.assertTrue(saved['review_only_draft']);self.assertFalse(server.check(saved)['can_export']);self.assertEqual(len(saved['assets']),2)
+   native['asset_id']=None;native['in_s']=0;native['missing_video_out']=True;native['plan_row'].pop('native_static_interval');native['plan_row'].pop('native_static_review');saved['script_application']['issues'].append('Beat Srt002: omitted');server.save(saved)
+   response=c.post(f'/api/projects/{pid}/native-static-review');self.assertEqual(response.status_code,200,response.get_data(as_text=True));result=response.get_json();self.assertEqual(result['native_static_update']['placed'],['Srt002']);saved=server.load(pid);self.assertEqual(saved['scenes'][1]['asset_id'],'S02.mp4');self.assertFalse(saved['scenes'][1]['missing_video_out']);self.assertEqual(len(saved['assets']),2)
+   self.assertEqual(saved['production_script']['text'],SCRIPT);self.assertEqual(saved['srt']['blocks'],BLOCKS)
