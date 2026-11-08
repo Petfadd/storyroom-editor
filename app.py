@@ -219,6 +219,7 @@ def check(p,final=False):
   a=assets.get(s['asset_id'])
   scene_errors,scene_notes=scene_review(p,i,s,a,ranges,last,final)
   row=s.get('plan_row') or {}
+  if s.get('source_replacement_pending'):scene_errors.append(f'Scene {i+1}: review and approve the replaced source {s["source_replacement_pending"]} before export.')
   if row.get('strict_production'):
    if not s.get('approved'):scene_errors.append(f'Scene {i+1}: inspect the picture, identity, context and official source provenance before approval.')
    if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001:
@@ -284,7 +285,7 @@ def public(p):
  for i,scene in enumerate(d['scenes']):scene['motion_plan']=motion(scene,i)
  from production import reserve_id
  for a in d['assets']:
-  a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file';a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
+  a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file'+(f'?v={a["revision"]}' if a.get('revision') else '');a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
  if d['voiceover']:d['voiceover']['url']=f'/api/projects/{p["id"]}/narration'
  from automatic import automatic_readiness
  d['automatic_readiness']=automatic_readiness(p)
@@ -526,7 +527,19 @@ def perform_upload(pid,key=''):
    for scene in p['scenes']:scene['approved']=False
   elif kind=='asset':
    if ext not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use MP4/MOV video or JPG/PNG/WebP photographs.')
-   aid=uid();photo=ext in ['.jpg','.jpeg','.png','.webp'];dest=root/('assets' if photo else 'sources')/(aid+ext);update(pid,key,'saving')
+   photo=ext in ['.jpg','.jpeg','.png','.webp'];name=Path(f.filename).name
+   # Only identical video filenames replace each other; source numbers alone are not identities.
+   matches=[] if photo else [a for a in p['assets'] if a.get('kind')=='video' and not a.get('derived_from') and str(a.get('original_name') or a.get('name') or '').casefold()==name.casefold()]
+   replacement=None;old_paths=[]
+   if matches:
+    ids={a['id'] for a in matches};related=[a for a in p['assets'] if (a.get('derived_from') or {}).get('asset_id') in ids]
+    removable(pid,ids|{a['id'] for a in related})
+    import preview_render,scene_exports
+    # A job may be rendering an older project revision but still reading these paths.
+    with preview_render.GUARD: preview_busy=(preview_render.JOBS.get(pid) or {}).get('status') in ('running','queued')
+    with scene_exports.GUARD: scene_export_busy=(scene_exports.JOBS.get(pid) or {}).get('status') in ('running','queued')
+    if preview_busy or scene_export_busy:raise BadRequest('Wait for the current preview or scene export to finish before replacing footage.')
+   aid=matches[0]['id'] if matches else uid();dest=root/('assets' if photo else 'sources')/(uid()+ext);update(pid,key,'saving')
    try:
     save_local(f,dest,pid,key);check(pid,key);update(pid,key,'checking_image' if photo else 'checking_metadata')
     if photo:
@@ -541,7 +554,29 @@ def perform_upload(pid,key=''):
     dest.unlink(missing_ok=True)
     if isinstance(e,BadRequest):raise
     raise BadRequest('Media check failed: '+str(e)[:350])
-   p['assets'].append({'id':aid,'name':Path(f.filename).name,'original_name':Path(f.filename).name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':''})
+   asset={'id':aid,'name':name,'original_name':name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':'','revision':uid()}
+   if matches:
+    duplicate_ids={a['id'] for a in matches};derived_ids={a['id'] for a in related};affected=0;unassigned=0
+    # Derived images came from the old bytes: preserve them, but never keep them on the timeline as if they came from the replacement.
+    for item in related:
+     item['verified']=False;item['derived_from']['source_replaced']=True
+     if item.get('approval_record'):item['approval_record']['active']=False
+    for scene in p['scenes']:
+     old_id=scene.get('asset_id')
+     if old_id not in duplicate_ids|derived_ids:continue
+     affected+=1;scene['approved']=False;scene['source_replacement_pending']=name;scene.pop('thumbnail',None)
+     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if scene.get('transition')=='dissolve' else 0))/30
+     if old_id in derived_ids or float(scene.get('in_s') or 0)+length>duration+.001:
+      scene['review_previous_asset_id']=old_id;scene['asset_id']=None;unassigned+=1
+      scene['replacement_issue']='The replacement video is too short for this shot, or this shot used a frame derived from the previous upload.'
+     else:scene['asset_id']=aid;scene.pop('replacement_issue',None)
+    p['assets']=[a for a in p['assets'] if a['id'] not in duplicate_ids]+[asset]
+    p['source_bindings']={key:(aid if value in duplicate_ids else value) for key,value in (p.get('source_bindings') or {}).items()}
+    kept={a.get('path') for a in p['assets']};old_paths=[root/a['path'] for a in matches if a.get('path') and a['path'] not in kept]
+    from local_understanding import result_path
+    old_paths += [result_path(root,x) for x in duplicate_ids|derived_ids]
+    replacement={'name':name,'affected_scenes':affected,'unassigned_scenes':unassigned,'replaced_count':len(matches)}
+   else:p['assets'].append(asset)
   else:raise BadRequest('Unknown import type.')
   if kind=='asset':
    from approval import auto_approve_upload
@@ -549,7 +584,12 @@ def perform_upload(pid,key=''):
   if kind in ['srt','production_script']:
    from production import infer
    p['profile']=infer(p)['profile']
-  update(pid,key,'indexing');save(p)
+  update(pid,key,'indexing')
+  try:save(p)
+  except Exception:
+   if kind=='asset':dest.unlink(missing_ok=True)
+   raise
+  replacement_warnings=remove_local_files(root,old_paths) if kind=='asset' and old_paths else []
   from automatic import maybe_queue
   maybe_queue(sys.modules[__name__],p)
   # Automatic analysis only when explicitly enabled; it never delays the upload or
@@ -560,7 +600,9 @@ def perform_upload(pid,key=''):
     if kind=='voiceover':enqueue(root,'narration',root/p['voiceover']['path'],'audio',p['voiceover']['duration'])
     elif kind=='asset' and not photo:enqueue(root,aid,dest,'video',duration)
    except Exception as e:app.logger.warning('Could not queue local understanding: %s',e)
-  result=jsonify(public(p));update(pid,key,'done');return result
+  result=public(p)
+  if kind=='asset' and replacement:result['replaced_video']=replacement;result['replacement_warnings']=replacement_warnings
+  result=jsonify(result);update(pid,key,'done');return result
 @app.delete('/api/projects/<pid>/srt-block-map')
 def remove_block_map(pid):
  with LOCKS[pid]:
@@ -989,6 +1031,8 @@ def edit_scene(pid,sid):
    s['transition']=d['transition'];s['transition_handle_frames']=(s.get('transition_handle_frames') or 4) if s['transition']=='dissolve' else 0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
+  if s['approved'] and s.get('asset_id'):
+   s.pop('source_replacement_pending',None);s.pop('replacement_issue',None)
   if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
   save(p);return jsonify(public(p))
 
