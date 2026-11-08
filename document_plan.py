@@ -84,6 +84,8 @@ def srt_outline_blocks(text):
  return [{'number':n,'start_ms':a,'end_ms':b,'text':t} for n,a,b,t in rows],[]
 
 def script_beats(p):
+ from plain_script import is_plain_script,parse_plain_script
+ if is_plain_script(document(p)):return parse_plain_script(document(p),(p.get('srt') or {}).get('blocks',[]))
  from cue_script import is_cue_script,parse_cue_script
  if is_cue_script(document(p)):return parse_cue_script(document(p),(p.get('srt') or {}).get('blocks',[]))
  from detailed_script import parse_detailed
@@ -182,7 +184,8 @@ def rows_for(p):
  if p.get('srt_block_map'):
   from detailed_script import parse_detailed
   from cue_script import is_cue_script
-  if is_cue_script(document(p)) or parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[])):raise ValueError('A detailed production script and SRT block map are both present. Remove the block map before building; the script must control its own shots.')
+  from plain_script import is_plain_script
+  if is_plain_script(document(p)) or is_cue_script(document(p)) or parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[])):raise ValueError('A detailed production script and SRT block map are both present. Remove the block map before building; the script must control its own shots.')
  if p.get('srt_block_map'):
   rows,mode=[],'srt_block_map'
  else:

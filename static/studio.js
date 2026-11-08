@@ -17,10 +17,10 @@ function briefHTML(){
  const footageCount=(P.assets||[]).filter(a=>a.kind==='video'&&!a.derived_from).length;
  const reading=P.srt?scriptReadingHTML():'';
  const progressStatus=(P.review_only_draft||['queued','working','studying','storyboard_ready','rendering','error','interrupted'].includes(P.automatic_status?.status))?automaticStatusHTML():'';
- const reviewAction=!P.scenes.length&&P.srt&&footageCount?(P.script_reading?.status==='read'?'<button class="new" type="button" onclick="createScriptDraft()">Open video review</button>':'<button class="new" type="button" onclick="buildStoryboard()">Build storyboard</button>'):'';
+ const reviewAction=!P.scenes.length&&P.srt&&footageCount?'<button class="new" type="button" onclick="buildStoryboard()" '+(window.buildingStoryboard?'disabled':'')+'>Build storyboard</button>':P.scenes.length?'<button class="new" type="button" onclick="openTimeline()">Open timeline</button>':'';
  return `<div class="simple-setup">
  <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>
- ${reading}${progressStatus}
+ ${buildProgressHTML()}${reading}${progressStatus}
  <p class="setup-intro">Upload your production files below. The script tells you which footage filenames to upload.</p>
  <div class="setup-grid">
   <section class="card setup-card"><div class="setup-card-heading"><span class="setup-step">01</span><h3>Production script</h3><span class="setup-status ${P.production_script?'ready':''}">${P.production_script?'Uploaded':'Not uploaded'}</span></div><p>${P.production_script?E(P.production_script.name):'Upload your editing instructions.'}</p><div class="inline"><button type="button" onclick="chooseFile('production_script')">${P.production_script?'Replace script':'Upload script'}</button>${P.production_script?'<button type="button" onclick="removeInput(\'production_script\')">Remove</button>':''}</div><p class="small">TXT, Markdown, JSON or DOCX</p></section>
@@ -38,11 +38,14 @@ function scriptReadingHTML(){
  const policy=P.picture_policy==='clips_only'&&r.still_shots+r.freeze_shots?'This project is set to moving footage only, but the script requests stills and freeze-frames.':'';
  return `<div class="notice warn"><strong>Script read: ${r.blocks} SRT blocks · ${r.shots} shots</strong><p>${E(missing)} ${r.video_shots} video shots, ${r.still_shots} still holds and ${r.freeze_shots} freeze-frames.</p><p>${E(policy)} ${r.caption_shots} shots have editorial captions; the current renderer cannot yet place them as instructed. ${r.narration_mismatch_blocks.length} SRT blocks have wording differences from the approved script. No files have been changed.</p><p>These requirements need attention before this script can produce an accurate storyboard or export. Filename matches and decoded frames do not verify content, source version or rights.</p>${!P.scenes.length?'<button type="button" onclick="createScriptDraft()">Show shots in review timeline</button> ':''}<button type="button" onclick="showScriptReading()">Read the full shot plan and differences</button><div id="script-reading-detail"></div></div>`;
 }
-async function createScriptDraft(){
- if(!P||uploading)return;const id=P.id;uploading=true;toast('Preparing the moving-video review timeline…');
- try{const result=await api(`/api/projects/${id}/script-draft`,'POST',{moving_only:true});if(P?.id!==id)return;P=result;sceneIndex=0;pauseEditor();resetEditor();if($('#manage-dialog').open)$('#manage-dialog').close();renderProject();await list();toast('Video review timeline ready. Unresolved shots remain unassigned; export is blocked.')}
- catch(e){toast(e.message)}finally{uploading=false}
+function buildProgressHTML(){
+ const b=window.buildReport;if(!b||b.id!==P?.id)return '';
+ return `<div id="build-progress" class="notice ${b.error?'warn':''}" role="status" aria-live="polite"><strong>${E(b.title)}</strong><p>${E(b.detail)}</p>${b.running?'<progress aria-label="Building storyboard"></progress>':''}${b.done?'<p><button type="button" class="new" onclick="openTimeline()">Open timeline →</button></p>':''}</div>`;
 }
+function updateBuildProgress(id,title,detail,extra={}){window.buildReport={id,title,detail,...extra};const old=$('#build-progress');if(old)old.outerHTML=buildProgressHTML();else if($('#upload-feedback'))$('#upload-feedback').insertAdjacentHTML('afterend',buildProgressHTML())}
+function openTimeline(){if(!P?.scenes.length){toast('No timeline has been built yet.');return}pauseManagementMedia();if($('#manage-dialog').open)$('#manage-dialog').close();sceneIndex=0;resetEditor();renderProject()}
+async function createScriptDraft(){return buildStoryboard()}
+
 async function showScriptReading(){
  const id=P?.id;if(!id)return;const box=$('#script-reading-detail');if(!box)return;box.textContent='Reading the complete script…';
  try{const r=await api(`/api/projects/${id}/script-reading`);if(P?.id!==id||!box.isConnected)return;if(r.status!=='read'){box.textContent=r.detail||'No detailed shot plan was found.';return}
@@ -146,7 +149,23 @@ async function setSize(value){if(!P||!leave())return;try{P=await api('/api/proje
 async function setLayout(value){if(!P||!leave())return;try{P=await api('/api/projects/'+P.id,'PATCH',{image_layout:value});renderProject();toast('Photograph layout set to '+LAYOUT_LABEL[value].toLowerCase()+'. Render again to apply it.')}catch(e){toast(e.message)}}
 async function chooseFile(kind){if(!P||!leave())return;const picker=$('#file-picker');picker.value='';picker.multiple=kind==='asset';picker.removeAttribute('accept');picker.onchange=()=>importSelectedFiles(kind,picker.files);picker.click()}
 
-async function buildStoryboard(){if(window.buildingStoryboard||!leave())return;if(P.scenes.length&&!confirm('Rebuild all proposed scenes? Existing scene edits will be discarded.'))return;window.buildingStoryboard=true;const buttons=[...document.querySelectorAll('button[onclick="buildStoryboard()"]')].map(el=>({el,text:el.textContent}));buttons.forEach(({el})=>{el.disabled=true;el.textContent='Reading documents & assembling…'});try{P=await api(`/api/projects/${P.id}/storyboard`,'POST',{replace:true});tab='story';sceneIndex=0;await list();renderProject();const plan=P.script_application;toast(plan?.placed_scenes!==undefined?`${plan.placed_scenes} of ${P.scenes.length} draft beats placed. Inspect provisional frames before approval.`:'Draft storyboard built. All scenes require review.')}catch(e){toast(e.message)}finally{window.buildingStoryboard=false;buttons.forEach(({el,text})=>{if(el.isConnected){el.disabled=false;el.textContent=text}})}}
+async function buildStoryboard(){
+ if(window.buildingStoryboard||!leave()||!P)return;
+ if(P.scenes.length){updateBuildProgress(P.id,'Storyboard already exists','Existing work was not replaced. Open the timeline to review it.',{done:true});return}
+ const id=P.id,key=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+ window.buildingStoryboard=true;let timer;updateBuildProgress(id,'Building storyboard','Reading the production script and SRT…',{running:true});
+ const buttons=[...document.querySelectorAll('button[onclick="buildStoryboard()"]')];buttons.forEach(b=>b.disabled=true);
+ try{
+  timer=setInterval(async()=>{try{const r=await fetch(`/api/projects/${id}/imports/${key}`);if(!r.ok)return;const state=await r.json();if(P?.id===id&&window.buildingStoryboard&&state.detail)updateBuildProgress(id,'Building storyboard',state.detail,{running:true})}catch{}},500);
+  const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true})});
+  let result;try{result=await response.json()}catch{throw Error('The server response could not be read. Check the project before retrying.')}
+  if(!response.ok)throw Error(result.error||'The script could not be read.');
+  if(P?.id!==id)return;P=result;sceneIndex=0;const placed=P.script_application?.placed_scenes||0,total=P.scenes.length,issues=(P.script_application?.issues||[]).length;
+  updateBuildProgress(id,'Review timeline ready',`${placed} of ${total} cue shots assigned; ${issues} unresolved. Source content, captions, stills and rights still need review. No missing footage was substituted.`,{done:true});
+  renderProject();await list();
+ }catch(e){if(P?.id===id)updateBuildProgress(id,'Storyboard not built',e.message||'The build could not finish. Your uploads were kept.',{error:true})}
+ finally{clearInterval(timer);window.buildingStoryboard=false;buttons.forEach(b=>{if(b.isConnected)b.disabled=false})}
+}
 const options=(items,v)=>items.map(([k,t])=>`<option value="${E(k)}" ${k===v?'selected':''}>${E(t)}</option>`).join('');
 function media(a,controls=true){if(!a)return '<div class="media"><span class="muted">No visual assigned</span></div>';return `<div class="media">${a.kind==='image'?`<img src="${a.url}" alt="${E(a.name)}">`:`<video ${controls?'controls':''} preload="none" src="${a.url}${a.document_plan?.cuts?.length?'#t='+(a.document_plan.cuts[0].source_in_ms/1000):''}"></video>`}</div>`}
 function assetsHTML(){return `<div class="section-title"><div><h2>Imported footage</h2><p class="small">Local uploads are approved automatically under your instruction. This is not independent identity or copyright verification.</p></div><button class="new" onclick="chooseFile('asset')">＋ Import media</button></div>${footageRequirementsHTML()}${sourceMatchingHTML()}${P.assets.length?`<div class="asset-grid">${P.assets.map(a=>`<div class="card asset-card">${media(a)}<h3>${E(a.name)}</h3><p class="small">${a.verified?'Approved automatically for media use':a.approval_record?.active===false?'Approval revoked':'Not auto-approved'}${a.reserve?' · '+E(a.source_label)+' · '+(assetIsUsed(a)?'Explicitly placed':'Held in reserve'):''}</p>${sourceBindingHTML(a)}${plannedMediaHTML(a)}<button type="button" onclick="removeAsset('${E(a.id)}')">Remove from project</button></div>`).join('')}</div>`:'<div class="large-empty"><h2>Import your footage.</h2><p>Uploaded media will be approved automatically. Original filenames are retained for script matching.</p><button type="button" onclick="chooseFile(&quot;asset&quot;)">Import media</button></div>'}`}

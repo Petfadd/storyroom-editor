@@ -40,8 +40,6 @@ function closeManagement(){if(!leave())return;pauseManagementMedia();$('#manage-
 function renderManagement(){if(!P)return;$('#crumb').textContent=P.title;$('#manage-title').textContent={brief:'Production script, SRT & narration',assets:'Media uploads',delivery:'Review & export'}[tab]||'Production setup';$('#content').innerHTML=({brief:briefHTML,assets:assetsHTML,delivery:deliveryHTML}[tab]||briefHTML)();if(P.render?.url&&!P.render.current)$('#content').insertAdjacentHTML('afterbegin','<div class="notice warn">The saved MP4 is from an earlier edit. Render again to include current changes.</div>')}
 renderProject=function(){renderEditor();if($('#manage-dialog').open)renderManagement()};
 const oldNewProduction=newProduction;newProduction=function(){pauseEditor();oldNewProduction()};
-const savedBuild=buildStoryboard;
-buildStoryboard=async function(){await savedBuild();if(P?.scenes.length){tab='brief';pauseManagementMedia();if($('#manage-dialog').open)$('#manage-dialog').close();sceneIndex=0;resetEditor();renderProject();if(P.script_application?.issues.length){manage('brief');toast('Storyboard built with unresolved script instructions. See the script report; no missing intervals were guessed.')}else toast(P.picture_policy==='clips_only'?'Clips-only storyboard assembled automatically. Source and timing checks completed.':'Storyboard built from your SRT and available script instructions. Review the cut on V1.')}};
 selectScene=i=>selectEditorScene(i);
 const savedSplit=splitBeat,savedMerge=mergeBeat;
 splitBeat=async function(){pauseEditor();await savedSplit();sourceScene='';renderProject()};mergeBeat=async function(){pauseEditor();await savedMerge();sourceScene='';renderProject()};

@@ -273,7 +273,8 @@ def public(p):
  d['footage_requirements']=footage_requirements(p)
  if p.get('production_script'):
   from cue_script import is_cue_script
-  if is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
+  from plain_script import is_plain_script
+  if is_plain_script(p['production_script'].get('text','')) or is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
  d['validation']=check(p);d['final_validation']=check(p,True)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
@@ -785,6 +786,9 @@ def merge_scoped_rebuild(previous, rebuilt, blocks):
 @app.post('/api/projects/<pid>/script-draft')
 def script_draft(pid):
  """Display script shots for review; never claim unsupported instructions are rendered."""
+ from import_status import token,update
+ key=token(request.headers.get('X-Upload-ID',''))
+ update(pid,key,'reading_script',detail='Reading the production script and matching each shot to its SRT cue.')
  with LOCKS[pid]:
   editable(pid);p=load(pid)
   if p.get('scenes'):raise BadRequest('This production already has a storyboard. The review draft will not replace existing work.')
@@ -794,6 +798,7 @@ def script_draft(pid):
   try:rows,mode=rows_for(p)
   except ValueError as e:raise BadRequest('Production script: '+str(e))
   if mode!='detailed_production_script' or not rows:raise BadRequest('A recognized detailed production script and matching SRT are required.')
+  update(pid,key,'checking_sources',detail=f'Checked {len(rows)} cue instructions. Matching filenames and source ranges to uploaded footage.')
   review=script_reading(p)
   moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
   if (review.get('missing_files') or review.get('short_shots')) and not moving_only:raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
@@ -813,6 +818,7 @@ def script_draft(pid):
   else:prepared=stills(p,folder(pid),draft_rows)
   original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
   p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False
+  update(pid,key,'assembling',detail=f'Preparing {len(rows)} timeline shots from the explicit source ranges; unresolved shots stay empty.')
   try:assemble(p,seeds)
   except ValueError as e:raise BadRequest('Could not prepare review draft: '+str(e))
   finally:
@@ -829,7 +835,8 @@ def script_draft(pid):
   p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
   p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()
   p['assembly_signature']=signature(p)
-  save(p);return jsonify(public(p))
+  update(pid,key,'saving_storyboard',detail='Saving the review timeline and its unresolved-shot report.')
+  save(p);result=jsonify(public(p));update(pid,key,'done',detail=f'Review timeline saved: {p["script_application"]["placed_scenes"]} of {len(p["scenes"])} shots assigned.');return result
 
 @app.post('/api/projects/<pid>/moving-review')
 def moving_review(pid):
