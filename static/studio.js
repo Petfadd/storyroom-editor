@@ -151,6 +151,7 @@ async function chooseFile(kind){if(!P||!leave())return;const picker=$('#file-pic
 
 async function buildStoryboard(){
  if(window.buildingStoryboard||!leave()||!P)return;
+ if(!$('#manage-dialog').open)manage('brief');
  if(P.scenes.length){updateBuildProgress(P.id,'Storyboard already exists','Existing work was not replaced. Open the timeline to review it.',{done:true});return}
  const id=P.id,key=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
  window.buildingStoryboard=true;let timer;updateBuildProgress(id,'Building storyboard','Reading the production script and SRT…',{running:true});
