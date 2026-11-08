@@ -41,6 +41,9 @@ def span(row, whole, start, end, label, end_optional=False):
 def parse_detailed(text, blocks):
     """Return strict rows, [] for a legacy script, or fail closed on unsupported shot structure."""
     from document_plan import tables
+    if re.search(r'^##\s+Srt\d+\s*$',text,re.M|re.I) and re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',text,re.M|re.I):
+        from section_script import parse_section_script
+        return parse_section_script(text,blocks)
     found=[]
     for table in tables(text):
         if not table:continue

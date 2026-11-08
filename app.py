@@ -236,10 +236,38 @@ def check(p,final=False):
  if not final and any(not s['approved'] for s in p['scenes']):notes.append('Review export only. Scene approval and rights review are required for final delivery.')
  return {'errors':errors,'notes':notes,'can_export':not errors,'final':final}
 
+def script_reading(p, include_shots=False):
+ from document_plan import rows_for
+ from production import asset_matches
+ try:rows,mode=rows_for(p)
+ except ValueError as e:return {'status':'error','detail':str(e)}
+ if mode!='detailed_production_script':return {'status':'not_detailed'}
+ missing=[];short=[]
+ for row in rows:
+  matches=[a for a in p['assets'] if asset_matches(a,row['source_file'])]
+  if len(matches)!=1 or not (folder(p['id'])/matches[0]['path']).is_file():missing.append(row['source_file']);continue
+  asset=matches[0]
+  if asset.get('kind')=='video' and (row['source_in_ms']/1000>=float(asset.get('duration') or 0) or (row['visual_status']=='VIDEO' and row['source_out_ms']/1000>float(asset.get('duration') or 0)+.001)):short.append(row['shot_id'])
+ mismatches=sorted({b for row in rows if row.get('narration_mismatch') for b in row['srt_blocks']})
+ result={'status':'read','shots':len(rows),'blocks':len({n for row in rows for n in row['srt_blocks']}),'duration_ms':rows[-1]['timeline_out_ms'],
+         'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,
+         'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
+         'video_shots':sum(r.get('requested_treatment') in ('VIDEO','CONTEXT VIDEO','ARCHIVAL REUSE') for r in rows),
+         'caption_shots':sum(bool(r.get('required_caption')) for r in rows),'narration_mismatch_blocks':mismatches,
+         'blocker_count':sum(bool(r.get('import_blockers')) for r in rows)}
+ if include_shots:
+  result['shots_detail']=rows
+  text=(p.get('production_script') or {}).get('text','')
+  for key,title in (('project_instructions','Project instructions'),('final_checks','Final production checks')):
+   section=re.search(r'^##\s+'+re.escape(title)+r'\s*$\n(.*?)(?=^##\s|\Z)',text,re.M|re.S|re.I)
+   result[key]=section[1].strip() if section else ''
+ return result
+
 def public(p):
  d=copy.deepcopy(p)
  from document_plan import match_report
  d['source_match_report']=match_report(d)
+ if p.get('production_script') and re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
  d['validation']=check(p);d['final_validation']=check(p,True)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
@@ -1066,6 +1094,11 @@ def _shot_plan_prereqs(p):
  from shot_plan import _analysis
  if not p.get('srt'):raise BadRequest('Upload the authored SRT first; the plan is built from its blocks.')
  if not _analysis(folder(p['id'])) and any(a['kind']=='video' for a in p['assets']):raise BadRequest('The sources have not finished decoding yet. Run the build once, then open the plan builder.')
+
+@app.get('/api/projects/<pid>/script-reading')
+@project_io_lock
+def script_reading_report(pid):
+ return jsonify(script_reading(load(pid),include_shots=True))
 
 @app.get('/api/projects/<pid>/shot-index')
 def shot_index_report(pid):
