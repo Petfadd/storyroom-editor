@@ -55,3 +55,26 @@ class NativeStaticReviewTest(unittest.TestCase):
    native['asset_id']=None;native['in_s']=0;native['missing_video_out']=True;native['plan_row'].pop('native_static_interval');native['plan_row'].pop('native_static_review');saved['script_application']['issues'].append('Beat Srt002: omitted');server.save(saved)
    response=c.post(f'/api/projects/{pid}/native-static-review');self.assertEqual(response.status_code,200,response.get_data(as_text=True));result=response.get_json();self.assertEqual(result['native_static_update']['placed'],['Srt002']);saved=server.load(pid);self.assertEqual(saved['scenes'][1]['asset_id'],'S02.mp4');self.assertFalse(saved['scenes'][1]['missing_video_out']);self.assertEqual(len(saved['assets']),2)
    self.assertEqual(saved['production_script']['text'],SCRIPT);self.assertEqual(saved['srt']['blocks'],BLOCKS)
+
+class HeadedScriptTest(unittest.TestCase):
+ def test_headed_script_and_native_format(self):
+  text='# Project\n## Editor Assembly Instructions\nReview original sources.\n## Storyboard Production Script\n\n'+SCRIPT.replace('STILL (native static interval)','STILL — native static interval in source video')+'\n---\n\n## Final Coverage Summary\nClaims need review.\n'
+  rows,mode=rows_for({'production_script':{'text':text},'srt':{'blocks':copy.deepcopy(BLOCKS)}})
+  self.assertEqual(mode,'detailed_production_script');self.assertTrue(rows[1]['native_static_interval']);self.assertEqual(rows[1]['source_out_ms'],9000)
+  with self.assertRaises(ValueError):parse_plain_script('Shot: Srt999\n'+text,BLOCKS)
+ def test_review_rebuild_preserves_manual_edits(self):
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Test'}).get_json()['id'];root=Path(tmp)/pid;p=server.load(pid)
+   p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':SCRIPT}
+   for name in ('First video.mp4','S02.mp4'):
+    (root/'sources'/name).write_bytes(b'test');p['assets'].append({'id':name,'name':name,'original_name':name,'kind':'video','duration':20,'path':'sources/'+name,'verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''})
+   server.save(p)
+   self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True}).status_code,200)
+   self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True}).status_code,400)
+   self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True}).status_code,200)
+   saved=server.load(pid);saved['manual_scene_edits']=True;server.save(saved)
+   before=server.load(pid)['scenes'];self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True}).status_code,400);self.assertEqual(server.load(pid)['scenes'],before)

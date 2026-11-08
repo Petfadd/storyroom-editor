@@ -238,6 +238,9 @@ def check(p,final=False):
  if not final and any(not s['approved'] for s in p['scenes']):notes.append('Review export only. Scene approval and rights review are required for final delivery.')
  return {'errors':errors,'notes':notes,'can_export':not errors,'final':final}
 
+def is_plain_summary(text):
+ return bool(re.search(r'^##\s+Storyboard Production Script\s*$',text,re.M|re.I))
+
 def script_reading(p, include_shots=False):
  from document_plan import rows_for
  from production import asset_matches
@@ -260,7 +263,7 @@ def script_reading(p, include_shots=False):
  if include_shots:
   result['shots_detail']=rows
   text=(p.get('production_script') or {}).get('text','')
-  for key,title in (('project_instructions','Project instructions'),('final_checks','Final production checks')):
+  for key,title in (('project_instructions','Editor Assembly Instructions' if is_plain_summary(text) else 'Project instructions'),('final_checks','Final Coverage Summary' if is_plain_summary(text) else 'Final production checks')):
    section=re.search(r'^##\s+'+re.escape(title)+r'\s*$\n(.*?)(?=^##\s|\Z)',text,re.M|re.S|re.I)
    result[key]=section[1].strip() if section else ''
  return result
@@ -791,7 +794,9 @@ def script_draft(pid):
  update(pid,key,'reading_script',detail='Reading the production script and matching each shot to its SRT cue.')
  with LOCKS[pid]:
   editable(pid);p=load(pid)
-  if p.get('scenes'):raise BadRequest('This production already has a storyboard. The review draft will not replace existing work.')
+  payload=request.get_json(silent=True) or {}
+  if p.get('scenes') and not (payload.get('replace_review') is True and p.get('review_only_draft') and not p.get('manual_scene_edits')):
+   raise BadRequest('Existing storyboard was not replaced. Only an unmodified review draft can be rebuilt; manual edits must be preserved.')
   from document_plan import rows_for
   from edl import assemble,signature
   from conform import stills

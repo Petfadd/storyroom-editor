@@ -12,6 +12,17 @@ def is_plain_script(text):
 
 def parse_plain_script(text, blocks):
     if not blocks: raise ValueError('Import the original SRT before reading the script.')
+    # The authored summary and source audit are preserved in the document and remain
+    # unverified review instructions. Only the explicitly headed shot section is parsed.
+    if re.search(r'^##\s+Storyboard Production Script\s*$',text,re.M|re.I):
+        sections=list(re.finditer(r'^##\s+Storyboard Production Script\s*$',text,re.M|re.I))
+        if len(sections)!=1:raise ValueError('The script has multiple storyboard sections.')
+        section=sections[0];end=re.search(r'^##\s+',text[section.end():],re.M)
+        body=text[section.end():section.end()+end.start()] if end else text[section.end():]
+        body=re.sub(r'\n\s*---\s*$', '', body).strip()
+        if HEAD.search(text[:section.start()]) or (end and HEAD.search(text[section.end()+end.start():])):
+            raise ValueError('Shot instructions occur outside the storyboard section.')
+        text=body
     heads=list(HEAD.finditer(text))
     if not heads or text[:heads[0].start()].strip(): raise ValueError('Unsupported text before the first shot.')
     if [int(re.search(r'\d+',h[1])[0]) for h in heads] != [int(b['number']) for b in blocks]:
@@ -36,7 +47,7 @@ def parse_plain_script(text, blocks):
         if not re.fullmatch(r'[^/\\\r\n]+\.(?:mp4|mov)',source,re.I):raise ValueError(sid+': an exact full video filename is required.')
         treatment=fields['Treatment']
         if re.fullmatch(r'VIDEO\s*,\s*1\.0[×x]\s*,\s*loop\s+OFF',treatment,re.I): typ='VIDEO';requested='VIDEO'
-        elif re.fullmatch(r'STILL\s*\(native static interval\)',treatment,re.I):typ='STILL';requested='STILL HOLD'
+        elif re.fullmatch(r'STILL\s*(?:\(native static interval\)|[—–-]\s*native static interval in source video)',treatment,re.I):typ='STILL';requested='STILL HOLD'
         else:raise ValueError(sid+': unsupported treatment; no playback changes were assumed.')
         mismatch=norm(fields['Exact narration'])!=norm(cue.get('text',''))
         warnings=['Visual content, identity, source version and rights are not verified.','Caption and continuity instructions require review before rendering.']

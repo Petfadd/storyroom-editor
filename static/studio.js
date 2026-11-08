@@ -17,7 +17,7 @@ function briefHTML(){
  const footageCount=(P.assets||[]).filter(a=>a.kind==='video'&&!a.derived_from).length;
  const reading=P.srt?scriptReadingHTML():'';
  const progressStatus=(P.review_only_draft||['queued','working','studying','storyboard_ready','rendering','error','interrupted'].includes(P.automatic_status?.status))?automaticStatusHTML():'';
- const reviewAction=!P.scenes.length&&P.srt&&footageCount?'<button class="new" type="button" onclick="buildStoryboard()" '+(window.buildingStoryboard?'disabled':'')+'>Build storyboard</button>':P.scenes.length?'<button class="new" type="button" onclick="openTimeline()">Open timeline</button>':'';
+ const reviewAction=!P.scenes.length&&P.srt&&footageCount?'<button class="new" type="button" onclick="buildStoryboard()" '+(window.buildingStoryboard?'disabled':'')+'>Build storyboard</button>':P.scenes.length?'<button class="new" type="button" onclick="openTimeline()">Open timeline</button> <button type="button" onclick="buildStoryboard()">Rebuild review from script</button>':'';
  return `<div class="simple-setup">
  <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>
  ${buildProgressHTML()}${reading}${progressStatus}
@@ -152,13 +152,14 @@ async function chooseFile(kind){if(!P||!leave())return;const picker=$('#file-pic
 async function buildStoryboard(){
  if(window.buildingStoryboard||!leave()||!P)return;
  if(!$('#manage-dialog').open)manage('brief');
- if(P.scenes.length){updateBuildProgress(P.id,'Storyboard already exists','Existing work was not replaced. Open the timeline to review it.',{done:true});return}
+ if(P.scenes.length&&(!P.review_only_draft||P.manual_scene_edits)){updateBuildProgress(P.id,'Existing edits preserved','This timeline contains work that cannot be automatically replaced. Review it before rebuilding.',{done:true});return}
+ if(P.scenes.length&&!confirm('Rebuild the existing review timeline from the currently uploaded script? The current review placements will be replaced. Uploaded script, SRT, narration and footage will be kept.'))return;
  const id=P.id,key=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
  window.buildingStoryboard=true;let timer;updateBuildProgress(id,'Building storyboard','Reading the production script and SRT…',{running:true});
  const buttons=[...document.querySelectorAll('button[onclick="buildStoryboard()"]')];buttons.forEach(b=>b.disabled=true);
  try{
   timer=setInterval(async()=>{try{const r=await fetch(`/api/projects/${id}/imports/${key}`);if(!r.ok)return;const state=await r.json();if(P?.id===id&&window.buildingStoryboard&&state.detail)updateBuildProgress(id,'Building storyboard',state.detail,{running:true})}catch{}},500);
-  const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true})});
+  const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true,replace_review:!!P.scenes.length})});
   let result;try{result=await response.json()}catch{throw Error('The server response could not be read. Check the project before retrying.')}
   if(!response.ok)throw Error(result.error||'The script could not be read.');
   if(P?.id!==id)return;P=result;sceneIndex=0;const placed=P.script_application?.placed_scenes||0,total=P.scenes.length,issues=(P.script_application?.issues||[]).length;
