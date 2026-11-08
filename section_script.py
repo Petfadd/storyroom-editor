@@ -26,7 +26,6 @@ def parse_section_script(text, blocks):
                 clip=item['Clip'].strip().upper()
                 if clip in register:raise ValueError('Duplicate source-register clip '+clip+'.')
                 register[clip]=item
-    if not register:raise ValueError('This section-based script needs its source clip register.')
     rows=[];last=0
     for i,section in enumerate(headings):
         number=int(section[1]);end=headings[i+1].start() if i+1<len(headings) else len(text)
@@ -58,10 +57,10 @@ def parse_section_script(text, blocks):
             tin,tout=clock(placement[1]),clock(placement[2])
             if tin!=last or tout<=tin or tin<cue['start_ms'] or tout>cue['end_ms']:raise ValueError(sid+': timeline gap, overlap or out-of-block shot.')
             last=tout
-            src=re.search(r'`(S\d+\.(?:mp4|mov))`\s*·\s*\*\*Clip\*\*\s*(C\d+)\s*·\s*\*\*Treatment\*\*\s*(.*)',fields['Source'],re.I)
+            src=re.search(r'`(S\d+\.(?:mp4|mov))`\s*·\s*(?:\*\*Clip\*\*\s*(C\d+)\s*·\s*)?\*\*Treatment\*\*\s*(.*)',fields['Source'],re.I)
             if not src:raise ValueError(sid+': source, clip or treatment is missing.')
-            file,clip=src[1],src[2].upper();entry=register.get(clip)
-            if not entry or entry['Source'].strip().casefold()!=file.casefold():raise ValueError(sid+': clip reference does not match the source register.')
+            file,clip=src[1],(src[2] or '').upper();entry=register.get(clip) if clip else None
+            if clip and (not entry or entry['Source'].strip().casefold()!=file.casefold()):raise ValueError(sid+': clip reference does not match the source register.')
             treatment_text=src[3].strip().rstrip('.');treatment=re.sub(r'\s*·\s*intentional archival reuse\s*$','',treatment_text,flags=re.I).upper()
             if treatment=='NORMAL-SPEED VIDEO':treatment='VIDEO'
             if treatment not in ('VIDEO','STILL HOLD','EDITORIAL FREEZE-FRAME'):raise ValueError(sid+': unsupported treatment '+treatment_text)
@@ -73,16 +72,16 @@ def parse_section_script(text, blocks):
             else:
                 if not frame:raise ValueError(sid+': explicit source frame is required.')
                 source_in=clock(frame[1]);source_out=source_in+1
-            window=entry['Original window or extraction time'];times=re.findall(CLOCK,window)
-            if not times:raise ValueError(sid+': source register has no clock.')
-            if treatment=='VIDEO' and (len(times)!=2 or source_in<clock(times[0]) or source_out>clock(times[1])):raise ValueError(sid+': segment is outside the registered source window.')
-            if treatment=='STILL HOLD' and ('Frame' not in window or source_in!=clock(times[0])):raise ValueError(sid+': still frame differs from its registered extraction.')
-            if treatment=='EDITORIAL FREEZE-FRAME' and (len(times)!=2 or source_in!=clock(times[1])-1):raise ValueError(sid+': freeze must be the last displayed frame before registered exclusive OUT.')
+            window=entry['Original window or extraction time'] if entry else '';times=re.findall(CLOCK,window)
+            if entry and not times:raise ValueError(sid+': source register has no clock.')
+            if entry and treatment=='VIDEO' and (len(times)!=2 or source_in<clock(times[0]) or source_out>clock(times[1])):raise ValueError(sid+': segment is outside the registered source window.')
+            if entry and treatment=='STILL HOLD' and ('Frame' not in window or source_in!=clock(times[0])):raise ValueError(sid+': still frame differs from its registered extraction.')
+            if entry and treatment=='EDITORIAL FREEZE-FRAME' and (len(times)!=2 or source_in!=clock(times[1])-1):raise ValueError(sid+': freeze must be the last displayed frame before registered exclusive OUT.')
             if not re.fullmatch(r'Mute source\. Continue narration\.',fields['Audio'],re.I):raise ValueError(sid+': unsupported audio instruction; no audio was substituted.')
             warnings=['Editorial caption and its layout must be implemented and reviewed before rendering.']
             if mismatch:warnings.append('Approved script narration differs from uploaded SRT wording; compare without changing either file.')
             if treatment=='EDITORIAL FREEZE-FRAME':warnings.append('Freeze must use the final displayed frame before the previous exclusive OUT; exact frame selection needs implementation and verification.')
             if re.search(r'\b(?:crop|inset|plain field|plain dark field|names under|text beside)',fields['Edit and continuity'],re.I):warnings.append('Requested crop, inset or text placement requires explicit implementation and review.')
-            rows.append({'beat_id':sid,'shot_id':sid,'clip_id':clip,'srt_blocks':[number],'timeline_in_ms':tin,'timeline_out_ms':tout,'source_file':file,'source_in_ms':source_in,'source_out_ms':source_out,'visual_status':'VIDEO' if treatment=='VIDEO' else 'STILL','requested_treatment':treatment,'intentional_archival_reuse':'archival reuse' in treatment_text.lower(),'visible_content':fields['Actually visible'],'picture_treatment':treatment,'limit_on_implication':fields['Meaning and limits'],'required_caption':fields['Editorial caption'],'source_audio_instruction':fields['Audio'],'match_reason':fields['Edit and continuity'],'script_narration':authored,'srt_narration':cue.get('text',''),'narration_mismatch':mismatch,'register_window':window,'register_visible':entry['Visible content'],'register_restrictions':entry['Treatment and restrictions'],'coverage_review':'Declared in script; source content, identity, version and rights require review.','import_blockers':warnings,'strict_production':True,'transition_out':'cut'})
+            rows.append({'beat_id':sid,'shot_id':sid,'clip_id':clip,'srt_blocks':[number],'timeline_in_ms':tin,'timeline_out_ms':tout,'source_file':file,'source_in_ms':source_in,'source_out_ms':source_out,'visual_status':'VIDEO' if treatment=='VIDEO' else 'STILL','requested_treatment':treatment,'intentional_archival_reuse':'archival reuse' in treatment_text.lower(),'visible_content':fields['Actually visible'],'picture_treatment':treatment,'limit_on_implication':fields['Meaning and limits'],'required_caption':fields['Editorial caption'],'source_audio_instruction':fields['Audio'],'match_reason':fields['Edit and continuity'],'script_narration':authored,'srt_narration':cue.get('text',''),'narration_mismatch':mismatch,'register_window':window,'register_visible':entry['Visible content'] if entry else '','register_restrictions':entry['Treatment and restrictions'] if entry else '','coverage_review':'Declared in script; source content, identity, version and rights require review.','import_blockers':warnings,'strict_production':True,'transition_out':'cut'})
         if last!=cue['end_ms']:raise ValueError(f'Srt{number:02}: shots do not cover the complete cue.')
     return parse(json.dumps(rows).encode(),'.json')

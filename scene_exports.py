@@ -22,7 +22,7 @@ def scene_name(index):
 
 def clip_filename(scene, index):
     row=scene.get('plan_row') or {}
-    return row.get('clip_id', '') + '.mp4' if row.get('strict_production') else scene_name(index)
+    return row['clip_id'] + '.mp4' if row.get('strict_production') and row.get('clip_id') else scene_name(index)
 
 
 def status(root, pid, updated):

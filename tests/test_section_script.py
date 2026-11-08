@@ -68,3 +68,12 @@ class SectionScriptTest(unittest.TestCase):
         original=BLOCKS[0]['text'];parse_section_script(SCRIPT,BLOCKS);self.assertEqual(BLOCKS[0]['text'],original)
 
 if __name__=='__main__':unittest.main()
+
+class SourceOnlySectionTest(unittest.TestCase):
+    def test_explicit_source_ranges_work_without_clip_reference_or_register(self):
+        text=SCRIPT[:SCRIPT.index('## Source clip register')]+SCRIPT[SCRIPT.index('## Srt01'):]
+        text=text.replace(' · **Clip** C02','').replace(' · **Clip** C09','')
+        rows=parse_section_script(text,BLOCKS)
+        self.assertEqual([r['source_file'] for r in rows],['S01.mp4','S02.mp4'])
+        self.assertEqual([r['clip_id'] for r in rows],['',''])
+        self.assertEqual((rows[1]['source_in_ms'],rows[1]['source_out_ms']),(2000,4000))

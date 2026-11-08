@@ -42,6 +42,9 @@ class SceneExportsTest(unittest.TestCase):
         p=server.load(self.pid);p['title']='Change';server.save(p)
         self.assertEqual(self.c.get(f'/api/projects/{self.pid}').get_json()['scene_exports']['status'],'stale')
         self.assertTrue(archive.exists())
+    def test_source_only_script_has_safe_legacy_export_name(self):
+        self.assertEqual(scene_exports.clip_filename({'plan_row':{'strict_production':True,'clip_id':''}},2),'C02.mp4')
+
     def test_scene_number_scales_beyond_99(self):
         self.assertEqual([scene_exports.scene_name(i) for i in [1,9,10,99,100,1000]],['C01.mp4','C09.mp4','C10.mp4','C99.mp4','C100.mp4','C1000.mp4'])
 

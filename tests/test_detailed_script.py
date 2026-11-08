@@ -82,3 +82,10 @@ class RealBuildTest(unittest.TestCase):
             scene=server.load(pid)['scenes'][0];self.assertEqual(scene['plan_row']['extracted_frame_ms'],2000);self.assertEqual(scene['plan_row']['requested_treatment'],'EDITORIAL FREEZE-FRAME');self.assertEqual(scene['script_camera']['move'],'static')
 
 if __name__=='__main__':unittest.main()
+
+class SourceOnlyDetailedTest(unittest.TestCase):
+    def test_clip_column_can_be_omitted_without_changing_timing(self):
+        text='| Shot | Source file | Narration timeline IN → OUT | Source IN → OUT | Treatment | Visual description |\n|---|---|---|---|---|---|\n| Srt01-A | S01.mp4 | 00:00.000 → 00:04.000 | 00:01.000 → 00:05.000 | VIDEO | Street |\n| Srt02-A | S03.mp4 | 00:04.000 → 00:08.000 | 00:02.000 → 00:06.000 | VIDEO | Courthouse |\n'
+        rows=parse_detailed(text,BLOCKS)
+        self.assertEqual([r['clip_id'] for r in rows],['',''])
+        self.assertEqual([(r['source_file'],r['source_in_ms'],r['source_out_ms']) for r in rows],[('S01.mp4',1000,5000),('S03.mp4',2000,6000)])

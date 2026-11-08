@@ -52,7 +52,7 @@ def parse_detailed(text, blocks):
             found.extend({key(k):v for k,v in row.items()} for row in table)
     if not found:
         if re.search(r'\bSrt\s*0*\d+\s*-\s*[A-Za-z]+\b',text,re.I):
-            raise ValueError('Detailed SrtNN-A shots were found, but no supported shot table was recognized. Provide explicit shot, clip, source, timeline, source time and treatment columns; no fallback was applied.')
+            raise ValueError('Detailed SrtNN-A shots were found, but no supported shot table was recognized. Provide explicit shot, source, timeline, source time and treatment columns; no fallback was applied.')
         return []
     prose=[line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith(('|','#')) and not re.fullmatch(r'[-*_ ]+',line.strip())]
     if prose:raise ValueError('The detailed script contains text outside its shot tables. Its instructions cannot be safely interpreted automatically; review and adapt the parser before assembly.')
@@ -77,7 +77,7 @@ def parse_detailed(text, blocks):
         seen.add(sid.casefold());last_block,last_suffix=block,suffix
         clip=value(row,'clip','clip_id','clip_reference','clip_ref')
         src=value(row,'source_file','source','source_video','filename','file','source_filename')
-        if not CLIP.fullmatch(clip):raise ValueError(label+': provide an explicit clip reference such as C01.')
+        if clip and not CLIP.fullmatch(clip):raise ValueError(label+': the optional reference is not recognized.')
         if not SOURCE.fullmatch(src):raise ValueError(label+': provide an exact source filename such as S01.mp4.')
         tin,tout=span(row,('narration_timeline_in_out','timeline_in_out','narration_in_out','timeline'),('narration_timeline_in','timeline_in','narration_in'),('narration_timeline_out','timeline_out','narration_out'),'Narration timeline')
         if tin!=last_t or tout<=tin:raise ValueError(label+': timeline must be ordered, contiguous, non-overlapping and start at zero.')

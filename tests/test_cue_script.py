@@ -50,3 +50,14 @@ class CueScriptTest(unittest.TestCase):
  def test_rejects_register_clock_or_order_changes(self):
   for text in [SCRIPT.replace('OUT 00:00:03,000 exclusive','OUT 00:00:03,100 exclusive'),SCRIPT.replace('C001 · S01.mp4','C001 · S03.mp4'),SCRIPT.replace('## Srt002','## Srt003')]:
    with self.assertRaises(ValueError):parse_cue_script(text,BLOCKS)
+
+class SourceOnlyCueTest(unittest.TestCase):
+ def test_source_filename_and_times_need_no_clip_label_or_register(self):
+  text=SCRIPT[ SCRIPT.index('## Srt001'): ].replace('C001 · ','').replace('C002 · ','')
+  rows=parse_cue_script(text,BLOCKS)
+  self.assertEqual([r['source_file'] for r in rows],['S01.mp4','S02.mp4'])
+  self.assertEqual([r['clip_id'] for r in rows],['',''])
+  self.assertEqual((rows[0]['source_in_ms'],rows[0]['source_out_ms']),(1000,3000))
+ def test_source_only_still_cannot_hide_a_bad_duration(self):
+  text=SCRIPT[SCRIPT.index('## Srt001'):].replace('C001 · ','').replace('C002 · ','').replace('OUT 00:00:03,000 exclusive','OUT 00:00:03,100 exclusive')
+  with self.assertRaises(ValueError):parse_cue_script(text,BLOCKS)
