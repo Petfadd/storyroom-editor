@@ -4,11 +4,11 @@ The production script, SRT and uploaded files remain unchanged. A source filenam
 
 ## Source-based instructions
 
-- Follow original SRT block order and, when a block contains several shots, the authored shot order. Preserve narration wording, names and timestamps.
+- Use exactly one shot per SRT cue, in original SRT order. Each shot covers its cue’s complete timeline IN/OUT and uses the cue ID (for example, Srt001), not A/B/C subdivisions. Preserve narration wording, names and timestamps. If an older script splits a cue or spans cues, report it for review rather than silently merging or splitting its instructions.
 - Identify each full source by its exact uploaded filename, such as `S01.mp4`. Numbering may have gaps and does not establish playback order. Do not rename sources or silently substitute a different upload.
 - For each moving shot specify its timeline IN/OUT and its source IN/OUT. Source OUT is exclusive. Use the exact source interval at 1.0×, with looping off; keep continuous footage advancing across subtitle boundaries.
 - Separate clip labels are optional in supported scripts and are not displayed on the storyboard. Older scripts that contain them remain readable; their original text and references are preserved. Where an older script provides a linked register, conflicting instructions are reported rather than silently overridden.
-- The editor can read supported cue-per-section, section-per-SRT shot and detailed shot-table formats. A source-only version of those formats can omit separate clip references. Unsupported or ambiguous formats and instructions require review; the editor must not guess source times.
+- The editor can read supported cue-per-section, section-per-SRT shot and detailed shot-table formats. A source-only version of those formats can omit separate clip references. Unsupported or ambiguous formats and instructions require review; the editor must not guess source times. The current structured plan parser also requires a contiguous timeline starting at zero, so SRTs with gaps cannot yet be conformed to this rule automatically.
 
 ## Safety and editorial review
 

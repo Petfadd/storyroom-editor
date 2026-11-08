@@ -30,7 +30,7 @@ class DetailedScriptTest(unittest.TestCase):
         self.assertEqual([r['source_file'] for r in result],['S01.mp4','S01.mp4','S03.mp4'])
         self.assertEqual(result[1]['srt_blocks'],[1,2])
         self.assertEqual((result[1]['timeline_in_ms'],result[1]['timeline_out_ms'],result[1]['source_in_ms'],result[1]['source_out_ms']),(3000,5000,4000,6000))
-        self.assertEqual(rows_for({'production_script':{'text':table(valid_rows())},'srt':{'blocks':BLOCKS}})[1],'detailed_production_script')
+        with self.assertRaisesRegex(ValueError, 'exactly one shot'):rows_for({'production_script':{'text':table(valid_rows())},'srt':{'blocks':BLOCKS}})
     def test_gap_overlap_bad_clocks_or_unrecognised_shape_fail_closed(self):
         for clock in ['00:03.100 → 00:05.000','00:02.900 → 00:05.000']:
             rows=valid_rows();rows[1][3]=clock
@@ -58,11 +58,14 @@ class DetailedScriptTest(unittest.TestCase):
         p['scenes']=[];p['srt']={'blocks':BLOCKS};p['picture_plan']={'beats':self.parse(rows)};assemble(p,[{"srt_blocks":[1]},{"srt_blocks":[2]}]);self.assertEqual(p['scenes'][2]['asset_id'],'a')
         rows[2][5]='VIDEO';p['scenes']=[];p['srt']={'blocks':BLOCKS};p['picture_plan']={'beats':self.parse(rows)};assemble(p,[{"srt_blocks":[1]},{"srt_blocks":[2]}]);self.assertIsNone(p['scenes'][2]['asset_id'])
 
+def single_rows():
+    return [row('Srt01','C12','S01.mp4','00:00.000 → 00:04.000','00:01.000 → 00:05.000'), row('Srt02','C10','S03.mp4','00:04.000 → 00:08.000','00:02.000 → 00:06.000')]
+
 class RealBuildTest(unittest.TestCase):
     def test_build_uses_authored_cuts_and_rejects_unsupported(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)), patch('automatic.full_source_analysis',return_value={}):
             c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Synthetic'}).get_json()['id'];root=Path(tmp)/pid
-            p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':table(valid_rows())};p['allow_archive_reuse']=True
+            p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':table(single_rows())};p['allow_archive_reuse']=True
             ff=imageio_ffmpeg.get_ffmpeg_exe()
             for name in ['S01.mp4','S03.mp4']:
                 subprocess.run([ff,'-y','-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=30:duration=10','-c:v','libx264','-pix_fmt','yuv420p',str(root/name)],check=True)
@@ -71,12 +74,12 @@ class RealBuildTest(unittest.TestCase):
             with patch('automatic.native_rows',side_effect=AssertionError('native conform called')), patch('picture_flow.apply_flow',side_effect=AssertionError('flow called')):
                 result=c.post(f'/api/projects/{pid}/storyboard',json={})
             self.assertEqual(result.status_code,200,result.get_data(as_text=True))
-            saved=server.load(pid);self.assertEqual([(s['frame_in'],s['frame_out'],s['in_s']) for s in saved['scenes']],[(0,90,1),(90,150,4),(150,240,2)])
-            self.assertFalse(saved['allow_archive_reuse']);self.assertEqual([s['plan_row']['clip_id'] for s in saved['scenes']],['C12','C02','C10'])
+            saved=server.load(pid);self.assertEqual([(s['frame_in'],s['frame_out'],s['in_s']) for s in saved['scenes']],[(0,120,1),(120,240,2)])
+            self.assertFalse(saved['allow_archive_reuse']);self.assertEqual([s['plan_row']['clip_id'] for s in saved['scenes']],['C12','C10'])
             self.assertTrue(all(not s['approved'] for s in saved['scenes']))
-            rows=valid_rows();rows[0][7]='Required caption: Location';saved['production_script']['text']=table(rows);server.save(saved)
+            rows=single_rows();rows[0][7]='Required caption: Location';saved['production_script']['text']=table(rows);server.save(saved)
             failed=c.post(f'/api/projects/{pid}/storyboard',json={'replace':True});self.assertEqual(failed.status_code,400);self.assertIn('caption',failed.get_data(as_text=True).lower())
-            rows=valid_rows();rows[0][5]='EDITORIAL FREEZE-FRAME';rows[0][4]='00:02.000'
+            rows=single_rows();rows[0][5]='EDITORIAL FREEZE-FRAME';rows[0][4]='00:02.000'
             saved=server.load(pid);saved['production_script']['text']=table(rows);saved['picture_policy']='mixed';server.save(saved)
             frozen=c.post(f'/api/projects/{pid}/storyboard',json={'replace':True});self.assertEqual(frozen.status_code,200,frozen.get_data(as_text=True))
             scene=server.load(pid)['scenes'][0];self.assertEqual(scene['plan_row']['extracted_frame_ms'],2000);self.assertEqual(scene['plan_row']['requested_treatment'],'EDITORIAL FREEZE-FRAME');self.assertEqual(scene['script_camera']['move'],'static')
@@ -89,3 +92,24 @@ class SourceOnlyDetailedTest(unittest.TestCase):
         rows=parse_detailed(text,BLOCKS)
         self.assertEqual([r['clip_id'] for r in rows],['',''])
         self.assertEqual([(r['source_file'],r['source_in_ms'],r['source_out_ms']) for r in rows],[('S01.mp4',1000,5000),('S03.mp4',2000,6000)])
+
+class OneCueTest(unittest.TestCase):
+    def test_single_cue_id_builds_without_letter(self):
+        p={'production_script':{'text':table(single_rows())},'srt':{'blocks':BLOCKS}}
+        rows,mode=rows_for(p)
+        self.assertEqual(mode,'detailed_production_script')
+        self.assertEqual([r['shot_id'] for r in rows],['Srt01','Srt02'])
+    def test_wrong_cue_timing_is_rejected_without_rewriting(self):
+        rows=single_rows();rows[0][3]='00:00.000 → 00:03.000';rows[0][4]='00:01.000 → 00:04.000';rows[1][3]='00:03.000 → 00:08.000';rows[1][4]='00:02.000 → 00:07.000'
+        p={'production_script':{'text':table(rows)},'srt':{'blocks':BLOCKS}}
+        before=p['production_script']['text']
+        with self.assertRaisesRegex(ValueError,'complete timeline'):rows_for(p)
+        self.assertEqual(p['production_script']['text'],before)
+
+class OneCueEndpointsTest(unittest.TestCase):
+    def test_split_and_merge_are_blocked(self):
+        c=server.app.test_client()
+        for action in ('split','merge'):
+            result=c.post('/api/projects/test/scenes/test/'+action,json={'offset_s':1})
+            self.assertEqual(result.status_code,400)
+            self.assertIn('one shot per SRT cue',result.get_data(as_text=True))

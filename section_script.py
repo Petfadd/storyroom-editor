@@ -38,12 +38,12 @@ def parse_section_script(text, blocks):
         if not narration:raise ValueError(f'Srt{number:02}: approved narration is missing.')
         authored=' '.join(re.sub(r'^>\s*','',line).strip() for line in narration[1].splitlines())
         mismatch=norm(authored)!=norm(cue.get('text',''))
-        shot_headers=list(re.finditer(r'^###\s+(Srt\d+-[A-Za-z]+)\s*$',content,re.M|re.I))
+        shot_headers=list(re.finditer(r'^###\s+(Srt\d+(?:-[A-Za-z]+)?)\s*$',content,re.M|re.I))
         if not shot_headers:raise ValueError(f'Srt{number:02}: no shots found.')
         expected=1
         for j,sh in enumerate(shot_headers):
-            sid=sh[1];m=re.fullmatch(r'Srt0*(\d+)-([A-Za-z]+)',sid,re.I);suffix=0
-            for letter in m[2].upper():suffix=suffix*26+ord(letter)-64
+            sid=sh[1];m=re.fullmatch(r'Srt0*(\d+)(?:-([A-Za-z]+))?',sid,re.I);suffix=0
+            for letter in (m[2] or "A").upper():suffix=suffix*26+ord(letter)-64
             if int(m[1])!=number or suffix!=expected:raise ValueError(sid+': shots must be in block and letter order.')
             expected+=1
             shot=content[sh.end():(shot_headers[j+1].start() if j+1<len(shot_headers) else len(content))]
@@ -58,7 +58,7 @@ def parse_section_script(text, blocks):
             if tin!=last or tout<=tin or tin<cue['start_ms'] or tout>cue['end_ms']:raise ValueError(sid+': timeline gap, overlap or out-of-block shot.')
             last=tout
             src=re.search(r'`(S\d+\.(?:mp4|mov))`\s*·\s*(?:\*\*Clip\*\*\s*(C\d+)\s*·\s*)?\*\*Treatment\*\*\s*(.*)',fields['Source'],re.I)
-            if not src:raise ValueError(sid+': source, clip or treatment is missing.')
+            if not src:raise ValueError(sid+': source or treatment is missing or unsupported.')
             file,clip=src[1],(src[2] or '').upper();entry=register.get(clip) if clip else None
             if clip and (not entry or entry['Source'].strip().casefold()!=file.casefold()):raise ValueError(sid+': clip reference does not match the source register.')
             treatment_text=src[3].strip().rstrip('.');treatment=re.sub(r'\s*·\s*intentional archival reuse\s*$','',treatment_text,flags=re.I).upper()

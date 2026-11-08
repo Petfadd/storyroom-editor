@@ -29,6 +29,7 @@ def parse_cue_script(text, blocks):
         content=re.split(r'^##\s+(?!Srt\d+)',content,maxsplit=1,flags=re.M|re.I)[0]
         original=re.search(r'Original SRT cue\s*\*\*(\d+)\*\*\s*·\s*Original time\s*\*\*('+CLOCK+r')\s*-->\s*('+CLOCK+r')\*\*',content,re.I)
         placement=re.search(r'\*\*Picture placement\*\*\s*('+CLOCK+r')\s*→\s*('+CLOCK+r')',content,re.I)
+        if len(re.findall(r'\*\*(?:VIDEO|STILL)\s*·', content, re.I))!=1:raise ValueError(sid+': exactly one shot instruction is required per SRT cue.')
         shot=re.search(r'\*\*(VIDEO|STILL)\s*·\s*(?:(C\d+)\s*·\s*)?(S\d+\.(?:mp4|mov))\*\*\s*·\s*Source IN\s*('+CLOCK+r')\s*·\s*OUT\s*('+CLOCK+r')\s+exclusive\s*·\s*[\d.]+\s*s\s*·\s*1\.0×\s*·\s*loop OFF',content,re.I)
         narration=re.search(r'\*\*Exact narration\*\*\s*\n\s*\n(.*?)\n\s*\n',content,re.S|re.I)
         if not original or not placement or not shot or not narration:raise ValueError(sid+': cue timing, narration or video instruction is missing or unsupported.')

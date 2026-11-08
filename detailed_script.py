@@ -7,7 +7,7 @@ import json
 import re
 from edl import parse, timecode_ms
 
-SHOT = re.compile(r'^srt0*(\d+)-([a-z]+)$', re.I)
+SHOT = re.compile(r'^srt0*(\d+)(?:-([a-z]+))?$', re.I)
 CLIP = re.compile(r'^C\d+$', re.I)
 SOURCE = re.compile(r'^S\d+\.(?:mp4|mov|jpg|jpeg|png)$', re.I)
 TREATMENTS = {'VIDEO': 'VIDEO', 'CONTEXT VIDEO': 'CTX', 'ARCHIVAL REUSE': 'ARCHIVAL',
@@ -41,7 +41,7 @@ def span(row, whole, start, end, label, end_optional=False):
 def parse_detailed(text, blocks):
     """Return strict rows, [] for a legacy script, or fail closed on unsupported shot structure."""
     from document_plan import tables
-    if re.search(r'^##\s+Srt\d+\s*$',text,re.M|re.I) and re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',text,re.M|re.I):
+    if re.search(r'^##\s+Srt\d+\s*$',text,re.M|re.I) and re.search(r'^###\s+Srt\d+(?:-[A-Za-z]+)?\s*$',text,re.M|re.I):
         from section_script import parse_section_script
         return parse_section_script(text,blocks)
     found=[]
@@ -60,7 +60,7 @@ def parse_detailed(text, blocks):
         if table and not ({key(k) for k in table[0]} & {'shot','shot_id','shot_reference','shot_ref'}):
             raise ValueError('The detailed script contains an additional unsupported table; its instructions cannot be silently ignored.')
     if re.search(r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/', text,re.I):
-        raise ValueError('Remove YouTube URLs from the production script; use uploaded filenames and clip references.')
+        raise ValueError('Remove YouTube URLs from the production script; use uploaded filenames and source times.')
     if not blocks:raise ValueError('Import the authored SRT before reading detailed shot times.')
     normalized=[];last_block=0;last_suffix=0;seen=set();last_t=0
     for i,row in enumerate(found,1):
@@ -69,9 +69,9 @@ def parse_detailed(text, blocks):
         unknown=[k for k,v in row.items() if k not in known and str(v).strip() not in ('','-','N/A','n/a')]
         if unknown:raise ValueError(label+': unsupported column(s) '+', '.join(unknown)+'; instructions cannot be silently ignored.')
         sid=value(row,'shot','shot_id','shot_reference','shot_ref');match=SHOT.fullmatch(sid)
-        if not match:raise ValueError(label+': use a shot ID such as Srt01-A.')
+        if not match:raise ValueError(label+': use an SRT cue ID such as Srt01.')
         block=int(match[1]);suffix=0
-        for letter in match[2].upper():suffix=suffix*26+ord(letter)-ord('A')+1
+        for letter in (match[2] or "A").upper():suffix=suffix*26+ord(letter)-ord('A')+1
         if block<last_block or (block==last_block and suffix<=last_suffix):raise ValueError(label+': shots must be listed in SRT and letter order.')
         if sid.casefold() in seen:raise ValueError(label+': duplicate shot ID '+sid+'.')
         seen.add(sid.casefold());last_block,last_suffix=block,suffix

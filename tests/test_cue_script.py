@@ -61,3 +61,8 @@ class SourceOnlyCueTest(unittest.TestCase):
  def test_source_only_still_cannot_hide_a_bad_duration(self):
   text=SCRIPT[SCRIPT.index('## Srt001'):].replace('C001 · ','').replace('C002 · ','').replace('OUT 00:00:03,000 exclusive','OUT 00:00:03,100 exclusive')
   with self.assertRaises(ValueError):parse_cue_script(text,BLOCKS)
+
+class OneCueInstructionTest(unittest.TestCase):
+ def test_duplicate_video_instruction_rejected(self):
+  bad=SCRIPT.replace('**VIDEO · C001 · S01.mp4**', '**VIDEO · C001 · S01.mp4**\n**VIDEO · C001 · S01.mp4**')
+  with self.assertRaisesRegex(ValueError,'exactly one shot'):parse_cue_script(bad,BLOCKS)

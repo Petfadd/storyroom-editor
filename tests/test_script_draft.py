@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 import imageio_ffmpeg
 import app as server
-from test_section_script import SCRIPT, BLOCKS
+from test_section_script import SCRIPT as LEGACY_SCRIPT, BLOCKS
+
+SCRIPT=(LEGACY_SCRIPT[:LEGACY_SCRIPT.index("### Srt01-B")] + LEGACY_SCRIPT[LEGACY_SCRIPT.index("## Final production checks"):]).replace("### Srt01-A", "### Srt01").replace("00:00:00.000–00:00:02.000 (2.000 s).", "00:00:00.000–00:00:04.000 (4.000 s).")
 
 class ScriptDraftTest(unittest.TestCase):
     def test_draft_shows_sources_but_cannot_export_or_change_inputs(self):
@@ -21,7 +23,7 @@ class ScriptDraftTest(unittest.TestCase):
                 p['assets'].append({'id':name,'name':name,'original_name':name,'kind':'video','duration':6,'path':'sources/'+name,'verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''})
             server.save(p)
             response=client.post(f'/api/projects/{pid}/script-draft',json={});self.assertEqual(response.status_code,200,response.get_data(as_text=True))
-            saved=server.load(pid);self.assertTrue(saved['review_only_draft']);self.assertEqual(len(saved['scenes']),2)
+            saved=server.load(pid);self.assertTrue(saved['review_only_draft']);self.assertEqual(len(saved['scenes']),1)
             self.assertTrue(all(s['asset_id'] for s in saved['scenes']));self.assertEqual(saved['scenes'][0]['plan_row']['extracted_frame_ms'],1000)
             self.assertEqual(saved['scenes'][0]['plan_row']['required_caption'],'“Context label”')
             self.assertEqual(saved['srt']['blocks'],BLOCKS);self.assertEqual(saved['production_script']['text'],SCRIPT);self.assertEqual(saved['picture_policy'],'clips_only')
@@ -32,8 +34,8 @@ class ScriptDraftTest(unittest.TestCase):
             self.assertEqual(client.post(f'/api/projects/{pid}/script-draft',json={}).status_code,400)
             names=[a['original_name'] for a in saved['assets'] if not a.get('derived_from')]
             moving=client.post(f'/api/projects/{pid}/moving-review',json={});self.assertEqual(moving.status_code,200,moving.get_data(as_text=True))
-            changed=server.load(pid);self.assertTrue(changed['script_moving_only']);self.assertIsNone(changed['scenes'][0]['asset_id']);self.assertTrue(changed['scenes'][0]['missing_video_out']);self.assertEqual(changed['scenes'][1]['asset_id'],'S02.mp4')
-            self.assertEqual(changed['scenes'][1]['in_s'],2);self.assertEqual(changed['srt']['blocks'],BLOCKS);self.assertEqual(changed['production_script']['text'],SCRIPT)
+            changed=server.load(pid);self.assertTrue(changed['script_moving_only']);self.assertIsNone(changed['scenes'][0]['asset_id']);self.assertTrue(changed['scenes'][0]['missing_video_out'])
+            self.assertEqual(changed['srt']['blocks'],BLOCKS);self.assertEqual(changed['production_script']['text'],SCRIPT)
             self.assertEqual(names,[a['original_name'] for a in changed['assets'] if not a.get('derived_from')]);self.assertFalse(server.check(changed)['can_export'])
 
 if __name__=='__main__':unittest.main()

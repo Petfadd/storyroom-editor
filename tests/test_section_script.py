@@ -58,7 +58,7 @@ class SectionScriptTest(unittest.TestCase):
         self.assertEqual((rows[1]['source_in_ms'],rows[1]['source_out_ms']),(2000,4000))
         self.assertTrue(all(r['narration_mismatch'] and r['import_blockers'] for r in rows))
         p={'production_script':{'text':SCRIPT},'srt':{'blocks':BLOCKS}}
-        self.assertEqual(rows_for(p)[1],'detailed_production_script')
+        with self.assertRaisesRegex(ValueError,'exactly one shot'):rows_for(p)
     def test_rejects_conflicting_register_clock_and_unknown_fields(self):
         for bad in [SCRIPT.replace('S02.mp4` · **Clip** C09','S03.mp4` · **Clip** C09'),
                     SCRIPT.replace('00:00:02.000–00:00:04.000 (2.000 s).','00:00:02.100–00:00:04.000 (2.000 s).'),
@@ -77,3 +77,10 @@ class SourceOnlySectionTest(unittest.TestCase):
         self.assertEqual([r['source_file'] for r in rows],['S01.mp4','S02.mp4'])
         self.assertEqual([r['clip_id'] for r in rows],['',''])
         self.assertEqual((rows[1]['source_in_ms'],rows[1]['source_out_ms']),(2000,4000))
+
+class OneCueSectionTest(unittest.TestCase):
+    def test_section_with_unlettered_cue(self):
+        text=SCRIPT[:SCRIPT.index('### Srt01-A')]+SCRIPT[SCRIPT.index('### Srt01-B'):]
+        text=text.replace('### Srt01-B','### Srt01').replace('00:00:02.000–00:00:04.000 (2.000 s).','00:00:00.000–00:00:04.000 (4.000 s).').replace('source OUT 00:00:04.000','source OUT 00:00:06.000').replace('00:00:02.000–00:00:04.000 (OUT exclusive)','00:00:02.000–00:00:06.000 (OUT exclusive)')
+        rows,mode=rows_for({'production_script':{'text':text},'srt':{'blocks':BLOCKS}})
+        self.assertEqual(mode,'detailed_production_script');self.assertEqual(rows[0]['shot_id'],'Srt01')

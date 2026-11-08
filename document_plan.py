@@ -170,6 +170,14 @@ def base_rows_for(p):
  return_rows=script_beats(p)
  return return_rows,('detailed_production_script' if return_rows and return_rows[0].get('strict_production') else 'production_script_table') if return_rows else ''
 
+def require_one_shot_per_cue(rows, blocks):
+ """Do not silently merge or split authored instructions to fit cue boundaries."""
+ if len(rows)!=len(blocks):
+  raise ValueError('The production script must contain exactly one shot per SRT cue. Review the script; existing instructions were not changed.')
+ for row, cue in zip(rows, blocks):
+  if row.get('srt_blocks') != [int(cue['number'])] or (row.get('timeline_in_ms'),row.get('timeline_out_ms')) != (cue['start_ms'],cue['end_ms']):
+   raise ValueError('Each shot must match exactly one SRT cue and its complete timeline IN/OUT. Review the script; existing instructions were not changed.')
+
 def rows_for(p):
  if p.get('srt_block_map'):
   from detailed_script import parse_detailed
@@ -180,7 +188,9 @@ def rows_for(p):
  else:
   rows,mode=base_rows_for(p)
  mapping=p.get('srt_block_map')
- if not mapping:return rows,mode
+ if not mapping:
+  if rows:require_one_shot_per_cue(rows,(p.get('srt') or {}).get('blocks',[]))
+  return rows,mode
  from edl import srt_signature
  if mapping.get('based_on_srt') and mapping['based_on_srt']!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map.')
  parents={str(int(r.get('beat_id') or r.get('plan_row_id'))):r for r in rows if str(r.get('beat_id') or r.get('plan_row_id','')).isdigit()};out=[]
@@ -200,6 +210,7 @@ def rows_for(p):
     for key in ['youtube_url','source_id']:row.pop(key,None)
     row.setdefault('import_notes',[]).append('Mapped file differs from parent beat; parent source URL/ID were not copied.')
   out.append(row)
+ require_one_shot_per_cue(out,(p.get('srt') or {}).get('blocks',[]))
  return out,'srt_block_map'
 
 def synchronize(p):

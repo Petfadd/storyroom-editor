@@ -1072,26 +1072,11 @@ def approve_scenes(pid):
 
 @app.post('/api/projects/<pid>/scenes/<sid>/split')
 def split_scene(pid,sid):
- with LOCKS[pid]:
-  editable(pid);p=load(pid);i=next((i for i,s in enumerate(p['scenes']) if s['id']==sid),None)
-  if i is None:raise NotFound('Scene not found.')
-  a=p['scenes'][i];d=request.get_json() or {}
-  try:offset=float(d.get('offset_s',0))
-  except (ValueError,TypeError):raise BadRequest('Enter a valid split offset in seconds.')
-  if not math.isfinite(offset):raise BadRequest('Enter a finite split offset.')
-  frame=a['frame_in']+round(offset*30)
-  if frame-a['frame_in']<15 or a['frame_out']-frame<15:raise BadRequest('Leave at least half a second on each side of a picture split.')
-  b=copy.deepcopy(a);b['id']=uid();b['frame_in']=frame;a['frame_out']=frame
-  words=a['narration'].split();at=max(1,min(len(words)-1,round(len(words)*offset/((b['frame_out']-a['frame_in'])/30))))
-  a['narration']=' '.join(words[:at]);b['narration']=' '.join(words[at:]);a['approved']=b['approved']=False;a['transition']='cut';a['transition_handle_frames']=0;b['asset_id']=a['asset_id'];b['in_s']=a['in_s']+(frame-a['frame_in'])/30;p['manual_scene_edits']=True
-  p['scenes'].insert(i+1,b);save(p);return jsonify(public(p))
+ raise BadRequest('Splitting a cue is disabled: use exactly one shot per SRT cue.')
+
 @app.post('/api/projects/<pid>/scenes/<sid>/merge')
 def merge_scene(pid,sid):
- with LOCKS[pid]:
-  editable(pid);p=load(pid);i=next((i for i,s in enumerate(p['scenes']) if s['id']==sid),None)
-  if i is None or i+1>=len(p['scenes']):raise BadRequest('Choose a scene with a following picture beat.')
-  a,b=p['scenes'][i:i+2];a['frame_out']=b['frame_out'];a['narration']+=' '+b['narration'];a['srt_blocks']=[a['srt_blocks'][0],b['srt_blocks'][1]];a['transition']=b['transition'];a['transition_handle_frames']=b.get('transition_handle_frames',4 if b['transition']=='dissolve' else 0);a['approved']=False;a['notes']=' '.join(x for x in [a['notes'],b['notes']] if x)
-  p['scenes'].pop(i+1);save(p);return jsonify(public(p))
+ raise BadRequest('Merging cues is disabled: use exactly one shot per SRT cue.')
 
 def manifest(p):
  from production import reserve_id,asset_used
