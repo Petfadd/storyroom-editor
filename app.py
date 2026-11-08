@@ -757,7 +757,13 @@ def script_draft(pid):
    last=end
   draft_rows=copy.deepcopy(rows)
   for row in draft_rows:row['review_warnings']=row.pop('import_blockers',[])
-  prepared=stills(p,folder(pid),draft_rows)
+  moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
+  if moving_only:
+   prepared=draft_rows
+   for row in prepared:
+    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+     row['import_blockers']=['No moving-video source OUT was specified; no frame or clip was substituted.']
+  else:prepared=stills(p,folder(pid),draft_rows)
   original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
   p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False
   try:assemble(p,seeds)
@@ -768,10 +774,40 @@ def script_draft(pid):
    if had_reuse:p['allow_archive_reuse']=reuse
    else:p.pop('allow_archive_reuse',None)
   p['review_only_draft']=True
-  p['script_application']['mode']='script_review_draft'
+  if moving_only:
+   p['script_moving_only']=True
+   for scene in p['scenes']:
+    if (scene.get('plan_row') or {}).get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):scene['missing_video_out']=True
+  p['script_application']['mode']='moving_video_review' if moving_only else 'script_review_draft'
   p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
   p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()
   p['assembly_signature']=signature(p)
+  save(p);return jsonify(public(p))
+
+@app.post('/api/projects/<pid>/moving-review')
+def moving_review(pid):
+ """Remove stills from the review timeline; never invent missing source OUTs."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('review_only_draft') or not p.get('scenes'):
+   raise BadRequest('Create a detailed script review timeline first; this action cannot replace an existing edit.')
+  if p.get('manual_scene_edits'):
+   raise BadRequest('This review timeline has manual edits. They were not replaced; review the source ranges first.')
+  assets={a['id']:a for a in p['assets']};missing=[];moving=0
+  for scene in p['scenes']:
+   row=scene.get('plan_row') or {};asset=assets.get(scene.get('asset_id'))
+   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+    if scene.get('asset_id'):scene['review_previous_asset_id']=scene['asset_id']
+    scene['asset_id']=None;scene['in_s']=0;scene['approved']=False;scene.pop('script_camera',None)
+    scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
+   elif row.get('requested_treatment')=='VIDEO' and asset and asset.get('kind')=='video':
+    scene['missing_video_out']=False;moving+=1
+   else:
+    scene['asset_id']=None;scene['approved']=False;scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
+  p['script_moving_only']=True
+  p['script_application'].update(mode='moving_video_review',placed_scenes=moving,
+   issues=[str(len(missing))+' shots specify a single still/frame, not a video IN/OUT range. Source OUT times are needed; no video segment was guessed.'],
+   note='Moving-video review only: no loops, no still holds and no invented source ranges. The original script, SRT, filenames and narration are unchanged; captions/layout remain unimplemented and export is blocked.')
   save(p);return jsonify(public(p))
 
 @app.post('/api/projects/<pid>/storyboard')
@@ -915,7 +951,11 @@ def edit_scene(pid,sid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);s=next((s for s in p['scenes'] if s['id']==sid),None)
   if not s:raise NotFound('Scene not found.')
-  d=request.get_json() or {};p['manual_scene_edits']=True
+  d=request.get_json() or {}
+  if p.get('script_moving_only'):
+   if d.get('asset_id',s.get('asset_id'))!=s.get('asset_id'):
+    raise BadRequest('The moving-video review uses only explicit script source intervals. Change the production script with an explicit IN and OUT, then rebuild; no substitute or timing guess was applied.')
+  p['manual_scene_edits']=True
   for k in ['purpose','emotion','focus','person','notes']:
    if k in d:s[k]=str(d[k])[:5000]
   if 'asset_id' in d:
@@ -926,7 +966,9 @@ def edit_scene(pid,sid):
    try:n=float(d['in_s'])
    except (TypeError,ValueError):raise BadRequest('Source in-point must be a number.')
    if not math.isfinite(n) or n<0:raise BadRequest('Source in-point must be a nonnegative finite number.')
-   moved_in_point=abs(n-float(s.get('in_s') or 0))>.001;s['in_s']=n
+   moved_in_point=abs(n-float(s.get('in_s') or 0))>.001
+   if p.get('script_moving_only') and moved_in_point:raise BadRequest('The moving-video review uses the script source IN; edit the script and rebuild instead.')
+   s['in_s']=n
   if d.get('motion') in ['auto','push','pull','pan-left','pan-right','rise','reveal']:
    if d['motion']!='auto' and d['motion']!=s.get('motion'):s.pop('script_camera',None)
    s['motion']=d['motion']

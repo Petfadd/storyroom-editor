@@ -30,5 +30,10 @@ class ScriptDraftTest(unittest.TestCase):
             self.assertEqual(client.post(f'/api/projects/{pid}/continuous-preview',json={}).status_code,400)
             self.assertEqual(client.post(f'/api/projects/{pid}/scene-exports',json={'source':'preview'}).status_code,400)
             self.assertEqual(client.post(f'/api/projects/{pid}/script-draft',json={}).status_code,400)
+            names=[a['original_name'] for a in saved['assets'] if not a.get('derived_from')]
+            moving=client.post(f'/api/projects/{pid}/moving-review',json={});self.assertEqual(moving.status_code,200,moving.get_data(as_text=True))
+            changed=server.load(pid);self.assertTrue(changed['script_moving_only']);self.assertIsNone(changed['scenes'][0]['asset_id']);self.assertTrue(changed['scenes'][0]['missing_video_out']);self.assertEqual(changed['scenes'][1]['asset_id'],'S02.mp4')
+            self.assertEqual(changed['scenes'][1]['in_s'],2);self.assertEqual(changed['srt']['blocks'],BLOCKS);self.assertEqual(changed['production_script']['text'],SCRIPT)
+            self.assertEqual(names,[a['original_name'] for a in changed['assets'] if not a.get('derived_from')]);self.assertFalse(server.check(changed)['can_export'])
 
 if __name__=='__main__':unittest.main()
