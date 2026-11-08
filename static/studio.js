@@ -17,7 +17,7 @@ function scriptReadingHTML(){
 }
 async function createScriptDraft(){
  if(!P||uploading)return;const id=P.id;uploading=true;toast('Preparing the moving-video review timeline…');
- try{const result=await api(`/api/projects/${id}/script-draft`,'POST',{moving_only:true});if(P?.id!==id)return;P=result;sceneIndex=0;pauseEditor();resetEditor();if($('#manage-dialog').open)$('#manage-dialog').close();renderProject();await list();toast('Video review timeline ready. Shots without video IN and OUT times remain unassigned; export is blocked.')}
+ try{const result=await api(`/api/projects/${id}/script-draft`,'POST',{moving_only:true});if(P?.id!==id)return;P=result;sceneIndex=0;pauseEditor();resetEditor();if($('#manage-dialog').open)$('#manage-dialog').close();renderProject();await list();toast('Video review timeline ready. Unresolved shots remain unassigned; export is blocked.')}
  catch(e){toast(e.message)}finally{uploading=false}
 }
 async function showScriptReading(){
@@ -30,7 +30,7 @@ async function showScriptReading(){
 function uploadFeedback(message,error=false){let node=$('#upload-feedback');if(!node&&$('#content')){node=document.createElement('div');node.id='upload-feedback';node.setAttribute('role','status');node.setAttribute('aria-live','polite');$('#content').prepend(node)}if(node){node.hidden=false;node.className='notice'+(error?' warn':'');node.innerHTML=`<span>${E(message)}</span>${window.activeImport?'<p><button type="button" onclick="cancelCurrentImport()">Cancel remaining import</button></p>':''}`}if(!window.activeImport||error)toast(message)}
 function automaticStatusHTML(){
  if(!P)return '';
- if(P.script_moving_only)return `<div class="notice warn"><strong>Moving-video review · incomplete</strong><p>${P.script_application?.placed_scenes||0} shots have explicit video IN/OUT ranges. The editor opens at the first playable video. Click any uploaded source in the media pool to play the original file. The other shots specify a single frame and need video IN and OUT times. No stills, loops or guessed video ranges are used. Playback pauses at an unresolved shot; export is blocked.</p></div>`;
+ if(P.script_moving_only)return `<div class="notice warn"><strong>Moving-video review · incomplete</strong><p>${P.script_application?.placed_scenes||0} shots are available in the review timeline. Missing, too-short, overlapping or still-only shots remain unassigned; see the shot details for the reason. No stills, loops or guessed video ranges are used. Playback pauses at unresolved shots; captions and rights require review and export is blocked.</p></div>`;
  if(P.review_only_draft)return `<div class="notice warn"><strong>Script review timeline · not a finished edit</strong><p>Shots and source frames are shown for inspection. Editorial caption layout, framing and exact freeze frames still need implementation and review; export is blocked. Your original script, names, narration and SRT are unchanged.</p></div>`;
  if(!P.scenes.length&&P.script_reading?.status==='read'&&P.script_reading.blocker_count)return '';
  const s=P.automatic_status||{},r=P.render||{},ready=P.automatic_readiness||{},working=['queued','working','studying','storyboard_ready','rendering'].includes(s.status);

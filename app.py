@@ -268,7 +268,9 @@ def public(p):
  d=copy.deepcopy(p)
  from document_plan import match_report
  d['source_match_report']=match_report(d)
- if p.get('production_script') and re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
+ if p.get('production_script'):
+  from cue_script import is_cue_script
+  if is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
  d['validation']=check(p);d['final_validation']=check(p,True)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
@@ -749,7 +751,8 @@ def script_draft(pid):
   except ValueError as e:raise BadRequest('Production script: '+str(e))
   if mode!='detailed_production_script' or not rows:raise BadRequest('A recognized detailed production script and matching SRT are required.')
   review=script_reading(p)
-  if review.get('missing_files') or review.get('short_shots'):raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
+  moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
+  if (review.get('missing_files') or review.get('short_shots')) and not moving_only:raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
   seeds=[];last=0
   for block in p['srt']['blocks']:
    end=round(block['end_ms']*.03)
@@ -762,7 +765,7 @@ def script_draft(pid):
    prepared=draft_rows
    for row in prepared:
     if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
-     row['import_blockers']=['No moving-video source OUT was specified; no frame or clip was substituted.']
+     row['import_blockers']=['Still/freeze placement is omitted from this moving-video review; no frame or clip was substituted.']
   else:prepared=stills(p,folder(pid),draft_rows)
   original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
   p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False
