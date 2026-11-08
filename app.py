@@ -210,7 +210,7 @@ def scene_review(p,i,s,a,ranges,last,final=False):
  if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
  if not s['focus'].strip():errors.append(pre+'set the story focus.')
  if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
- if final and (a['rights']=='unreviewed' or not a['notes'].strip()):errors.append(pre+'document the rights/reuse decision and notes before final export.')
+ if final and ((a.get('reuse_review') or {}).get('decision')!='approved' or not (a.get('reuse_review') or {}).get('details','').strip()):errors.append(pre+'record an explicit reuse-rights approval and supporting details for this source before final export.')
  return errors,notes
 
 def check(p,final=False):
@@ -738,12 +738,35 @@ def bind_script_source(pid):
   for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
 
+@app.put('/api/projects/<pid>/assets/<aid>/reuse-rights')
+def set_asset_reuse_rights(pid,aid):
+ """Record the user's specific decision; never infer ownership or legal clearance."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
+  if not a:raise NotFound('Asset not found.')
+  d=request.get_json(silent=True) or {};decision=d.get('decision');basis=d.get('basis','');details=str(d.get('details') or '').strip()
+  if decision not in ('unreviewed','approved','not_approved'):raise BadRequest('Choose a reuse-rights decision.')
+  if len(details)>5000:raise BadRequest('Rights details must be at most 5,000 characters.')
+  if decision=='approved':
+   if d.get('attested') is not True:raise BadRequest('Confirm your reuse-rights decision for this file.')
+   if basis not in ('permission','license','public_domain','other'):raise BadRequest('Choose the basis for your reuse decision.')
+   if not details:raise BadRequest('Add the source, permission, license or other basis and any limits for this specific file.')
+  else:basis=''
+  if a.get('reuse_review'):a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+  a['reuse_review']={'decision':decision,'basis':basis,'details':details,'at':time.time(),'attested':decision=='approved','independent_verification':False}
+  for scene in p['scenes']:
+   if scene.get('asset_id')==aid:scene['approved']=False
+  save(p);return jsonify(public(p))
+
 @app.patch('/api/projects/<pid>/assets/<aid>')
 def update_asset(pid,aid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
   if not a:raise NotFound('Asset not found.')
   d=request.get_json() or {}
+  if 'source' in d and str(d['source'])[:5000]!=a.get('source','') and a.get('reuse_review'):
+   a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+   a['reuse_review']={'decision':'unreviewed','basis':'','details':'Source provenance changed; review reuse again.','at':time.time(),'attested':False,'independent_verification':False}
   for k in ['name','source','notes']:
    if k in d:a[k]=str(d[k])[:5000]
   if 'people' in d:a['people']=[str(n).strip()[:120] for n in d['people'] if str(n).strip()]
