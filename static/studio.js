@@ -13,7 +13,12 @@ function scriptReadingHTML(){
  if(r.status!=='read')return '';
  const missing=r.missing_files.length?`Missing or ambiguous files: ${r.missing_files.map(E).join(', ')}.`:'All referenced source filenames are uploaded.';
  const policy=P.picture_policy==='clips_only'&&r.still_shots+r.freeze_shots?'This project is set to moving footage only, but the script requests stills and freeze-frames.':'';
- return `<div class="notice warn"><strong>Script read: ${r.blocks} SRT blocks · ${r.shots} shots</strong><p>${E(missing)} ${r.video_shots} video shots, ${r.still_shots} still holds and ${r.freeze_shots} freeze-frames.</p><p>${E(policy)} ${r.caption_shots} shots have editorial captions; the current renderer cannot yet place them as instructed. ${r.narration_mismatch_blocks.length} SRT blocks have wording differences from the approved script. No files have been changed.</p><p>These requirements need attention before this script can produce an accurate storyboard or export. Filename matches and decoded frames do not verify content, source version or rights.</p><button type="button" onclick="showScriptReading()">Read the full shot plan and differences</button><div id="script-reading-detail"></div></div>`;
+ return `<div class="notice warn"><strong>Script read: ${r.blocks} SRT blocks · ${r.shots} shots</strong><p>${E(missing)} ${r.video_shots} video shots, ${r.still_shots} still holds and ${r.freeze_shots} freeze-frames.</p><p>${E(policy)} ${r.caption_shots} shots have editorial captions; the current renderer cannot yet place them as instructed. ${r.narration_mismatch_blocks.length} SRT blocks have wording differences from the approved script. No files have been changed.</p><p>These requirements need attention before this script can produce an accurate storyboard or export. Filename matches and decoded frames do not verify content, source version or rights.</p>${!P.scenes.length?'<button type="button" onclick="createScriptDraft()">Show shots in review timeline</button> ':''}<button type="button" onclick="showScriptReading()">Read the full shot plan and differences</button><div id="script-reading-detail"></div></div>`;
+}
+async function createScriptDraft(){
+ if(!P||uploading)return;const id=P.id;uploading=true;toast('Preparing the script review timeline and requested source frames…');
+ try{const result=await api(`/api/projects/${id}/script-draft`,'POST',{});if(P?.id!==id)return;P=result;sceneIndex=0;pauseEditor();resetEditor();if($('#manage-dialog').open)$('#manage-dialog').close();renderProject();await list();toast('Review timeline ready. Captions and framing are not yet rendered; export remains blocked.')}
+ catch(e){toast(e.message)}finally{uploading=false}
 }
 async function showScriptReading(){
  const id=P?.id;if(!id)return;const box=$('#script-reading-detail');if(!box)return;box.textContent='Reading the complete script…';
@@ -25,6 +30,7 @@ async function showScriptReading(){
 function uploadFeedback(message,error=false){let node=$('#upload-feedback');if(!node&&$('#content')){node=document.createElement('div');node.id='upload-feedback';node.setAttribute('role','status');node.setAttribute('aria-live','polite');$('#content').prepend(node)}if(node){node.hidden=false;node.className='notice'+(error?' warn':'');node.innerHTML=`<span>${E(message)}</span>${window.activeImport?'<p><button type="button" onclick="cancelCurrentImport()">Cancel remaining import</button></p>':''}`}if(!window.activeImport||error)toast(message)}
 function automaticStatusHTML(){
  if(!P)return '';
+ if(P.review_only_draft)return `<div class="notice warn"><strong>Script review timeline · not a finished edit</strong><p>Shots and source frames are shown for inspection. Editorial caption layout, framing and exact freeze frames still need implementation and review; export is blocked. Your original script, names, narration and SRT are unchanged.</p></div>`;
  if(!P.scenes.length&&P.script_reading?.status==='read'&&P.script_reading.blocker_count)return '';
  const s=P.automatic_status||{},r=P.render||{},ready=P.automatic_readiness||{},working=['queued','working','studying','storyboard_ready','rendering'].includes(s.status);
  const unmatched=(P.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));

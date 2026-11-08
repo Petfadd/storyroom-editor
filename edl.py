@@ -206,7 +206,7 @@ def assemble(p,seed):
     if str(row.get('visual_status','')).upper()=='STILL':problem='A still frame was requested from this video but no extracted frame is registered. Set picture policy to photographs and stills so the frame can be extracted, or choose a moving interval.'
     elif abs((source_end-source_start)-duration)>1/30+.001:problem='Source interval and picture duration differ; no automatic trimming, stretching, looping or freezing.'
     elif max(source_end,source_start+duration)+handle>a['duration']+.001:problem='Source file is too short, including transition handles.'
-    elif not p.get('allow_archive_reuse') and row.get('requested_treatment')!='ARCHIVAL REUSE' and any(source_start<out and source_start+duration+handle>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
+    elif not p.get('allow_archive_reuse') and row.get('requested_treatment')!='ARCHIVAL REUSE' and any(source_start<out and (source_end if row.get('strict_production') else source_start+duration+handle)>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'
    if not problem:
     s.update(asset_id=a['id'],in_s=source_start)
     # Grouping is an editorial assertion, not something a filename and a repeated
@@ -214,7 +214,7 @@ def assemble(p,seed):
     declared=str(row.get('footage_group') or '').strip()
     if declared:s['footage_group']=declared
     else:s.pop('footage_group',None)
-    if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_start+duration+handle))
+    if a['kind']=='video':used.setdefault(a['id'],[]).append((source_start,source_end if row.get('strict_production') else source_start+duration+handle))
   if problem:issues.append('Beat '+bid+': '+problem);s['notes']+=' Unresolved: '+problem
   scenes.append(s)
  p['scenes']=scenes;p['script_application']={'recognized_instructions':len(rows),'placed_scenes':sum(bool(s['asset_id']) for s in scenes),'issues':issues,'mode':'picture_plan','note':'Parsed picture plan controls picture timing/source placement; production script supplies context. Status fields do not certify media or grant approval. All beats remain unapproved.'}

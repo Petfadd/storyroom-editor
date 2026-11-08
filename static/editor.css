@@ -63,3 +63,5 @@
 .management .project-row{display:flex;align-items:stretch;gap:10px;margin:7px 0;border:1px solid #3c485a;background:#242d3b;border-radius:5px;padding:0 10px 0 0}.management .project-row.active{border-color:#ed4560;background:#33212a}.management .project-row .project-link{flex:1;min-width:0;border:0;background:transparent;margin:0}.management .project-row .project-delete{align-self:center;color:#ffb3c0;border-color:#80505b;background:#38242c;font-weight:600}.management .project-row .project-delete:hover{background:#62313d;color:#fff}.management .project-row button:focus-visible{outline:2px solid #fff;outline-offset:2px}
 
 .script-reading-text{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 system-ui;color:#dfc28a}.script-shot{border-top:1px solid #625238;padding:8px 0}.script-shot summary{cursor:pointer}.script-shot p{margin:6px 0}
+
+.script-caption-review{padding:8px 12px;background:#302b21;color:#f0d5a2;font-size:11px;line-height:1.4;border-top:1px solid #625238}.script-caption-review[hidden]{display:none}

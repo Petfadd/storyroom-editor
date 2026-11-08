@@ -197,6 +197,7 @@ def scene_review(p,i,s,a,ranges,last,final=False):
 
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
+ if p.get('review_only_draft'):errors.append('This is a script review draft, not an approved edit. Captions, layout, freeze frames, source identity and rights must be resolved before rendering or export.')
  from automatic import repetition_errors,source_capacity_errors,_plan_coverage
  errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
  # A block map written for a different runtime leaves blocks unplaced. Say so as a plan
@@ -735,6 +736,44 @@ def merge_scoped_rebuild(previous, rebuilt, blocks):
   ordered.extend(rebuilt)
  return {'scenes': ordered, 'rounding_frames': rounding, 'of': blocks}
 
+@app.post('/api/projects/<pid>/script-draft')
+def script_draft(pid):
+ """Display script shots for review; never claim unsupported instructions are rendered."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if p.get('scenes'):raise BadRequest('This production already has a storyboard. The review draft will not replace existing work.')
+  from document_plan import rows_for
+  from edl import assemble,signature
+  from conform import stills
+  try:rows,mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production script: '+str(e))
+  if mode!='detailed_production_script' or not rows:raise BadRequest('A recognized detailed production script and matching SRT are required.')
+  review=script_reading(p)
+  if review.get('missing_files') or review.get('short_shots'):raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
+  seeds=[];last=0
+  for block in p['srt']['blocks']:
+   end=round(block['end_ms']*.03)
+   seeds.append(dict(id=uid(),srt_blocks=[block['number'],block['number']],frame_in=last,frame_out=end,narration=block['text'],purpose='script review',emotion='neutral',focus='Script review',category='general',person='',asset_id=None,in_s=0,motion='auto',transition='cut',context_only=False,notes='',approved=False,profile=p['profile'],focus_position='center',motion_strength='subtle'))
+   last=end
+  draft_rows=copy.deepcopy(rows)
+  for row in draft_rows:row['review_warnings']=row.pop('import_blockers',[])
+  prepared=stills(p,folder(pid),draft_rows)
+  original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
+  p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False
+  try:assemble(p,seeds)
+  except ValueError as e:raise BadRequest('Could not prepare review draft: '+str(e))
+  finally:
+   if had_plan:p['picture_plan']=original_plan
+   else:p.pop('picture_plan',None)
+   if had_reuse:p['allow_archive_reuse']=reuse
+   else:p.pop('allow_archive_reuse',None)
+  p['review_only_draft']=True
+  p['script_application']['mode']='script_review_draft'
+  p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
+  p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()
+  p['assembly_signature']=signature(p)
+  save(p);return jsonify(public(p))
+
 @app.post('/api/projects/<pid>/storyboard')
 def build(pid):
  with LOCKS[pid]:
@@ -867,6 +906,7 @@ def build(pid):
      raise BadRequest('Rebuilding blocks '+', '.join(map(str,scope[:6]))+' would change the length of the surrounding timeline. Rebuild the whole storyboard instead.')
     previous_last=scene['frame_out']
    p['scenes']=merged
+  if plan_mode=='detailed_production_script':p.pop('review_only_draft',None)
   carried=carry_previous_review({'scenes':previous},p['scenes'])
   p['rebuild_report']={'at':time.time(),'beats':len(p['scenes']),'approvals_carried':carried['carried'],'needs_review':carried['requiring_review'],'scope':scope,'previous_scenes':len(previous),'rounding_frames':(spliced['rounding_frames'] if scope else 0),'cut_surfaces_adopted':adopted_surfaces}
   save(p);return jsonify(public(p))
@@ -987,6 +1027,7 @@ def prepare_continuous_preview(pid):
  from preview_render import start
  with LOCKS[pid]:
   p=load(pid);root=folder(pid)
+  if p.get('review_only_draft'):raise BadRequest('This review draft cannot be rendered as a smooth preview until its caption, framing and freeze-frame instructions are implemented.')
   if not p['scenes']:raise BadRequest('Build a storyboard first.')
   def publish(updated,temp,base):
    with LOCKS[pid]:
@@ -1010,6 +1051,7 @@ def prepare_scene_exports(pid):
  from scene_exports import start
  with LOCKS[pid]:
   p=load(pid);root=folder(pid);data=request.get_json(silent=True) or {};kind=data.get('source')
+  if p.get('review_only_draft'):raise BadRequest('A review draft cannot be exported as finished scene clips.')
   if kind not in ('preview','render'):raise BadRequest('Choose the smooth preview or a rendered master.')
   d=public(p)
   if kind=='preview':

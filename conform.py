@@ -40,7 +40,7 @@ def stills(p,root,rows):
    continue
   if status!='STILL':continue
   if len(matches)!=1 or matches[0]['kind']!='video':continue
-  source=matches[0];path=root/source['path'];ms=row['source_in_ms'];key=hashlib.sha256((source['id']+str(ms)).encode()).hexdigest()[:16];aid='frame-'+key
+  source=matches[0];path=root/source['path'];ms=row['source_in_ms'];key=hashlib.sha256((source['id']+str(ms)+('-covering-frame' if row.get('strict_production') else '')).encode()).hexdigest()[:16];aid='frame-'+key
   existing=next((a for a in p['assets'] if a['id']==aid),None)
   try:
    if not path.is_file():raise ValueError('The local source file is missing.')
@@ -51,7 +51,7 @@ def stills(p,root,rows):
     try:
      fps=cap.get(cv2.CAP_PROP_FPS)
      if not math.isfinite(fps) or fps<=0:raise ValueError('Cannot determine the source frame rate.')
-     index=round(ms/1000*fps);cap.set(cv2.CAP_PROP_POS_FRAMES,index);ok,frame=cap.read()
+     index=(math.floor(ms/1000*fps+1e-9) if row.get('strict_production') else round(ms/1000*fps));cap.set(cv2.CAP_PROP_POS_FRAMES,index);ok,frame=cap.read()
      if not ok:raise ValueError('Cannot decode the requested still frame.')
      if not cv2.imwrite(str(dest),frame,[cv2.IMWRITE_JPEG_QUALITY,94]):raise ValueError('Cannot save extracted frame.')
     finally:cap.release()
