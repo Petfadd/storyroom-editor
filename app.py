@@ -268,6 +268,8 @@ def public(p):
  d=copy.deepcopy(p)
  from document_plan import match_report
  d['source_match_report']=match_report(d)
+ from footage_requirements import footage_requirements
+ d['footage_requirements']=footage_requirements(p)
  if p.get('production_script'):
   from cue_script import is_cue_script
   if is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
