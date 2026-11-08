@@ -50,7 +50,7 @@ async function showScriptReading(){
  box.innerHTML=`<details><summary>Project instructions and final checks</summary><pre class="script-reading-text">${E(r.project_instructions)}\n\n${E(r.final_checks)}</pre></details><details><summary>${r.narration_mismatch_blocks.length} SRT wording differences</summary>${r.shots_detail.filter((x,i,a)=>x.narration_mismatch&&a.findIndex(y=>y.srt_blocks[0]===x.srt_blocks[0])===i).map(x=>`<p><strong>Srt${E(x.srt_blocks[0])}</strong><br>Script: ${E(x.script_narration)}<br>Uploaded SRT: ${E(x.srt_narration)}</p>`).join('')}</details><details open><summary>${r.shots} shot instructions</summary>${r.shots_detail.map(x=>`<details class="script-shot"><summary>${E(x.shot_id.replace(/-[A-Za-z]+$/, ''))} · ${E(x.source_file)} · ${E(x.requested_treatment)} · ${time(x.timeline_in_ms)}–${time(x.timeline_out_ms)}</summary><p>Source: ${time(x.source_in_ms)}${x.visual_status==='VIDEO'?'–'+time(x.source_out_ms)+' (exclusive)':' (frame)'}</p><p><strong>Visible:</strong> ${E(x.visible_content)}</p><p><strong>Edit:</strong> ${E(x.match_reason)}</p><p><strong>Caption:</strong> ${E(x.required_caption)}</p><p><strong>Limits:</strong> ${E(x.limit_on_implication)}</p><p><strong>Source register:</strong> ${E(x.register_window||'')} · ${E(x.register_visible||'')} · ${E(x.register_restrictions||'')}</p></details>`).join('')}</details>`;
  }catch(e){box.textContent=e.message}
 }
-function uploadFeedback(message,error=false){let node=$('#upload-feedback');if(!node&&$('#content')){node=document.createElement('div');node.id='upload-feedback';node.setAttribute('role','status');node.setAttribute('aria-live','polite');$('#content').prepend(node)}if(node){node.hidden=false;node.className='notice'+(error?' warn':'');node.innerHTML=`<span>${E(message)}</span>${window.activeImport?'<p><button type="button" onclick="cancelCurrentImport()">Cancel remaining import</button></p>':''}`}if(!window.activeImport||error)toast(message)}
+function uploadFeedback(message,error=false){let node=$('#upload-feedback');if(!node&&$('#content')){node=document.createElement('div');node.id='upload-feedback';node.setAttribute('role','status');node.setAttribute('aria-live','polite');$('#content').prepend(node)}if(node){node.hidden=false;node.className='notice'+(error?' warn':'');node.innerHTML=`<span>${E(message)}</span>${window.activeImport?`<p>${window.activeImport.hasNext?'<button type="button" onclick="skipCurrentImport()">Next file (skip this one)</button> ':''}<button type="button" onclick="cancelCurrentImport()">Cancel remaining import</button></p>`:window.pendingImportDecision?'<p><button type="button" onclick="continueImportBatch()">Next file</button> <button type="button" onclick="stopImportBatch()">Stop batch</button></p>':''}`}if(!window.activeImport||error)toast(message)}
 function automaticStatusHTML(){
  if(!P)return '';
  if(P.script_moving_only)return `<div class="notice warn"><strong>Moving-video review · incomplete</strong><p>${P.script_application?.placed_scenes||0} shots are available in the review timeline. Missing, too-short, overlapping or still-only shots remain unassigned; see the shot details for the reason. No stills, loops or guessed video ranges are used. Playback pauses at unresolved shots; captions and rights require review and export is blocked.</p></div>`;
@@ -81,26 +81,61 @@ function automaticStatusHTML(){
  return `<div class="notice"><strong>Import the production script, original narration, SRT and MP4 footage.</strong><p>After those inputs are present, the storyboard is assembled automatically. An SRT supplies timing and text, not pictures.</p></div>`;
 }
 function readableBytes(bytes){return bytes>=1024**3?(bytes/1024**3).toFixed(2)+' GB':bytes>=1024**2?(bytes/1024**2).toFixed(1)+' MB':(bytes/1024).toFixed(1)+' KB'}
-function cancelCurrentImport(){const active=window.activeImport;if(!active)return;fetch(`/api/projects/${active.id}/imports/${active.key}`,{method:'DELETE'}).catch(()=>{});active.xhr.abort()}
+function abortActiveImport(intent){const active=window.activeImport;if(!active||active.intent)return;active.intent=intent;uploadFeedback(intent==='skip'?'Skipping this file and stopping its transfer…':'Stopping the import…');fetch(`/api/projects/${active.id}/imports/${active.key}`,{method:'DELETE',signal:AbortSignal.timeout(4000)}).catch(()=>{}).finally(()=>active.xhr.abort())}
+function cancelCurrentImport(){abortActiveImport('cancel')}
+function skipCurrentImport(){abortActiveImport('skip')}
+function continueImportBatch(){const resolve=window.pendingImportDecision;window.pendingImportDecision=null;if(resolve)resolve(true)}
+function stopImportBatch(){const resolve=window.pendingImportDecision;window.pendingImportDecision=null;if(resolve)resolve(false)}
 function uploadWithProgress(id,kind,file,index,count){return new Promise((resolve,reject)=>{
  const streaming=kind==='asset'&&/\.(mp4|mov)$/i.test(file.name);if(streaming&&file.size>8*1024**3){reject(Error('This video exceeds the 8 GB per-file limit.'));return}
  const xhr=new XMLHttpRequest(),key=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join(''),started=performance.now();let timer,busyPoll=false,finished=false,transferDone=false;
  const prefix=`File ${index} of ${count} · ${file.name} · `,elapsed=()=>Math.round((performance.now()-started)/1000)+'s elapsed';
- window.activeImport={xhr,id,key};
+ window.activeImport={xhr,id,key,hasNext:kind==='asset'&&index<count,intent:null};
  const finish=(error,data)=>{if(finished)return;finished=true;clearInterval(timer);if(window.activeImport?.key===key)window.activeImport=null;error?reject(error):resolve(data)};
  xhr.open('POST',streaming?`/api/projects/${id}/media-stream?name=${encodeURIComponent(file.name)}`:`/api/projects/${id}/upload`);xhr.setRequestHeader('X-Upload-ID',key);if(streaming)xhr.setRequestHeader('Content-Type','application/octet-stream');xhr.timeout=(streaming&&file.size>100*1024**2?60:10)*60*1000;
  xhr.upload.onprogress=e=>{if(!finished)uploadFeedback(prefix+'Sending '+readableBytes(e.loaded)+' / '+readableBytes(e.total||file.size)+(e.lengthComputable?' ('+Math.floor(e.loaded/e.total*100)+'%)':'')+' · '+elapsed())};
  xhr.upload.onload=()=>{transferDone=true;if(!finished)uploadFeedback(prefix+'Sent '+readableBytes(file.size)+'. Waiting for the local server · '+elapsed())};
  xhr.onload=()=>{let data;try{data=JSON.parse(xhr.responseText)}catch{return finish(Error('The local server returned an unreadable response (HTTP '+xhr.status+'). Check its terminal window.'))}if(xhr.status>=200&&xhr.status<300)finish(null,data);else finish(Error(data.error||'Import failed (HTTP '+xhr.status+').'))};
  xhr.onerror=()=>finish(Error('Connection to the local editor was interrupted. Check that its server is still running. Check the library before retrying this file.'));
- xhr.onabort=()=>finish(Error('Import stopped. Remaining batch files were not sent; earlier imports are kept. A file already being committed may still appear—reload the project and check before retrying.'));
+ xhr.onabort=()=>{const intent=window.activeImport?.key===key?window.activeImport.intent:null;const error=Error(intent==='skip'?'Skipped by request.':'Import stopped.');error.importAction=intent||'cancel';finish(error)};
  xhr.ontimeout=()=>{fetch(`/api/projects/${id}/imports/${key}`,{method:'DELETE'}).catch(()=>{});finish(Error('Import exceeded the '+(xhr.timeout/60000)+'-minute request limit. Check the local server terminal and media library before retrying.'))};
  const labels={waiting:'Waiting for the local server',waiting_for_project:'Waiting for another project operation',receiving:'Receiving / parsing uploaded data',saving:'Saving the file on disk',checking_metadata:'Checking audio/video metadata (15-second check limit)',checking_image:'Checking the image',reading_document:'Reading document instructions',indexing:'Updating the project library',done:'Import saved; receiving project response',error:'Server reported an import error'};
  timer=setInterval(async()=>{if(finished||busyPoll)return;busyPoll=true;try{const r=await fetch(`/api/projects/${id}/imports/${key}`,{signal:AbortSignal.timeout(4000)});if(r.ok){const state=await r.json();if(!finished&&(transferDone||!['waiting','waiting_for_project','receiving'].includes(state.stage)))uploadFeedback(prefix+(labels[state.stage]||state.stage)+(state.stage==='saving'&&state.saved_bytes?' · '+readableBytes(state.saved_bytes)+' written':'')+(state.detail?' — '+state.detail:'')+' · '+elapsed())}}catch{}finally{busyPoll=false}},1000);
  let data=file;if(!streaming){data=new FormData();data.append('file',file);data.append('kind',kind);data.append('replace','yes')}uploadFeedback(prefix+(streaming?'Streaming video directly · ':'Starting transfer · ')+readableBytes(file.size));xhr.send(data);
 })}
 
-async function importSelectedFiles(kind,selected){const files=Array.from(selected||[]);if(!files.length)return;if(!P){toast('Create or open a production first.');return}if(uploading){toast('Please wait for the current upload.');return}if(!leave())return;if(kind==='srt'&&P.scenes.length&&!confirm('Replacing SRT clears the current storyboard. Continue?'))return;const id=P.id;uploading=true;let name='',completed=[],replaced=[],warnings=[];try{for(const [index,file] of files.entries()){name=file.name;const updated=await uploadWithProgress(id,kind,file,index+1,files.length);completed.push(name);if(updated.replaced_video){replaced.push(updated.replaced_video);warnings.push(...(updated.replacement_warnings||[]))}if(P?.id===id){if(updated.replaced_video){pauseEditor();clearPreparedSource();sourceScene='';sourceReady=false}P=updated;renderProject()}}renderProject();await list();uploadFeedback('Imported '+files.map(f=>f.name).join(', ')+'.'+(replaced.length?' Replaced existing footage: '+replaced.map(r=>r.name+(r.unassigned_scenes?' ('+r.unassigned_scenes+' shots need attention)':'')).join(', ')+'. Affected shots need review.':'')+(warnings.length?' '+warnings.join(' '):''),warnings.length>0)}catch(e){renderProject();uploadFeedback('Could not import '+name+': '+(e.message||'Unknown error.')+(completed.length?' Already imported in this batch: '+completed.join(', ')+'.':''),true)}finally{uploading=false}}
+async function importSelectedFiles(kind,selected){
+ const files=Array.from(selected||[]);if(!files.length)return;if(!P){toast('Create or open a production first.');return}if(uploading){toast('Please wait for the current upload.');return}if(!leave())return;if(kind==='srt'&&P.scenes.length&&!confirm('Replacing SRT clears the current storyboard. Continue?'))return;
+ const id=P.id;uploading=true;const completed=[],skipped=[],failures=[],replaced=[],warnings=[];let stopped=false;
+ try{
+  for(const [index,file] of files.entries()){
+   try{
+    const updated=await uploadWithProgress(id,kind,file,index+1,files.length);completed.push(file.name);
+    if(updated.replaced_video){replaced.push(updated.replaced_video);warnings.push(...(updated.replacement_warnings||[]))}
+    if(P?.id===id){if(updated.replaced_video){pauseEditor();clearPreparedSource();sourceScene='';sourceReady=false}P=updated;renderProject()}
+   }catch(e){
+    if(e.importAction==='cancel'){stopped=true;break}
+    skipped.push(file.name);
+    if(e.importAction==='skip')continue;
+    failures.push(file.name+': '+(e.message||'Unknown error.'));
+    if(kind==='asset'&&index+1<files.length){
+     const proceed=await new Promise(resolve=>{window.pendingImportDecision=resolve;uploadFeedback('Could not import '+file.name+': '+(e.message||'Unknown error.')+' Choose Next file to continue with the remaining uploads. Check the library before retrying this file.',true)});
+     if(proceed)continue;
+    }
+    stopped=true;break;
+   }
+  }
+  if(P?.id===id){try{P=await api('/api/projects/'+id);renderProject()}catch{renderProject()}}
+  await list();
+  let message=completed.length?'Imported: '+completed.join(', ')+'.':'No files confirmed imported in this batch.';
+  if(skipped.length)message+=' Skipped or failed: '+skipped.join(', ')+'. Check the library before retrying; an upload already being saved may still appear.';
+  if(failures.length)message+=' Import errors: '+failures.join('; ')+'.';
+  if(stopped)message+=' Remaining files were not sent.';
+  if(replaced.length)message+=' Replaced existing footage: '+replaced.map(r=>r.name+(r.unassigned_scenes?' ('+r.unassigned_scenes+' shots need attention)':'')).join(', ')+'. Affected shots need review.';
+  if(warnings.length)message+=' '+warnings.join(' ');
+  uploadFeedback(message,!!(skipped.length||stopped||warnings.length));
+ }catch(e){uploadFeedback('Could not finish the import batch: '+(e.message||'Unknown error.')+'. Check the library before retrying.',true)}finally{window.pendingImportDecision=null;uploading=false}
+}
 
 const POLICY_LABEL={clips_only:'Moving footage only',mixed:'Moving footage and photographs'};
 const LAYOUT_LABEL={blurred_fit:'Fitted over a blurred copy of itself',full_bleed:'Cropped to fill the frame'};
