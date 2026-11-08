@@ -375,6 +375,7 @@ def repetition_errors(p):
  errors=[];recent=[];assets={a['id']:a for a in p['assets']};tolerance=CONTINUATION_TOLERANCE
  for i,s in enumerate(p['scenes'],1):
   a=assets.get(s.get('asset_id'));m=s.get('automatic_match') or {}
+  if not a:continue  # Empty timeline slots have no played source interval to repeat.
   group=m.get('footage_group') or s.get('footage_group') or (a or {}).get('footage_group')
   source=m.get('original_source_file') or ((a or {}).get('original_full_source') or {}).get('file') or (a or {}).get('original_name')
   duration=(s['frame_out']-s['frame_in'])/30
@@ -394,7 +395,7 @@ def repetition_errors(p):
     errors.append(f'Scene {i}: repeats the same shot as scene {j} inside the {window}-slot cooldown.')
     break
    overlap=min(end,outside)-max(start,inside)
-   if src==source and overlap>tolerance:
+   if source is not None and src==source and overlap>tolerance:
     errors.append(f'Scene {i}: replays source footage from scene {j} inside the {window}-slot cooldown '
                   f'(the intervals overlap by {overlap:.2f}s).')
     break

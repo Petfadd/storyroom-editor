@@ -160,6 +160,23 @@ def motion(scene,index):
  z0=min(1.095,1+(z0-1)*factor);z1=min(1.095,1+(z1-1)*factor)
  return dict(id='motion-'+scene['id'],mode='photo_camera',move=mode,emotion=scene['emotion'],focus=scene['focus'],duration_s=duration,zoom_start=round(z0,6),zoom_end=round(z1,6),x_start=round(x0,6),x_end=round(x1,6),y_start=y0,y_end=y1,easing='quick_settle' if mode in ['push','pull','reveal'] else 'linear',rationale=reason+f' Complete the movement over {duration:.3f}s; human review must confirm the actual composition.')
 
+def source_overlap_interval(scene, asset):
+ """Use exact script boundaries for an unmodified strict shot; otherwise actual edit timing.
+
+ The renderer's frame conformance still needs separate review. This avoids treating
+ contiguous millisecond script ranges as overlaps solely due to 30-fps rounding.
+ """
+ start=float(scene.get('in_s') or 0)
+ end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene.get('transition')=='dissolve' else 0))/30
+ row=scene.get('plan_row') or {}
+ if (row.get('strict_production') and scene.get('transition')=='cut' and
+     asset.get('original_name',asset.get('name','')).casefold()==str(row.get('source_file','')).casefold() and
+     row.get('source_in_ms') is not None and row.get('source_out_ms') is not None and
+     abs(start-row['source_in_ms']/1000)<.001 and
+     scene['frame_in']==round(row['timeline_in_ms']*.03) and scene['frame_out']==round(row['timeline_out_ms']*.03)):
+  return start,row['source_out_ms']/1000
+ return start,end
+
 def scene_review(p,i,s,a,ranges,last,final=False):
  """Review one scene exactly as export readiness does. Bulk approval reuses this.
 
@@ -187,8 +204,9 @@ def scene_review(p,i,s,a,ranges,last,final=False):
  if a['kind']=='video':
   end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
   if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
+  compare_in,compare_out=source_overlap_interval(s,a)
   for start,stop,number in ranges.get(a['id'],[]):
-   if ((s.get('plan_row') or {}).get('strict_production') or not p.get('allow_archive_reuse')) and (s.get('plan_row') or {}).get('requested_treatment')!='ARCHIVAL REUSE' and s['in_s']<stop and end_s>start:errors.append(pre+f'source interval overlaps scene {number}.')
+   if ((s.get('plan_row') or {}).get('strict_production') or not p.get('allow_archive_reuse')) and (s.get('plan_row') or {}).get('requested_treatment')!='ARCHIVAL REUSE' and compare_in<stop and compare_out>start:errors.append(pre+f'source interval overlaps scene {number}.')
  if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
  if not s['focus'].strip():errors.append(pre+'set the story focus.')
  if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
@@ -222,7 +240,7 @@ def check(p,final=False):
   if s.get('source_replacement_pending'):scene_errors.append(f'Scene {i+1}: review and approve the replaced source {s["source_replacement_pending"]} before export.')
   if row.get('strict_production'):
    if not s.get('approved'):scene_errors.append(f'Scene {i+1}: inspect the picture, identity, context and official source provenance before approval.')
-   if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001:
+   if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or (a and abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001):
     scene_errors.append(f'Scene {i+1}: edited timing or transition differs from the production script.')
    if a and a.get('original_name',a.get('name','')).casefold()!=row['source_file'].casefold():scene_errors.append(f'Scene {i+1}: selected source differs from the production script.')
    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and (s.get('script_camera') or {}).get('move')!='static':scene_errors.append(f'Scene {i+1}: still must remain a static hold.')
@@ -231,7 +249,8 @@ def check(p,final=False):
   last=s['frame_out']
   if a and a['kind']=='video':
    end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
-   ranges[a['id']].append((s['in_s'],end_s,i+1))
+   compare_in,compare_out=source_overlap_interval(s,a)
+   ranges[a['id']].append((compare_in,compare_out,i+1))
  flow=p.get('picture_flow') or {}
  from picture_flow import outstanding_notes
  notes.extend(outstanding_notes(flow))
@@ -1118,7 +1137,7 @@ def approve_scenes(pid):
    last=scene['frame_out']
    if a and a['kind']=='video':
     end_s=scene['in_s']+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene['transition']=='dissolve' else 0))/30
-    ranges[a['id']].append((scene['in_s'],end_s,i+1))
+    ranges[a['id']].append((*source_overlap_interval(scene,a),i+1))
   p.setdefault('scene_approval_history',[]).append({'action':'bulk_scene_approval','scope':scope,'approved':len(approved),'skipped':len(skipped),'at':time.time()})
   if scope=='all' and skipped:raise BadRequest(str(len(skipped))+' picture beat(s) cannot be approved yet. Nothing was approved; open the first one to see why: Scene '+str(skipped[0]['scene'])+' — '+skipped[0]['reasons'][0])
   save(p)

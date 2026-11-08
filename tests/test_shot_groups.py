@@ -29,3 +29,8 @@ class ShotGroupTest(unittest.TestCase):
         self.assertIn('same shot', repetition_errors(p)[0])
 
 if __name__=='__main__':unittest.main()
+
+class UnassignedRepetitionTest(unittest.TestCase):
+    def test_empty_slots_do_not_count_as_the_same_source(self):
+        p={'assets':[],'repetition_policy':{'cooldown_slots':6},'scenes':[{'asset_id':None,'in_s':0,'frame_in':0,'frame_out':120},{'asset_id':None,'in_s':0,'frame_in':120,'frame_out':240}]}
+        self.assertEqual(repetition_errors(p),[])
