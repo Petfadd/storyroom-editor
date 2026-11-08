@@ -81,6 +81,5 @@
 .management .setup-footage .notice{margin:14px 0}
 .management .setup-audio{display:block;width:100%;margin-top:12px}
 .management .setup-next{display:flex;align-items:center;gap:12px;flex-wrap:wrap;color:#aab8c9;font-size:11px}
-.management .setup-advanced{border-top:1px solid #313c4c;padding-top:4px}
-.management .setup-advanced>summary{color:#9daec2}
+.management #upload-feedback:not([hidden]){position:sticky;top:0;z-index:20;box-shadow:0 8px 20px #0005}
 @media(max-width:760px){.management .setup-grid{grid-template-columns:1fr}.management .setup-footage{grid-column:auto}}
