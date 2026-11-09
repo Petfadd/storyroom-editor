@@ -1393,6 +1393,50 @@ def remove_documentary_bite(pid,bid):
   plan['bites']=new;plan['revision']+=1;write(root/'documentary_plan.json',plan)
   return jsonify(annotate_plan(load(pid),root,plan))
 
+@app.post('/api/projects/<pid>/documentary-audio')
+def start_documentary_audio(pid):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan,build_timeline
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary audio is available only in a documentary project.')
+  plan=load_plan(root)
+  try:
+   timeline=build_timeline(p,annotate_plan(p,root,copy.deepcopy(plan)))
+   if not any(s['kind']=='sound_bite' for s in timeline['segments']):raise ValueError('Add a sound bite first.')
+   def current(original,source_plan):
+    with LOCKS[pid]:
+     current_p=load(pid);current_plan=load_plan(root)
+     if current_p.get('updated')!=original.get('updated') or current_plan['revision']!=source_plan['revision']:return False
+     return not any(x.get('stale_reasons') for x in annotate_plan(current_p,root,current_plan)['bites'])
+   return jsonify(documentary_audio.start(root,copy.deepcopy(p),copy.deepcopy(plan),current)),202
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/documentary-audio')
+def documentary_audio_status(pid):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid);plan=load_plan(root);state=documentary_audio.status(pid,root)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary audio is available only in a documentary project.')
+  if state.get('status')=='done':
+   stale=state.get('project_version')!=p.get('updated') or state.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites'])
+   if stale:state={'status':'stale','detail':'Project or plan changed; prepare documentary audio again.'}
+   else:state['url']=f'/api/projects/{pid}/documentary-audio/{state["output"]}'
+  return jsonify(state)
+
+@app.get('/api/projects/<pid>/documentary-audio/<name>')
+def documentary_audio_file(pid,name):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan
+ if not re.fullmatch(r'documentary_audio_[a-f0-9]{32}\.wav',name):raise NotFound('Documentary audio not found.')
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid);plan=load_plan(root);job=documentary_audio.status(pid,root)
+  if p.get('edit_mode','review')!='documentary' or job.get('status')!='done' or job.get('output')!=name or job.get('project_version')!=p.get('updated') or job.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites']):raise NotFound('Documentary audio is not current.')
+  return send_from_directory(root/'renders',name,conditional=True,as_attachment=request.args.get('download')=='1')
+
 @app.get('/api/projects/<pid>/documentary-timeline')
 def documentary_timeline(pid):
  from documentary import load_plan,annotate_plan,build_timeline
