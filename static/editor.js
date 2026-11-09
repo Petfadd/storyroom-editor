@@ -9,6 +9,7 @@ const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>scenes().at(-1)?.frame_out/30||0;
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
 const frameAt=t=>Math.floor(t*30+.001);
+let waveformKey='',waveformPeaks=null,waveformPending=null;
 const editorTime=()=>editorMaster?(masterNode.currentTime||0):(P?.voiceover&&narrNode.getAttribute('src')?narrNode.currentTime:clockBase+(editorPlaying&&!editorBuffering?(performance.now()-clockAt)/1000:0));
 const deletingProjects=new Set();
 list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<div class="project-row ${P?.id===p.id?'active':''}"><button type="button" class="project-link" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes</small></button><button type="button" class="project-delete" aria-label="Delete ${E(p.title)}" onclick="deleteProduction('${p.id}')" ${deletingProjects.has(p.id)?'disabled':''}>Delete</button></div>`).join('')||'<p class="muted">No productions yet.</p>';return d};
@@ -173,8 +174,24 @@ function renderTimeline(){
  const blocks=P?.srt?.blocks||[];
  $('#caption-track').innerHTML=blocks.map((b,i)=>`<div class="caption-block" data-caption-index="${i}" title="${E(b.text)}" style="left:${b.start_ms/1000*timelineZoom}px;width:${Math.max(2,(b.end_ms-b.start_ms)/1000*timelineZoom-1)}px" onclick="seekEditor(${b.start_ms/1000},true)">${E(b.text)}</div>`).join('')+'<span class="caption-note" style="left:8px">SRT REFERENCE · PHRASE TIMING ESTIMATED · ORIGINAL SRT UNCHANGED</span>';
  const voice=P?.voiceover, audioDuration=Number(voice?.duration)||0;
- $('#audio-track').innerHTML=voice&&audioDuration>0?`<div class="audio-clip" role="button" tabindex="0" title="${E(voice.name||'Narration')} · ${audioDuration.toFixed(3)} seconds. Click to seek." style="width:${Math.max(1,audioDuration*timelineZoom)}px" onclick="seekAudioTrack(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();seekEditor(0,true)}"><strong>♫ ${E(voice.name||'Narration')}</strong><span>${audioDuration.toFixed(3)}s · original narration</span></div>`:'<span class="audio-empty">No narration audio uploaded</span>';
-
+ $('#audio-track').innerHTML=voice&&audioDuration>0?`<div class="audio-clip" role="button" tabindex="0" title="${E(voice.name||'Narration')} · ${audioDuration.toFixed(3)} seconds. Click to seek." style="width:${Math.max(1,audioDuration*timelineZoom)}px" onclick="seekAudioTrack(event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();seekEditor(0,true)}"><canvas class="audio-waveform" aria-hidden="true"></canvas><div class="audio-label"><strong>♫ ${E(voice.name||'Narration')}</strong><span>${audioDuration.toFixed(3)}s · original narration</span></div></div>`:'<span class="audio-empty">No narration audio uploaded</span>';
+ if(voice&&audioDuration>0)loadNarrationWaveform(voice);
+}
+function drawNarrationWaveform(){
+ const canvas=$('#audio-track .audio-waveform');if(!canvas||!waveformPeaks)return;
+ const width=Math.max(1,Math.min(8192,Math.ceil(canvas.clientWidth))),height=40;
+ canvas.width=width;canvas.height=height;const ctx=canvas.getContext('2d');ctx.clearRect(0,0,width,height);ctx.fillStyle='rgba(180, 255, 227, .65)';
+ for(let x=0;x<width;x++){const start=Math.floor(x*waveformPeaks.length/width),end=Math.max(start+1,Math.floor((x+1)*waveformPeaks.length/width));let peak=0;for(let i=start;i<end&&i<waveformPeaks.length;i++)peak=Math.max(peak,waveformPeaks[i]);if(peak>0){const h=Math.max(1,peak*(height-4));ctx.fillRect(x,(height-h)/2,1,h)}}
+}
+async function loadNarrationWaveform(voice){
+ const key=voice.url;if(!key)return;if(waveformKey===key&&waveformPeaks){drawNarrationWaveform();return}if(waveformKey===key&&waveformPending)return;
+ waveformKey=key;waveformPeaks=null;const task=(async()=>{let context;try{
+  const response=await fetch(key,{cache:'no-store'});if(!response.ok)throw Error('Narration could not be loaded');const bytes=await response.arrayBuffer();
+  context=new (window.AudioContext||window.webkitAudioContext)();const audio=await context.decodeAudioData(bytes);const channels=Array.from({length:audio.numberOfChannels},(_,i)=>audio.getChannelData(i));
+  const bins=Math.min(50000,Math.max(1,Math.ceil(audio.duration*100))),peaks=new Float32Array(bins);
+  for(let b=0;b<bins;b++){const start=Math.floor(b*audio.length/bins),end=Math.floor((b+1)*audio.length/bins);let peak=0;for(let i=start;i<end;i++)for(const channel of channels)peak=Math.max(peak,Math.abs(channel[i]));peaks[b]=peak}
+  if(waveformKey===key){waveformPeaks=peaks;drawNarrationWaveform()}
+ }catch(err){if(waveformKey===key){const canvas=$('#audio-track .audio-waveform');if(canvas)canvas.title='Waveform unavailable: '+err.message}}finally{if(context)context.close().catch(()=>{});if(waveformKey===key)waveformPending=null}})();waveformPending=task;
 }
 function seekAudioTrack(event){const rect=$('#audio-track').getBoundingClientRect();seekEditor((event.clientX-rect.left)/timelineZoom,true)}
 

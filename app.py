@@ -352,7 +352,10 @@ def public(p):
  from production import reserve_id
  for a in d['assets']:
   a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file'+(f'?v={a["revision"]}' if a.get('revision') else '');a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
- if d['voiceover']:d['voiceover']['url']=f'/api/projects/{p["id"]}/narration'
+ if d['voiceover']:
+  voice_path=folder(p['id'])/d['voiceover']['path']
+  revision=str(voice_path.stat().st_mtime_ns) if voice_path.is_file() else 'missing'
+  d['voiceover']['url']=f'/api/projects/{p["id"]}/narration?v={revision}'
  from automatic import automatic_readiness
  d['automatic_readiness']=automatic_readiness(p)
  status_path=folder(p['id'])/'automatic_status.json'
