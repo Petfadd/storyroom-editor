@@ -107,3 +107,6 @@
 
 /* Single centered playback control; track mutes stay on the timeline. */
 .transport{justify-content:center;gap:12px;flex-wrap:nowrap}.transport-buttons button{width:34px;height:34px;font-size:15px}.transport .timecode{font-size:10px}.preview-badge{display:block;margin:0 auto 5px;text-align:center}@media(max-width:1220px){.preview-badge{display:none}}
+
+/* SRT cues use their own clock; animation never shifts the uploaded cue boundaries. */
+.caption-overlay{left:7%;right:7%;bottom:7%;font-size:clamp(12px,1.4vw,21px);font-weight:650;line-height:1.55;white-space:pre-line;text-wrap:balance}.caption-overlay span{background:rgba(7,12,18,.76);padding:.18em .45em;border-radius:.2em;box-decoration-break:clone;-webkit-box-decoration-break:clone;color:#fff;text-shadow:0 1px 2px #000}
