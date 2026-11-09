@@ -104,3 +104,6 @@
 
 /* Timeline thumbnails are a visual reference only, not picture assets. */
 .shot-clip .clip-thumb{opacity:.38}.shot-clip .clip-text{text-shadow:0 1px 3px #000,0 0 5px #000}
+
+/* Single centered playback control; track mutes stay on the timeline. */
+.transport{justify-content:center;gap:12px;flex-wrap:nowrap}.transport-buttons button{width:34px;height:34px;font-size:15px}.transport .timecode{font-size:10px}.preview-badge{display:block;margin:0 auto 5px;text-align:center}@media(max-width:1220px){.preview-badge{display:none}}
