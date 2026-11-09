@@ -156,3 +156,21 @@ class PhotoShowsLabelTest(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
    c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Name'}).get_json()['id'];p=server.load(pid);asset={'id':'a','name':'a.jpg','kind':'image','path':'assets/a.jpg','verified':True,'source':'user','people':[],'category':'person','rights':'unreviewed'};(Path(tmp)/pid/'assets/a.jpg').write_bytes(b'image');p['assets']=[asset];s={'frame_in':0,'frame_out':120,'asset_id':'a','person':'Carl Renner (suspect). Identification basis: a caption.','plan_row':{'uploaded_photo':True,'shown_person':'Carl Renner (suspect). Identification basis: a caption.'},'context_only':False,'notes':'','transition':'cut','focus':'Portrait','approved':False};p['scenes']=[s]
    errors,_=server.scene_review(p,0,s,asset,{},0);self.assertTrue(any('named person is not verified' in e for e in errors));asset['people']=['Carl Renner'];errors,_=server.scene_review(p,0,s,asset,{},0);self.assertFalse(any('named person is not verified' in e for e in errors))
+
+class BuildReadinessTest(unittest.TestCase):
+ def test_ready_only_when_narration_media_and_ranges_pass(self):
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  script=SCRIPT.replace('STILL (native static interval)','VIDEO, 1.0×, loop OFF')
+  with tempfile.TemporaryDirectory() as tmp,patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Readiness'}).get_json()['id'];root=Path(tmp)/pid;p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':script}
+   for name in ('First video.mp4','S02.mp4'):
+    (root/'sources'/name).write_bytes(b'fixture');p['assets'].append({'id':name,'name':name,'original_name':name,'kind':'video','duration':20,'path':'sources/'+name,'verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''})
+   self.assertFalse(server.script_reading(p)['ready_to_build']);self.assertIn('Upload the narration audio.',server.script_reading(p)['build_issues'])
+   (root/'inputs/voiceover.mp3').write_bytes(b'audio');p['voiceover']={'duration':8,'path':'inputs/voiceover.mp3'};r=server.script_reading(p);self.assertTrue(r['ready_to_build']);self.assertEqual(r['build_issues'],[])
+   p['voiceover']['duration']=20;self.assertTrue(any('Narration duration' in x for x in server.script_reading(p)['build_issues']));p['voiceover']['duration']=8
+   p['assets'][1]['duration']=6;self.assertTrue(any('exceed' in x for x in server.script_reading(p)['build_issues']));p['assets'][1]['duration']=20
+   p['production_script']['text']=script.replace('Full source: S02.mp4','Full source: First video.mp4').replace('Source IN: 00:00:05,000\nSource OUT: 00:00:09,000','Source IN: 00:00:04,000\nSource OUT: 00:00:08,000')
+   self.assertTrue(any('overlap' in x for x in server.script_reading(p)['build_issues']))

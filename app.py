@@ -279,15 +279,34 @@ def script_reading(p, include_shots=False):
  try:rows,mode=rows_for(p)
  except ValueError as e:return {'status':'error','detail':str(e)}
  if mode!='detailed_production_script':return {'status':'not_detailed'}
- missing=[];short=[]
+ missing=[];short=[];overlaps=[];used={}
  for row in rows:
   matches=[a for a in p['assets'] if asset_matches(a,row['source_file'])]
   if len(matches)!=1 or not (folder(p['id'])/matches[0]['path']).is_file():missing.append(row['source_file']);continue
   asset=matches[0]
   if asset.get('kind')=='video' and (row['source_in_ms']/1000>=float(asset.get('duration') or 0) or ((row['visual_status']=='VIDEO' or row.get('native_static_interval')) and row['source_out_ms']/1000>float(asset.get('duration') or 0)+.001)):short.append(row['shot_id'])
+  if asset.get('kind')=='video' and row.get('source_in_ms') is not None and row.get('source_out_ms') is not None:
+   for start,end,shot in used.get(asset['id'],[]):
+    if row['source_in_ms']<end and row['source_out_ms']>start:
+     overlaps.append({'shot':row['shot_id'],'earlier_shot':shot});break
+   used.setdefault(asset['id'],[]).append((row['source_in_ms'],row['source_out_ms'],row['shot_id']))
  mismatches=sorted({b for row in rows if row.get('narration_mismatch') for b in row['srt_blocks']})
+ build_issues=[]
+ if missing:build_issues.append('Missing or ambiguous source files: '+', '.join(sorted(set(missing)))+'.')
+ if short:build_issues.append('Source intervals exceed uploaded file duration: '+', '.join(short)+'.')
+ if overlaps:build_issues.append('Source intervals overlap earlier shots: '+', '.join(x['shot']+' / '+x['earlier_shot'] for x in overlaps)+'.')
+ if mismatches:build_issues.append('Script narration differs from the SRT in '+str(len(mismatches))+' cue(s).')
+ if not p.get('voiceover'):build_issues.append('Upload the narration audio.')
+ elif not p['voiceover'].get('path') or not (folder(p['id'])/p['voiceover']['path']).is_file():build_issues.append('The narration audio file is missing from disk.')
+ elif abs(float(p['voiceover'].get('duration') or 0)-rows[-1]['timeline_out_ms']/1000)>.25:build_issues.append('Narration duration does not match the SRT timeline.')
+ unsupported=[r['shot_id'] for r in rows if r.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not r.get('native_static_interval') and not r.get('uploaded_photo')]
+ if unsupported:build_issues.append('Unsupported still or freeze instructions: '+', '.join(unsupported)+'. No frames will be extracted.')
+ if policy(p)!='mixed' and any(r.get('uploaded_photo') for r in rows):build_issues.append('Enable moving footage and photographs for this project.')
+ still_ms=sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval') or r.get('uploaded_photo'))
+ if rows[-1]['timeline_out_ms'] and still_ms/rows[-1]['timeline_out_ms']>.1+1e-9:build_issues.append('Script-declared stills exceed the 10% limit.')
+
  result={'status':'read','shots':len(rows),'blocks':len({n for row in rows for n in row['srt_blocks']}),'duration_ms':rows[-1]['timeline_out_ms'],
-         'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,
+         'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,'overlap_shots':overlaps,'build_issues':build_issues,'ready_to_build':not build_issues,
          'native_static_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval')), 'photo_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('uploaded_photo')), 'photo_shots':sum(bool(r.get('uploaded_photo')) for r in rows), 'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
          'video_shots':sum(r.get('requested_treatment') in ('VIDEO','CONTEXT VIDEO','ARCHIVAL REUSE') for r in rows),
          'caption_shots':sum(bool(r.get('required_caption')) for r in rows),'narration_mismatch_blocks':mismatches,
