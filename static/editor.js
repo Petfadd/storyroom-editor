@@ -33,7 +33,7 @@ showHome=openProjects;
 function pauseManagementMedia(){document.querySelectorAll('#manage-dialog audio,#manage-dialog video').forEach(node=>node.pause())}
 function closeTools(){pauseManagementMedia();for(const id of ['#projects-dialog','#manage-dialog'])if($(id).open)$(id).close()}
 openProject=async function(id){if(!leave())return;pauseEditor();closeTools();P=await api('/api/projects/'+id);sceneIndex=P.script_moving_only?Math.max(0,P.scenes.findIndex(s=>P.assets.some(a=>a.id===s.asset_id&&a.kind==='video'))):0;tab='brief';history.replaceState(null,'','#/production/'+id);await list();resetEditor();renderProject();if(P.script_moving_only&&scenes()[sceneIndex]?.asset_id)seekEditor(scenes()[sceneIndex].frame_in/30,false)};
-function resetEditor(){$('#preview-seeking').hidden=true;selectedSlotIds=new Set();selectionExplicitlyEmpty=false;slotScalePreview=null;clearPreparedSource();editorBuffering=false;sourceSeekToken++;masterSeekToken++;sourceReady=false;sourceScene='';clockBase=0;clockAt=performance.now();masterUrl='';editorMaster=false;masterNode.pause();masterNode.removeAttribute('src');masterNode.load();sourceNode.pause();sourceNode.removeAttribute('src');sourceNode.load();narrNode.pause();narrNode.removeAttribute('src');narrNode.load();$('#timeline-scroll').scrollLeft=0}
+function resetEditor(){selectedSlotIds=new Set();selectionExplicitlyEmpty=false;slotScalePreview=null;clearPreparedSource();editorBuffering=false;sourceSeekToken++;masterSeekToken++;sourceReady=false;sourceScene='';clockBase=0;clockAt=performance.now();masterUrl='';editorMaster=false;masterNode.pause();masterNode.removeAttribute('src');masterNode.load();sourceNode.pause();sourceNode.removeAttribute('src');sourceNode.load();narrNode.pause();narrNode.removeAttribute('src');narrNode.load();$('#timeline-scroll').scrollLeft=0}
 $('#new-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter||$('#new-form button[type=submit]');button.disabled=true;try{pauseEditor();P=await api('/api/projects','POST',Object.fromEntries(new FormData(e.target)));sceneIndex=0;$('#new-dialog').close();history.replaceState(null,'','#/production/'+P.id);resetEditor();await list();renderProject();manage('brief');toast('New production created in the same timeline editor.')}finally{button.disabled=false}};
 function manage(which){if(!['brief','assets','delivery'].includes(which))which='brief';if(!P){toast('Create a production first.');return}if(!leave())return;pauseEditor();tab=which;renderManagement();if(!$('#manage-dialog').open)$('#manage-dialog').showModal()}
 changeTab=manage;
@@ -62,7 +62,7 @@ function renderProgram(){
  const t=editorTime();
  if(target){
   if(masterUrl!==target){narrNode.pause();sourceNode.pause();masterUrl=target;editorMaster=true;masterNode.src=target;masterNode.load();const token=++masterSeekToken;masterNode.addEventListener('loadedmetadata',()=>{if(token===masterSeekToken&&masterNode.getAttribute('src')===target)masterNode.currentTime=Math.min(t,masterNode.duration||t)},{once:true})}
-  editorMaster=true;$('#preview-seeking').hidden=true;masterNode.classList.add('is-active');sourceNode.classList.remove('is-active');imageNode.hidden=true;
+  editorMaster=true;masterNode.classList.add('is-active');sourceNode.classList.remove('is-active');imageNode.hidden=true;
  }else{
   if(masterUrl){masterNode.pause();masterNode.removeAttribute('src');masterNode.load();masterUrl=''}editorMaster=false;masterNode.classList.remove('is-active');
   const url=P?.voiceover?.url||'';if(narrNode.getAttribute('src')!==url){narrNode.pause();if(url){narrNode.src=url;narrNode.load()}else{narrNode.removeAttribute('src');narrNode.load()}}
@@ -101,25 +101,25 @@ function usePreparedSource(s,a,t){
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
  const wasBuffering=editorBuffering;const old=sourceNode;sourceNode=nextSourceNode;nextSourceNode=old;prepareToken++;preparedScene='';preparedReady=false;
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
- sourceReady=true;editorBuffering=false;clockAt=performance.now();sourceNode.playbackRate=1;sourceNode.muted=editorVideoMuted;nextSourceNode.muted=true;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#preview-seeking').hidden=true;$('#monitor-empty').hidden=true;
+ sourceReady=true;editorBuffering=false;clockAt=performance.now();sourceNode.playbackRate=1;sourceNode.muted=editorVideoMuted;nextSourceNode.muted=true;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
  if(editorPlaying&&wasBuffering&&P?.voiceover){narrNode.muted=editorMuted;narrNode.play().catch(()=>pauseEditor())}
  if(editorPlaying)sourceNode.play().catch(()=>{if(sourceScene===s.id&&!editorMaster)seekSourceAtTimeline(s,a,editorTime())});
  return true;
 }
 function seekSourceAtTimeline(s,a,t){
  // Seek a second video element while the previous decoded picture stays visible.
- // Nothing is captured, saved, or added to the edit; the old picture is clearly marked.
+ // Nothing is captured, saved, or added to the edit.
  const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();sourceNode.muted=editorVideoMuted;sourceNode.playbackRate=1;
- prepareToken++;preparedScene='';preparedReady=false;const node=nextSourceNode;node.pause();node.muted=true;node.playbackRate=1;
- editorBuffering=true;clockBase=t;clockAt=performance.now();narrNode.pause();$('#preview-seeking').hidden=false;
- const valid=()=>token===sourceSeekToken&&sourceScene===s.id&&!editorMaster&&node===nextSourceNode;
+ prepareToken++;preparedScene='';preparedReady=false;const reuseActive=sourceNode.classList.contains('is-active')&&sourceNode.getAttribute('src')===a.url;const node=reuseActive?sourceNode:nextSourceNode;node.pause();node.muted=reuseActive?editorVideoMuted:true;node.playbackRate=1;
+ editorBuffering=true;clockBase=t;clockAt=performance.now();narrNode.pause();
+ const valid=()=>token===sourceSeekToken&&sourceScene===s.id&&!editorMaster&&node===(reuseActive?sourceNode:nextSourceNode);
  const desired=()=>Number(s.in_s)+Math.max(0,t-s.frame_in/30);
- const failed=()=>{if(token!==sourceSeekToken||sourceScene!==s.id||editorMaster)return;sourceReady=false;$('#preview-seeking').hidden=true;pauseEditor();$('#monitor-empty').hidden=false;$('#monitor-empty').innerHTML='<strong>Media preview unavailable</strong><span>Playback paused with the narration; no empty slot was played.</span>'};
+ const failed=()=>{if(token!==sourceSeekToken||sourceScene!==s.id||editorMaster)return;sourceReady=false;pauseEditor();$('#monitor-empty').hidden=false;$('#monitor-empty').innerHTML='<strong>Media preview unavailable</strong><span>Playback paused with the narration; no empty slot was played.</span>'};
  let readyDone=false;
  const seek=()=>{if(!valid()||node.readyState<1)return;const target=desired();if(!Number.isFinite(target)||target<0||target>node.duration+.034){failed();return}try{node.currentTime=target;if(!node.seeking&&node.readyState>=2)ready()}catch{failed()}};
  const ready=()=>{if(readyDone||!valid()||node.seeking||node.readyState<2)return;if(Math.abs(node.currentTime-desired())>.15){seek();return}readyDone=true;
-  const old=sourceNode;sourceNode=node;nextSourceNode=old;old.classList.remove('is-active');old.onloadedmetadata=old.onseeked=old.onloadeddata=old.onerror=null;
-  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;sourceNode.muted=editorVideoMuted;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#preview-seeking').hidden=true;
+  if(!reuseActive){const old=sourceNode;sourceNode=node;nextSourceNode=old;old.classList.remove('is-active');old.onloadedmetadata=old.onseeked=old.onloadeddata=old.onerror=null;}
+  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;sourceNode.muted=editorVideoMuted;sourceNode.classList.add('is-active');imageNode.hidden=true;
   sourceReady=true;editorBuffering=false;clockAt=performance.now();$('#monitor-empty').hidden=true;if(editorPlaying){const jobs=[sourceNode.play()];if(P?.voiceover){narrNode.muted=editorMuted;jobs.push(narrNode.play())}Promise.all(jobs).catch(()=>{if(token===sourceSeekToken&&editorPlaying&&!editorMaster)failed()})}};
  node.onloadedmetadata=seek;node.onseeked=ready;node.onloadeddata=ready;node.onerror=failed;
  if(node.getAttribute('src')!==a.url){node.src=a.url;node.load()}else if(node.readyState>=1)seek();
@@ -139,10 +139,10 @@ for(const node of [sourceNode,nextSourceNode]){
 }
 
 function showSource(i,t){
- if(editorMaster)return;const s=scenes()[i],a=assets().find(a=>a.id===s?.asset_id);if(!s||!a||s.missing_video_out){$('#preview-seeking').hidden=true;sourceSeekToken++;sourceReady=false;sourceNode.pause();sourceNode.classList.remove('is-active');if(sourceNode.getAttribute('src')){sourceNode.removeAttribute('src');sourceNode.load()}imageNode.hidden=true;sourceScene='';$('#blur-backdrop').getContext('2d').clearRect(0,0,960,540);if(s){if(editorPlaying)pauseEditor();$('#monitor-empty').hidden=false;$('#monitor-empty').innerHTML=missingVisualHTML(s)}return}
+ if(editorMaster)return;const s=scenes()[i],a=assets().find(a=>a.id===s?.asset_id);if(!s||!a||s.missing_video_out){sourceSeekToken++;sourceReady=false;sourceNode.pause();sourceNode.classList.remove('is-active');if(sourceNode.getAttribute('src')){sourceNode.removeAttribute('src');sourceNode.load()}imageNode.hidden=true;sourceScene='';$('#blur-backdrop').getContext('2d').clearRect(0,0,960,540);if(s){if(editorPlaying)pauseEditor();$('#monitor-empty').hidden=false;$('#monitor-empty').innerHTML=missingVisualHTML(s)}return}
  if(sourceScene!==s.id){
   $('#monitor-empty').hidden=true;sourceScene=s.id;
-  if(a.kind==='image'){$('#preview-seeking').hidden=true;sourceNode.pause();sourceSeekToken++;sourceReady=false;editorBuffering=false;clockAt=performance.now();imageNode.style.transform='none';sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;imageNode.src=a.url;imageNode.hidden=false;sourceNode.classList.remove('is-active')}
+  if(a.kind==='image'){sourceNode.pause();sourceSeekToken++;sourceReady=false;editorBuffering=false;clockAt=performance.now();imageNode.style.transform='none';sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;imageNode.src=a.url;imageNode.hidden=false;sourceNode.classList.remove('is-active')}
   else if(editorPlaying&&sourceReady&&!sourceNode.seeking&&sourceNode.getAttribute('src')===a.url&&Math.abs(sourceNode.currentTime-(Number(s.in_s)+Math.max(0,t-s.frame_in/30)))<.12){ /* Continuous interval in the same source: keep decoding without a seek. */ }
   else if(!usePreparedSource(s,a,t)){seekSourceAtTimeline(s,a,t)}
  }
@@ -415,7 +415,7 @@ $('#source-file-dialog').addEventListener('cancel',event=>{event.preventDefault(
 function selectEditorScene(i,event){if(!scenes().length)return;if(suppressClipClick){suppressClipClick=false;return}if(!leave())return;pauseEditor();i=Math.max(0,Math.min(scenes().length-1,i));const id=scenes()[i].id;if(event&&(event.ctrlKey||event.metaKey)){if(selectedSlotIds.has(id))selectedSlotIds.delete(id);else selectedSlotIds.add(id)}else selectedSlotIds=new Set([id]);selectionExplicitlyEmpty=!selectedSlotIds.size;slotScalePreview=null;sceneIndex=i;sourceScene='';seekEditor(scenes()[sceneIndex].frame_in/30,false);renderInspector();markSelected();syncPictureScale()}
 function markSelected(){document.querySelectorAll('.shot-clip').forEach(n=>{const active=selectedSlotIds.has(scenes()[Number(n.dataset.scene)]?.id);n.classList.toggle('selected',active);n.setAttribute('aria-pressed',String(active))});$('#monitor-shot-label').textContent=scenes().length?((scenes()[sceneIndex]?.plan_row?.shot_id||'SRT '+scenes()[sceneIndex].srt_blocks.join('–'))):'NO SCENES'}
 function selectAllVideoSlots(){if(!P||!leave())return;pauseEditor();const video=new Set(assets().filter(a=>a.kind==='video').map(a=>a.id));selectedSlotIds=new Set(scenes().filter(s=>video.has(s.asset_id)).map(s=>s.id));selectionExplicitlyEmpty=!selectedSlotIds.size;slotScalePreview=null;markSelected();renderInspector();syncPictureScale();toast(`${selectedSlotIds.size} MP4 slot(s) selected.`)}
-function seekEditor(t,select=true){if(!scenes().length)return;t=Math.max(0,Math.min(totalTime()-.001,t));if(select&&!leave())return;const was=editorPlaying;pauseEditor();clockBase=t;clockAt=performance.now();if(editorMaster){masterSeekToken++;try{masterNode.currentTime=t}catch{}}else if(P?.voiceover){try{narrNode.currentTime=t}catch{}}if(select){const i=scenes().findIndex(s=>frameAt(t)>=s.frame_in&&frameAt(t)<s.frame_out);if(i>=0)sceneIndex=i}sourceScene='';if(!editorMaster)showSource(sceneIndex,t);renderInspector();markSelected();updatePosition();if(was)playEditor()}
+function seekEditor(t,select=true){if(!scenes().length)return;t=Math.max(0,Math.min(totalTime()-.001,t));if(select&&!leave())return;const previousScene=sceneIndex,was=editorPlaying;pauseEditor();clockBase=t;clockAt=performance.now();if(editorMaster){masterSeekToken++;try{masterNode.currentTime=t}catch{}}else if(P?.voiceover){try{narrNode.currentTime=t}catch{}}if(select){const i=scenes().findIndex(s=>frameAt(t)>=s.frame_in&&frameAt(t)<s.frame_out);if(i>=0)sceneIndex=i}sourceScene='';if(!editorMaster)showSource(sceneIndex,t);if(sceneIndex!==previousScene){renderInspector();markSelected()}updatePosition();if(was)playEditor()}
 function updatePlaybackButton(){const button=$('#play-button');button.textContent=editorPlaying?'❚❚':'▶';button.title=editorPlaying?'Pause':'Play';button.setAttribute('aria-label',button.title)}
 function toggleEditorPlayback(){if(editorPlaying)pauseEditor();else playEditor()}
 async function playEditor(){if(!scenes().length){toast('Import SRT and build the storyboard first.');return}if(scenes()[sceneIndex]?.missing_video_out){toast('This still or freeze is not shown in the moving-video review.');return}if(dirty){toast('Save or discard scene edits before playing.');return}if(editorTime()>=totalTime()-.01)seekEditor(0,true);editorPlaying=true;updatePlaybackButton();clockAt=performance.now();$('#big-play').hidden=true;try{if(editorMaster){masterNode.muted=editorMuted;await masterNode.play()}else{const s=scenes()[sceneIndex],a=assets().find(a=>a.id===s?.asset_id);if(a?.kind==='video'&&!sourceReady){seekSourceAtTimeline(s,a,editorTime());return}showSource(sceneIndex,editorTime());if(P?.voiceover){narrNode.muted=editorMuted;await narrNode.play()}if(a?.kind==='video'&&sourceReady&&sourceNode.readyState>=2)await sourceNode.play()}}catch(e){pauseEditor();toast('Playback could not start. Check the selected media or try again.')}}
@@ -443,9 +443,10 @@ $('#manage-dialog').addEventListener('cancel',e=>{e.preventDefault();closeManage
 $('#ruler-track').onclick=e=>{const r=$('#ruler-track').getBoundingClientRect();seekEditor((e.clientX-r.left)/timelineZoom,true)};
 // Scrub the timeline without editing SRT, source ranges or narration.
 let playheadDrag=null;
-function scrubPlayhead(clientX){
- const rect=$('#timeline-content').getBoundingClientRect();
- seekEditor((clientX-rect.left)/timelineZoom,true);
+function scrubPlayhead(clientX,previous=null){
+ const rect=$('#timeline-content').getBoundingClientRect(),target=Math.max(0,Math.min(totalTime()-.001,(clientX-rect.left)/timelineZoom));
+ const drag=playheadDrag||previous;if(drag&&drag.lastTarget!=null&&Math.abs(drag.lastTarget-target)<.001)return;
+ if(drag)drag.lastTarget=target;seekEditor(target,true);
 }
 // Drag across the MP4 track to draw a selection. Ctrl/Command adds to it.
 const videoTrack=$('#video-track');
@@ -473,7 +474,7 @@ $('#playhead-handle').addEventListener('pointermove',e=>{if(playheadDrag?.pointe
 function endPlayheadDrag(e){
  const d=playheadDrag;if(!d||d.pointerId!==e.pointerId)return;
  cancelAnimationFrame(d.raf);playheadDrag=null;e.currentTarget.classList.remove('dragging');
- scrubPlayhead(e.clientX);if(d.wasPlaying)playEditor();
+ scrubPlayhead(e.clientX,d);if(d.wasPlaying)playEditor();
 }
 $('#playhead-handle').addEventListener('pointerup',endPlayheadDrag);
 $('#playhead-handle').addEventListener('pointercancel',endPlayheadDrag);
