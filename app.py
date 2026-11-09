@@ -1360,6 +1360,43 @@ def strict_cut_check(pid):
  from strict_cuts import report
  p=load(pid);return jsonify(report(p,folder(pid)))
 
+# Strict decoding may exceed a proxy's request timeout. Run it once per saved
+# project version in the background; polling never starts a render or edits data.
+STRICT_JOBS={}
+STRICT_JOBS_LOCK=threading.Lock()
+
+@app.get('/api/projects/<pid>/strict-cut-status')
+def strict_cut_status(pid):
+ from strict_cuts import report
+ p=load(pid);version=p.get('updated');key=(pid,version)
+ with STRICT_JOBS_LOCK:
+  job=STRICT_JOBS.get(key)
+  if job is None:
+   job={'state':'checking','version':version,'completed':0,'total':len(p.get('scenes') or [])}
+   STRICT_JOBS[key]=job
+   # Keep only the newest non-running status for this project.
+   for old in list(STRICT_JOBS):
+    if old!=key and old[0]==pid and STRICT_JOBS[old]['state']!='checking':STRICT_JOBS.pop(old,None)
+   def work():
+    try:
+     def progress(completed,total):
+      with STRICT_JOBS_LOCK:job.update(completed=completed,total=total)
+     result=report(p,folder(pid),progress=progress)
+     with STRICT_JOBS_LOCK:job.update(state='done',report=result,completed=len(p.get('scenes') or []))
+    except Exception as exc:
+     app.logger.exception('Strict cut check failed')
+     with STRICT_JOBS_LOCK:job.update(state='error',error=str(exc)[:300] or 'Strict check failed.')
+   threading.Thread(target=work,daemon=True,name='strict-cut-check').start()
+  return jsonify(dict(job))
+
+@app.post('/api/projects/<pid>/strict-cut-status/retry')
+def retry_strict_cut_status(pid):
+ p=load(pid);key=(pid,p.get('updated'))
+ with STRICT_JOBS_LOCK:
+  job=STRICT_JOBS.get(key)
+  if job and job['state']=='error':STRICT_JOBS.pop(key,None)
+ return jsonify({'ok':True})
+
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:

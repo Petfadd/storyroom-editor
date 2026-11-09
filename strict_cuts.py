@@ -58,7 +58,7 @@ def inspect_video(path, required_frames):
         except ValueError:raise
         except Exception as e:raise ValueError('source frames could not be verified: '+str(e)[:200]) from e
 
-def report(project, root):
+def report(project, root, progress=None):
     root=Path(root);scenes=project.get('scenes') or [];assets={a['id']:a for a in project.get('assets',[])}
     required=bool(project.get('production_script')) or any((s.get('plan_row') or {}).get('strict_production') for s in scenes)
     result={'required':required,'checked_version':project.get('updated'),'mode':'strict frame-indexed 30 fps' if required else 'not applicable','shots':[],'errors':[]}
@@ -68,6 +68,7 @@ def report(project, root):
     expected=[b.get('number') for b in (project.get('srt') or {}).get('blocks',[])]
     seen=[]
     for i,s in enumerate(scenes):
+        if progress:progress(i,len(scenes))
         row=s.get('plan_row') or {};label=row.get('shot_id') or f'Scene {i+1}';a=assets.get(s.get('asset_id'))
         item={'scene':i+1,'id':s.get('id'),'shot':label,'file':row.get('source_file'),'assigned_file':(a or {}).get('original_name',(a or {}).get('name')),'script_in_ms':row.get('source_in_ms'),'script_out_ms':row.get('source_out_ms'),'placed_in_ms':None,'placed_out_ms':None,'in_deviation_ms':None,'out_deviation_ms':None,'saved_in_ms':float(s.get('in_s',0))*1000,'timeline_script_in_ms':row.get('timeline_in_ms'),'timeline_script_out_ms':row.get('timeline_out_ms'),'timeline_placed_in_ms':s.get('frame_in',0)*1000/FPS,'timeline_placed_out_ms':s.get('frame_out',0)*1000/FPS,'errors':[],'photo':bool(row.get('uploaded_photo'))}
         err=item['errors']

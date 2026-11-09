@@ -26,17 +26,17 @@ let strictStatus={key:null,state:'idle',report:null,error:null,promise:null};
 function strictKey(){return P&&P.scenes?.length&&(P.production_script||P.scenes.some(s=>s.plan_row?.strict_production))?`${P.id}:${P.updated}`:null}
 function ensureStrictStatus(){const key=strictKey();if(!key)return {state:'not_required',report:null};if(strictStatus.key===key)return strictStatus;
  const id=P.id;strictStatus={key,state:'checking',report:null,error:null,promise:null};const state=strictStatus;
- state.promise=api(`/api/projects/${id}/strict-cut-check`).then(r=>{state.report=r;state.state=r.errors.length?'blocked':'passed';return r}).catch(e=>{state.error=e.message;state.state='error';throw e}).finally(()=>{if(strictStatus===state&&P?.id===id&&strictKey()===key&&$('#manage-dialog').open)renderManagement()});
+ state.promise=(async()=>{for(;;){const job=await api(`/api/projects/${id}/strict-cut-status`);if(job.version!==Number(key.slice(key.indexOf(':')+1)))throw Error('The project changed during the check. Refresh to check the current version.');if(job.state==='error')throw Error(job.error||'Strict check failed.');if(job.state==='done')return job.report;state.completed=job.completed;state.total=job.total;document.querySelectorAll('[data-strict-progress]').forEach(n=>{n.textContent=job.total?`${job.completed} of ${job.total} shots checked`:'Checking source frames and timing'});await new Promise(resolve=>setTimeout(resolve,2000))}})().then(r=>{state.report=r;state.state=r.errors.length?'blocked':'passed';return r}).catch(e=>{state.error=e.message;state.state='error';throw e}).finally(()=>{if(strictStatus===state&&P?.id===id&&strictKey()===key&&$('#manage-dialog').open)renderManagement()});
  // Status may be requested only for display; handle rejection even if no one awaits it.
  state.promise.catch(()=>{});return state;
 }
 function strictStatusHTML(){const s=ensureStrictStatus();if(s.state==='not_required')return '';
- if(s.state==='checking')return '<p><strong>Strict cut check:</strong> Checking source frames and timing. This can take a while.</p>';
+ if(s.state==='checking')return `<p><strong>Strict cut check:</strong> <span data-strict-progress>${s.total?`${s.completed||0} of ${s.total} shots checked`:'Checking source frames and timing'}</span>. Long videos can take time; playback remains available.</p>`;
  if(s.state==='error')return `<p><strong>Strict cut check unavailable:</strong> ${E(s.error)}. Export remains blocked until the check succeeds.</p><button type="button" onclick="retryStrictStatus()">Retry strict cut check</button>`;
  if(s.state==='blocked')return `<p><strong>Strict cuts: ${s.report.errors.length} issue(s) block export.</strong></p><ul class="issues">${s.report.errors.map(x=>`<li>${E(x)}</li>`).join('')}</ul><p><button type="button" onclick="openStrictCutCheck(null)">See per-shot cut check</button></p>`;
  return '<p><strong>Strict cut check:</strong> Timing checks passed. Content, identity and rights are not automatically verified.</p><p><button type="button" onclick="openStrictCutCheck(null)">See per-shot cut check</button></p>';
 }
-function retryStrictStatus(){strictStatus.key=null;renderManagement()}
+async function retryStrictStatus(){try{await api(`/api/projects/${P.id}/strict-cut-status/retry`,'POST');strictStatus.key=null;renderManagement()}catch(e){toast(e.message)}}
 function canBuildStoryboard(){return !!P&&P.script_reading?.status==='read'&&P.script_reading.ready_to_build===true&&!window.buildingStoryboard&&!uploading}
 function buildDisabled(){return canBuildStoryboard()?'':'disabled'}
 function briefHTML(){
@@ -188,14 +188,14 @@ async function buildStoryboard(){
  window.buildingStoryboard=true;let timer;updateBuildProgress(id,'Building storyboard','Reading the production script and SRT…',{running:true});
  const buttons=[...document.querySelectorAll('button[onclick="buildStoryboard()"]')];buttons.forEach(b=>b.disabled=true);
  try{
-  timer=setInterval(async()=>{try{const r=await fetch(`/api/projects/${id}/imports/${key}`);if(!r.ok)return;const state=await r.json();if(P?.id===id&&window.buildingStoryboard&&state.detail)updateBuildProgress(id,'Building storyboard',state.detail,{running:true})}catch{}},500);
+  let recovering=false,finished=false;
+  const finish=result=>{if(finished||P?.id!==id)return;finished=true;window.buildingStoryboard=false;clearInterval(timer);P=result;sceneIndex=0;const placed=P.script_application?.placed_scenes||0,total=P.scenes.length,issues=(P.script_application?.issues||[]).length;updateBuildProgress(id,'Review timeline ready',`${placed} of ${total} cue shots assigned; ${issues} unresolved. Source content, photos, captions, still limits and rights still need review. No missing footage was substituted.`,{done:true});renderProject();list().catch(()=>{});};
+  timer=setInterval(async()=>{try{const r=await fetch(`/api/projects/${id}/imports/${key}`);if(!r.ok)return;const state=await r.json();if(P?.id!==id||finished||!window.buildingStoryboard)return;if(state.stage==='done'&&!recovering){recovering=true;updateBuildProgress(id,'Review timeline saved','Loading the saved timeline…',{running:true});try{finish(await api(`/api/projects/${id}`))}finally{recovering=false}}else if(state.detail&&state.stage!=='done')updateBuildProgress(id,'Building storyboard',state.detail,{running:true})}catch{}},500);
   const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true,replace_review:!!P.scenes.length,require_ready:true})});
   let result;try{result=await response.json()}catch{throw Error('The server response could not be read. Check the project before retrying.')}
   if(!response.ok)throw Error(result.error||'The script could not be read.');
-  if(P?.id!==id)return;P=result;sceneIndex=0;const placed=P.script_application?.placed_scenes||0,total=P.scenes.length,issues=(P.script_application?.issues||[]).length;
-  updateBuildProgress(id,'Review timeline ready',`${placed} of ${total} cue shots assigned; ${issues} unresolved. Source content, photos, captions, still limits and rights still need review. No missing footage was substituted.`,{done:true});
-  renderProject();await list();
- }catch(e){if(P?.id===id)updateBuildProgress(id,'Storyboard not built',e.message||'The build could not finish. Your uploads were kept.',{error:true})}
+  finish(result);
+ }catch(e){if(P?.id===id&&window.buildingStoryboard){try{const state=await api(`/api/projects/${id}/imports/${key}`);if(state.stage==='done'){P=await api(`/api/projects/${id}`);sceneIndex=0;updateBuildProgress(id,'Review timeline ready',state.detail+' Source content and rights still need review.',{done:true});renderProject()}else updateBuildProgress(id,'Build status unavailable',e.message+' Check the saved project before retrying.',{error:true})}catch{updateBuildProgress(id,'Build status unavailable','Check the saved project before retrying. Your uploads were kept.',{error:true})}}}
  finally{clearInterval(timer);window.buildingStoryboard=false;buttons.forEach(b=>{if(b.isConnected)b.disabled=!canBuildStoryboard()})}
 }
 const options=(items,v)=>items.map(([k,t])=>`<option value="${E(k)}" ${k===v?'selected':''}>${E(t)}</option>`).join('');
