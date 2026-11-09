@@ -46,6 +46,7 @@ function briefHTML(){
  const reviewAction=!P.scenes.length?`<button class="new" type="button" onclick="buildStoryboard()" ${buildDisabled()}>Build storyboard</button>`:`<button class="new" type="button" onclick="openTimeline()">Open timeline</button> <button type="button" onclick="buildStoryboard()" ${buildDisabled()}>Rebuild review from script</button>`;
  return `<div class="simple-setup">
  <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>
+ <section class="card"><h3>Editing modes</h3><p><strong>Script review</strong> is your current unchanged timeline. <strong>Documentary edit</strong> lets you plan and audition footage sound bites separately.</p><button type="button" onclick="openDocumentary()">Open documentary planning</button><p class="small">Planning and handoff preview only for now. The current Render MP4 does not include sound bites.</p></section>
  ${buildProgressHTML()}${reading}${progressStatus}
  <p class="setup-intro">Upload your production files below. The script tells you which footage filenames to upload.</p>
  <div class="setup-grid">

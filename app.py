@@ -1355,6 +1355,40 @@ def download_scene_exports(pid,name):
  if not re.fullmatch(r'scenes_[0-9]{8}_[0-9]{6}_[a-f0-9]{8}\.zip',name):raise NotFound('Scene archive not found.')
  return send_from_directory(folder(pid)/'renders/scene_exports',name,conditional=True,as_attachment=True)
 
+@app.get('/api/projects/<pid>/documentary-bites')
+def get_documentary_bites(pid):
+ from documentary import load_plan,annotate_plan
+ root=folder(pid)
+ with LOCKS[pid]:
+  try:return jsonify(annotate_plan(load(pid),root,load_plan(root)))
+  except ValueError as e:raise BadRequest(str(e))
+
+@app.post('/api/projects/<pid>/documentary-bites')
+def add_documentary_bite(pid):
+ from documentary import load_plan,validate_bite,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before saving.')
+  if len(plan['bites'])>=200:raise BadRequest('The plan is limited to 200 sound bites.')
+  try:bite=validate_bite(load(pid),root,data,lambda path:probe(path)['has_audio'])
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+  plan['bites'].append(bite);plan['bites'].sort(key=lambda x:(x['pause_s'],x['created']))
+  plan['revision']+=1;write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(load(pid),root,plan))
+
+@app.delete('/api/projects/<pid>/documentary-bites/<bid>')
+def remove_documentary_bite(pid,bid):
+ from documentary import load_plan,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before removing anything.')
+  new=[x for x in plan['bites'] if x['id']!=bid]
+  if len(new)==len(plan['bites']):raise NotFound('Sound bite not found.')
+  plan['bites']=new;plan['revision']+=1;write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(load(pid),root,plan))
+
 @app.get('/api/projects/<pid>/strict-cut-check')
 def strict_cut_check(pid):
  from strict_cuts import report

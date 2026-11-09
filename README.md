@@ -551,3 +551,9 @@ used the `yamnet_3s.onnx` waveform graph from
 [Choise-ieee/yamnet_onnx_cpp_audio_speech_classification](https://github.com/Choise-ieee/yamnet_onnx_cpp_audio_speech_classification);
 that repository does not state a license, so it is **not redistributed here**. The
 included class labels and their license are documented in `data/YAMNET-NOTICE.md`.
+
+### Documentary sound-bite planning (preview only)
+
+Setup → **Open documentary planning** opens a separate handoff planner. Choose an SRT cue as a guide, listen to the original narration and mark a pause; choose an uploaded video and its source IN and exclusive OUT; then audition the narration–source audio–narration handoff. Browser handoff timing is approximate and requires listening. Saved plans are kept separately as `documentary_plan.json` inside the project; they do not modify the project timeline, the original narration, or the original SRT. Replaced source media or narration mark the corresponding plans for review. Verify speaker context, identity and reuse rights yourself.
+
+**This is not documentary export.** The regular editor timeline and Render MP4 do not include planned sound bites. Creating a documentary timeline, rendering it, and producing a newly timed SRT are not implemented yet. Do not treat the handoff preview as a final or frame-accurate cut.
