@@ -15,7 +15,13 @@ def asset_used(p,a):
  return a['id'] in selected or any(c['id'] in selected and (c.get('derived_from') or {}).get('asset_id')==a['id'] for c in p['assets'])
 
 def asset_matches(asset,name):
- original=str(asset.get('original_name') or asset.get('name',''))
+ original=str(asset.get('original_name') or asset.get('name',''));name=str(name)
+ # Uploaded JPEG/PNG photos may use different extensions for the same exact stem.
+ # Count every matching upload (even an exact-extension match), so duplicates are
+ # ambiguous rather than silently selecting one. Never apply this to derived frames.
+ photo_extensions={'.jpg','.jpeg','.png'}
+ if asset.get('kind')=='image' and not asset.get('derived_from') and _Path(original).suffix.lower() in photo_extensions and _Path(name).suffix.lower() in photo_extensions:
+  return _Path(original).stem==_Path(name).stem
  return original.casefold()==name.casefold() or bool(not asset.get('derived_from') and reserve_id(asset) and reserve_id(asset)==name.casefold())
 
 def matching_assets(p,name):

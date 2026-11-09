@@ -122,3 +122,24 @@ Continuity/caption: Check
   self.assertEqual([r['shot_id'] for r in rows],['Srt01','Srt02-A','Srt02-B']);self.assertEqual([(r['timeline_in_ms'],r['timeline_out_ms']) for r in rows],[(0,2500),(2500,4000),(4000,6000)])
   with self.assertRaises(ValueError):parse_plain_script(text.replace('Shot: Srt02-B','Shot: Srt02-C'),blocks)
   with self.assertRaises(ValueError):parse_plain_script(text.replace('00:00:04.000 → 00:00:06.000','00:00:04.100 → 00:00:06.000'),blocks)
+
+class PhotoExtensionMatchingTest(unittest.TestCase):
+ def test_extension_variants_match_exact_stem_but_are_ambiguous(self):
+  from production import asset_matches,matching_assets
+  a={'id':'a','kind':'image','original_name':'P01_Carl_Renner.jpeg'}
+  self.assertTrue(asset_matches(a,'P01_Carl_Renner.jpg'));self.assertTrue(asset_matches(a,'P01_Carl_Renner.png'))
+  self.assertFalse(asset_matches(a,'P01_carl_Renner.jpg'));self.assertFalse(asset_matches(a,'P01_Carl_Renner.webp'));self.assertFalse(asset_matches(a,'P01_Carl.jpg'))
+  p={'assets':[a,dict(a,id='b',original_name='P01_Carl_Renner.png')]};self.assertEqual(len(matching_assets(p,'P01_Carl_Renner.jpg')),2)
+ def test_photo_in_review_assigns_jpeg_for_jpg_script_and_rejects_ambiguity(self):
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  photo=SCRIPT.replace('Full source: S02.mp4','Full source: Victim Photo.jpg').replace('Source IN: 00:00:05,000\nSource OUT: 00:00:09,000\nTreatment: STILL (native static interval)','Source IN: N/A\nSource OUT: N/A\nTreatment: PHOTO')
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Extensions'}).get_json()['id'];root=Path(tmp)/pid;p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':photo}
+   (root/'assets/photo.jpeg').write_bytes(b'image');p['assets']=[{'id':'a','name':'Victim Photo.jpeg','original_name':'Victim Photo.jpeg','kind':'image','duration':0,'path':'assets/photo.jpeg','verified':True,'source':'identified','people':[],'category':'person','rights':'unreviewed','notes':''}];server.save(p)
+   self.assertNotIn('Victim Photo.jpg',server.script_reading(p)['missing_files']);res=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True});self.assertEqual(res.status_code,200,res.get_data(as_text=True));p=server.load(pid);self.assertEqual(p['scenes'][1]['asset_id'],'a')
+   errors=server.check(p)['errors'];self.assertFalse(any('selected source differs' in e for e in errors))
+   (root/'assets/photo.png').write_bytes(b'image');p['assets'].append(dict(p['assets'][0],id='b',name='Victim Photo.png',original_name='Victim Photo.png',path='assets/photo.png'));server.save(p)
+   res=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertEqual(res.status_code,200);p=server.load(pid);self.assertIsNone(p['scenes'][1]['asset_id']);self.assertTrue(any('Multiple uploaded photos' in i for i in p['script_application']['issues']))

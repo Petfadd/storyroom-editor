@@ -192,7 +192,9 @@ def assemble(p,seed):
   problem=''
   if row.get('import_blockers'):problem=' '.join(row['import_blockers'])
   elif not row['source_file']:problem=str(row['gap_note'])
-  elif len(matches)!=1:problem=match_problem(p,row['source_file'])
+  elif len(matches)!=1:
+   if row.get('uploaded_photo') and len(matches)>1:problem='Multiple uploaded photos have the requested filename stem; remove or rename duplicates before rebuilding. No photo was chosen.'
+   else:problem=match_problem(p,row['source_file'])
   elif str(row.get('rights_status','')).lower()=='incompatible':problem='This mapped source has incompatible reuse rights.'
   else:
    a=matches[0];source_start=row['source_in_ms']/1000;source_end=row['source_out_ms']/1000;duration=(end-start)/30;handle=s.get('transition_handle_frames',4)/30 if s['transition']=='dissolve' else 0

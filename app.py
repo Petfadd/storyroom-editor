@@ -242,7 +242,9 @@ def check(p,final=False):
    if not s.get('approved'):scene_errors.append(f'Scene {i+1}: inspect the picture, identity, context and official source provenance before approval.')
    if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or (a and abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001):
     scene_errors.append(f'Scene {i+1}: edited timing or transition differs from the production script.')
-   if a and a.get('original_name',a.get('name','')).casefold()!=row['source_file'].casefold():scene_errors.append(f'Scene {i+1}: selected source differs from the production script.')
+   if a:
+    from production import asset_matches
+    if not asset_matches(a,row['source_file']):scene_errors.append(f'Scene {i+1}: selected source differs from the production script.')
    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and (s.get('script_camera') or {}).get('move')!='static':scene_errors.append(f'Scene {i+1}: still must remain a static hold.')
    if row.get('requested_treatment')=='CONTEXT VIDEO' and not s.get('context_only'):scene_errors.append(f'Scene {i+1}: context footage must remain labelled as context.')
   errors.extend(scene_errors);notes.extend(scene_notes)
