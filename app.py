@@ -330,6 +330,8 @@ def script_reading(p, include_shots=False):
 
 def public(p):
  d=copy.deepcopy(p)
+ from caption_layout import caption_phrases
+ d['caption_phrases']=caption_phrases((p.get('srt') or {}).get('blocks',[]))
  from document_plan import match_report
  d['source_match_report']=match_report(d)
  from footage_requirements import footage_requirements,photo_requirements
