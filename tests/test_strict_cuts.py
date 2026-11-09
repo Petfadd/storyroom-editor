@@ -30,6 +30,20 @@ class StrictCutTest(unittest.TestCase):
   path=self.root/'sources'/'24fps.mp4';subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-v','error','-y','-f','lavfi','-i','testsrc2=s=160x90:r=24:d=3','-c:v','libx264','-pix_fmt','yuv420p',str(path)],check=True)
   p=copy.deepcopy(self.p);p['assets'][0].update(path='sources/24fps.mp4',original_name='24fps.mp4');p['scenes'][0]['plan_row']['source_file']='24fps.mp4';r=report(p,self.root);self.assertEqual(r['errors'],[]);self.assertEqual(r['shots'][0]['source_fps'],'24');self.assertAlmostEqual(r['shots'][0]['placed_in_ms'],1000/24)
 
+ def test_one_verified_next_frame_for_small_shortfall(self):
+  from fractions import Fraction
+  from unittest.mock import patch
+  p=copy.deepcopy(self.p);s=p['scenes'][0];s.update(frame_out=192,in_s=44.232)
+  s['plan_row'].update(source_in_ms=44232,source_out_ms=50632,timeline_in_ms=0,timeline_out_ms=6400)
+  p['assets'][0]['duration']=60
+  checks=[]
+  with patch('strict_cuts.source_rate',return_value=Fraction(30000,1001)),patch('strict_cuts.inspect_video',side_effect=lambda path,n:checks.append(n)):
+   r=report(p,self.root)
+  self.assertEqual(r['errors'],[]);x=r['shots'][0];self.assertEqual(x['source_end_frame'],1518);self.assertEqual(checks,[1518]);self.assertEqual(x['added_source_frames'],1);self.assertEqual(len(r['adjustments']),1);self.assertGreater(x['placed_out_ms'],x['script_out_ms'])
+  with patch('strict_cuts.source_rate',return_value=Fraction(30000,1001)),patch('strict_cuts.inspect_video',side_effect=ValueError('source ended early')):
+   r=report(p,self.root)
+  self.assertIn('extra source frame could not be verified',' '.join(r['errors']));self.assertFalse(r['adjustments'])
+
  def test_vfr_timestamps_block_export(self):
   path=self.root/'sources'/'vfr.mp4';subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-v','error','-y','-f','lavfi','-i','testsrc2=s=160x90:r=30:d=3','-vf',"select='not(eq(n,10))'",'-fps_mode','vfr','-c:v','libx264','-pix_fmt','yuv420p',str(path)],check=True)
   p=copy.deepcopy(self.p);p['assets'][0].update(path='sources/vfr.mp4',original_name='vfr.mp4');p['scenes'][0]['plan_row']['source_file']='vfr.mp4';self.assertIn('variable or discontinuous',' '.join(report(p,self.root)['errors']))

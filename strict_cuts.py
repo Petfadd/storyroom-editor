@@ -61,7 +61,7 @@ def inspect_video(path, required_frames):
 def report(project, root, progress=None):
     root=Path(root);scenes=project.get('scenes') or [];assets={a['id']:a for a in project.get('assets',[])}
     required=bool(project.get('production_script')) or any((s.get('plan_row') or {}).get('strict_production') for s in scenes)
-    result={'required':required,'checked_version':project.get('updated'),'mode':'strict frame-indexed 30 fps' if required else 'not applicable','shots':[],'errors':[]}
+    result={'required':required,'checked_version':project.get('updated'),'mode':'strict frame-indexed 30 fps' if required else 'not applicable','shots':[],'errors':[],'adjustments':[]}
     if not required:return result
     if not scenes:result['errors'].append('No storyboard shots are placed.');return result
     last=0;previous_script_out=0
@@ -70,7 +70,7 @@ def report(project, root, progress=None):
     for i,s in enumerate(scenes):
         if progress:progress(i,len(scenes))
         row=s.get('plan_row') or {};label=row.get('shot_id') or f'Scene {i+1}';a=assets.get(s.get('asset_id'))
-        item={'scene':i+1,'id':s.get('id'),'shot':label,'file':row.get('source_file'),'assigned_file':(a or {}).get('original_name',(a or {}).get('name')),'script_in_ms':row.get('source_in_ms'),'script_out_ms':row.get('source_out_ms'),'placed_in_ms':None,'placed_out_ms':None,'in_deviation_ms':None,'out_deviation_ms':None,'saved_in_ms':float(s.get('in_s',0))*1000,'timeline_script_in_ms':row.get('timeline_in_ms'),'timeline_script_out_ms':row.get('timeline_out_ms'),'timeline_placed_in_ms':s.get('frame_in',0)*1000/FPS,'timeline_placed_out_ms':s.get('frame_out',0)*1000/FPS,'errors':[],'photo':bool(row.get('uploaded_photo'))}
+        item={'scene':i+1,'id':s.get('id'),'shot':label,'file':row.get('source_file'),'assigned_file':(a or {}).get('original_name',(a or {}).get('name')),'script_in_ms':row.get('source_in_ms'),'script_out_ms':row.get('source_out_ms'),'placed_in_ms':None,'placed_out_ms':None,'in_deviation_ms':None,'out_deviation_ms':None,'saved_in_ms':float(s.get('in_s',0))*1000,'timeline_script_in_ms':row.get('timeline_in_ms'),'timeline_script_out_ms':row.get('timeline_out_ms'),'timeline_placed_in_ms':s.get('frame_in',0)*1000/FPS,'timeline_placed_out_ms':s.get('frame_out',0)*1000/FPS,'errors':[],'adjustments':[],'photo':bool(row.get('uploaded_photo'))}
         err=item['errors']
         def fail(message):err.append(message)
         if not row.get('strict_production'):fail('No exact script shot and source timing is attached to this slot.')
@@ -113,15 +113,28 @@ def report(project, root, progress=None):
                             pin=float(Fraction(fi,1)/rate*1000);pout=float(Fraction(fo,1)/rate*1000)
                             item.update(source_start_frame=fi,source_end_frame=fo,source_fps=str(rate),placed_in_ms=pin,placed_out_ms=pout,in_deviation_ms=pin-si,out_deviation_ms=pout-so)
                             actual_duration=Fraction(fo-fi,1)/rate;output_duration=Fraction(s.get('frame_out',0)-s.get('frame_in',0),FPS)
-                            if abs(actual_duration-output_duration)>=Fraction(1,2*FPS):fail('Snapped source and output durations differ by at least half an output frame; exact placement is not possible.')
+                            difference=output_duration-actual_duration
+                            # A user-authorized exception: for a shortfall of at most one
+                            # output frame, use exactly the next source frame if that
+                            # makes the durations compatible. Never slow, freeze or loop.
+                            extend=(difference>=Fraction(1,2*FPS) and difference<=Fraction(1,FPS)
+                                    and abs(actual_duration+Fraction(1,1)/rate-output_duration)<Fraction(1,2*FPS))
                             if fo<=fi:fail('Snapped source interval contains no frames.')
                             if fo>fi>=0:
-                                try:inspect_video(path,fo)
-                                except (ValueError,OSError,ImportError) as e:fail(str(e))
+                                try:
+                                    inspect_video(path,fo+1 if extend else fo)
+                                    if extend:
+                                        fo+=1;pout=float(Fraction(fo,1)/rate*1000)
+                                        item.update(source_end_frame=fo,placed_out_ms=pout,out_deviation_ms=pout-so,added_source_frames=1)
+                                        item['adjustments'].append('One source frame added after the snapped script OUT; it may also appear at the next cut.')
+                                    elif abs(difference)>=Fraction(1,2*FPS):fail('Snapped source and output durations differ by at least half an output frame; exact placement is not possible.')
+                                except (ValueError,OSError,ImportError) as e:
+                                    fail(('The extra source frame could not be verified: ' if extend else '')+str(e))
                     if abs(float(s.get('in_s',0))*1000-si)>1e-6:fail('Saved source IN differs from the script.')
                 except (ValueError,OSError,ImportError) as e:fail(str(e)+' (source).')
         result['shots'].append(item)
         result['errors'].extend(f'{label}: {e}' for e in err)
+        result['adjustments'].extend(f'{label}: {e}' for e in item['adjustments'])
     blocks=(project.get('srt') or {}).get('blocks',[])
     if blocks and blocks[-1].get('end_ms') is not None and previous_script_out!=blocks[-1]['end_ms']:result['errors'].append('The script timeline does not end at the original final SRT OUT.')
     if len(scenes)!=len(expected):result['errors'].append(f'Expected {len(expected)} shots for {len(expected)} SRT cues, found {len(scenes)}.')

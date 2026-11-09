@@ -1423,7 +1423,7 @@ def render(pid):
   if caption_entries:
    caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
    caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'script_captions_requested':burn_script,'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'strict_cut_report':strict,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'script_captions_requested':burn_script,'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
   one_line_file=None
   if burn_srt:
    from caption_layout import make_single_line_ass
