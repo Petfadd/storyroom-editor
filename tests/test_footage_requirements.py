@@ -32,3 +32,16 @@ class FootageRequirementsTest(unittest.TestCase):
    self.assertEqual(result.status_code,200);self.assertEqual(result.get_json()['footage_requirements']['status'],'no_script')
 
 if __name__=='__main__':unittest.main()
+
+class PhotoRequirementsTest(unittest.TestCase):
+ def test_photo_scan_without_srt_with_spaced_names_and_format_matching(self):
+  from footage_requirements import photo_requirements
+  p={'production_script':{'text':'Photograph: Victim Photo.jpg\nFull source: PROPOSED: Exhibit A.png\nFull source: S03.mp4\nOther: `Suspect Photo.jpeg`\nDuplicate: `Suspect Photo.jpeg`'},'assets':[{'kind':'image','original_name':'Victim Photo.jpeg'},{'kind':'image','original_name':'Exhibit A.jpg'},{'kind':'image','original_name':'Exhibit A.png'}]}
+  r=photo_requirements(p);self.assertEqual([x['name'] for x in r['files']],['Victim Photo.jpg','Exhibit A.png','Suspect Photo.jpeg']);self.assertEqual((r['total'],r['matched'],r['missing'],r['ambiguous']),(3,1,1,1));self.assertEqual(r['files'][0]['matched_names'],['Victim Photo.jpeg'])
+ def test_no_script_and_no_names(self):
+  from footage_requirements import photo_requirements
+  self.assertEqual(photo_requirements({})['status'],'no_script');self.assertEqual(photo_requirements({'production_script':{'text':'S01.mp4'}})['status'],'not_found')
+ def test_photo_list_updates_on_script_upload_without_srt(self):
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Photo count'}).get_json()['id']
+   res=c.post(f'/api/projects/{pid}/upload',data={'kind':'production_script','file':(io.BytesIO(b'Photograph: Victim Portrait.jpg\nFull source: S01.mp4'),'script.txt')},content_type='multipart/form-data');self.assertEqual(res.status_code,200);r=res.get_json();self.assertEqual(r['photo_requirements']['files'][0]['name'],'Victim Portrait.jpg');self.assertEqual(r['photo_requirements']['missing'],1);self.assertIsNone(r['srt'])

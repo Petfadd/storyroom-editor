@@ -304,8 +304,8 @@ def public(p):
  d=copy.deepcopy(p)
  from document_plan import match_report
  d['source_match_report']=match_report(d)
- from footage_requirements import footage_requirements
- d['footage_requirements']=footage_requirements(p)
+ from footage_requirements import footage_requirements,photo_requirements
+ d['footage_requirements']=footage_requirements(p);d['photo_requirements']=photo_requirements(p)
  if p.get('production_script'):
   from cue_script import is_cue_script
   from plain_script import is_plain_script

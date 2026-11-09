@@ -26,3 +26,27 @@ def footage_requirements(project):
             'matched':sum(f['status']=='matched' for f in files),
             'missing':sum(f['status']=='missing' for f in files),
             'ambiguous':sum(f['status']=='ambiguous' for f in files)}
+
+# This scan works even before an SRT is uploaded. It reports names mentioned in
+# the document, not proof that a name is a scheduled or eligible photograph.
+PHOTO_FILENAMES = re.compile(r'''(?P<quote>["'`])(?P<quoted>[^\n\r"'`/\\]{1,180}\.(?:jpg|jpeg|png|webp))(?P=quote)|(?<![\w./\\-])(?P<plain>[A-Za-z][A-Za-z0-9_-]*\.(?:jpg|jpeg|png|webp))(?![\w.-])''', re.I)
+PHOTO_FIELD = re.compile(r'^\s*(?:Photograph|Full source)\s*:\s*(?:PROPOSED:\s*)?[`"\']?([^\n\r/\\`"\']+?\.(?:jpg|jpeg|png|webp))[`"\']?\s*$',re.M|re.I)
+
+def photo_requirements(project):
+    from production import asset_matches
+    script=project.get('production_script')
+    if not script:return {'status':'no_script','files':[],'total':0,'matched':0,'missing':0,'ambiguous':0}
+    text=script.get('text') or '';names={}
+    def add(name):
+        name=name.strip();names.setdefault(name,name)
+    # Remove recognized fields from the loose scan so a spaced filename isn't
+    # also misread as its last word, e.g. "Victim Photo.jpg" -> "Photo.jpg".
+    for match in PHOTO_FIELD.finditer(text):add(match.group(1))
+    rest=PHOTO_FIELD.sub('',text)
+    for match in PHOTO_FILENAMES.finditer(rest):add(match.group('quoted') or match.group('plain'))
+    photos=[a for a in project.get('assets',[]) if a.get('kind')=='image' and not a.get('derived_from')]
+    files=[]
+    for name in names.values():
+        hits=[a for a in photos if asset_matches(a,name)]
+        files.append({'name':name,'status':'missing' if not hits else 'matched' if len(hits)==1 else 'ambiguous','matches':len(hits),'matched_names':[a.get('original_name') or a.get('name','') for a in hits]})
+    return {'status':'found' if files else 'not_found','files':files,'total':len(files),'matched':sum(f['status']=='matched' for f in files),'missing':sum(f['status']=='missing' for f in files),'ambiguous':sum(f['status']=='ambiguous' for f in files)}
