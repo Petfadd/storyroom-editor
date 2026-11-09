@@ -205,17 +205,24 @@ class RenderJob:
             
             if extra_frames: visual['out_ms']=max(visual['out_ms'],visual['in_ms']+duration*1000+1)
             start=visual['in_ms']/1000;available=(visual['out_ms']-visual['in_ms'])/1000
-            if available+.001<duration or start+duration>self._video_duration_ms(visual['path'])/1000+.001:
+            if not shot.get('strict_source_frames') and (available+.001<duration or start+duration>self._video_duration_ms(visual['path'])/1000+.001):
                 raise RuntimeError(f'Scene {shot["shot"]}: source range cannot cover {frames} frames; no looping or freezing is allowed.')
             read_duration=min(duration+2/fps,self._video_duration_ms(visual['path'])/1000-start)
-            cmd+=['-ss',f'{start:.6f}','-t',f'{read_duration:.6f}','-i',str(visual['path'])]
+            strict_frames=shot.get('strict_source_frames')
+            if strict_frames:
+                if fps!=30 or strict_frames[1]<=strict_frames[0]:raise RuntimeError(f'Scene {shot["shot"]}: invalid strict source frame range.')
+                cmd+=['-i',str(visual['path'])]
+                prefix=f'trim=start_frame={strict_frames[0]}:end_frame={strict_frames[1]},setpts=PTS-STARTPTS,fps=30:round=near:eof_action=pass,setsar=1'
+            else:
+                cmd+=['-ss',f'{start:.6f}','-t',f'{read_duration:.6f}','-i',str(visual['path'])]
+                prefix=f'setpts=PTS-STARTPTS,fps={fps},setsar=1'
             w,h=self._dimensions(visual['path']);ratio=w/h
             if abs(ratio-ow/oh)>.05:
-                graph=(f'[0:v]setpts=PTS-STARTPTS,fps={fps},setsar=1,split=2[backsrc][frontsrc];'
+                graph=(f'[0:v]{prefix},split=2[backsrc][frontsrc];'
                        f'[backsrc]scale={ow}:{oh}:force_original_aspect_ratio=increase,crop={ow}:{oh},gblur=sigma=24,eq=brightness=-0.10:saturation=0.75[back];'
                        f'[frontsrc]scale={ow}:{oh}:force_original_aspect_ratio=decrease[front];'
                        f'[back][front]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=end_frame={frames}[picture]')
-            else: graph=f'[0:v]setpts=PTS-STARTPTS,scale={ow}:{oh},fps={fps},setsar=1,trim=end_frame={frames}[picture]'
+            else: graph=f'[0:v]{prefix},scale={ow}:{oh},trim=end_frame={frames}[picture]'
         scale=shot.get('picture_scale',settings.get('picture_scale',100))
         if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise RuntimeError('Invalid picture scale.')
         if scale!=100:
@@ -275,7 +282,7 @@ class RenderJob:
             signature = ['missing']
         payload = {
             'source': str(path), 'signature': signature, 'type': visual['type'],
-            'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'),
+            'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'), 'strict_source_frames': shot.get('strict_source_frames'),
             'frames': shot['duration_frames'] + extra,
             'motion': shot.get('motion_plan'), 'transition': shot.get('transition'),
             'size': [settings.get('width'), settings.get('height')], 'fps': settings.get('fps'), 'picture_scale': shot.get('picture_scale',settings.get('picture_scale',100)),

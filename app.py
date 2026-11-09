@@ -1272,7 +1272,7 @@ def split_scene(pid,sid):
 def merge_scene(pid,sid):
  raise BadRequest('Merging cues is disabled: use exactly one shot per SRT cue.')
 
-def manifest(p):
+def manifest(p, strict=None):
  from production import reserve_id,asset_used
  root=folder(p['id']);w,h=output_size(p.get('format','landscape'),p.get('size'));assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
  for i,s in enumerate(p['scenes']):
@@ -1288,6 +1288,10 @@ def manifest(p):
    else:
     bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out,quality=95)
    shot['image']=out.relative_to(root).as_posix()
+  if strict and strict.get('required') and a['kind']=='video':
+   timing=strict['shots'][i]
+   shot['strict_source_frames']=[timing['source_start_frame'],timing['source_end_frame']]
+   shot['video_in_ms']=timing['placed_in_ms'];shot['video_out_ms']=timing['placed_out_ms']
   shot['picture_scale']=s.get('picture_scale',p.get('picture_scale',100))
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
@@ -1349,12 +1353,22 @@ def download_scene_exports(pid,name):
  if not re.fullmatch(r'scenes_[0-9]{8}_[0-9]{6}_[a-f0-9]{8}\.zip',name):raise NotFound('Scene archive not found.')
  return send_from_directory(folder(pid)/'renders/scene_exports',name,conditional=True,as_attachment=True)
 
+@app.get('/api/projects/<pid>/strict-cut-check')
+def strict_cut_check(pid):
+ from strict_cuts import report
+ p=load(pid);return jsonify(report(p,folder(pid)))
+
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True;report=check(p,final)
+  from strict_cuts import report as strict_report
+  strict=strict_report(p,folder(pid))
+  if strict['errors']:report['errors'].extend(strict['errors']);report['can_export']=False
+  if strict['required'] and data.get('strict_checked_version')!=p.get('updated'):
+   report['errors'].append('Review and confirm the current per-shot strict cut check before export.');report['can_export']=False
   if report['errors']:return jsonify(report),400
-  manifest(p);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
+  manifest(p,strict);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
   job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
   burn_script=data.get('script_captions') is True;burn_srt=data.get('srt_subtitles') is True
   caption_entries=[]
