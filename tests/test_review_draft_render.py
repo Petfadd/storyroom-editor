@@ -62,3 +62,9 @@ class ReviewDraftRenderTest(unittest.TestCase):
    res=c.post(f'/api/projects/{pid}/render',json={'final':False});self.assertEqual(res.status_code,202);job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
    cap=cv2.VideoCapture(str(root/'renders'/state['output']));self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),300);cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,slot=cap.read();self.assertTrue(ok);cap.set(cv2.CAP_PROP_POS_FRAMES,280);ok,photo_after=cap.read();cap.release();self.assertTrue(ok);self.assertLess(float(abs(clean.astype('float32')-slot.astype('float32')).mean()),0.2);self.assertLess(float(abs(photo_before.astype('float32')-photo_after.astype('float32')).mean()),0.2)
    self.assertEqual(c.patch(scene_url,json={'picture_scale':None}).status_code,200);self.assertNotIn('picture_scale',server.load(pid)['scenes'][0])
+
+   bulk=f'/api/projects/{pid}/scenes/picture-scale';ids=[s['id'] for s in server.load(pid)['scenes']];snapshot=server.load(pid)
+   for body in ({'scene_ids':ids+['missing'],'picture_scale':120},{'scene_ids':ids+ids,'picture_scale':120},{'scene_ids':ids,'picture_scale':201},{'scene_ids':[],'picture_scale':120}):
+    self.assertEqual(c.patch(bulk,json=body).status_code,400);self.assertEqual(server.load(pid),snapshot)
+   self.assertEqual(c.patch(bulk,json={'scene_ids':ids,'picture_scale':125}).status_code,200);updated=server.load(pid);self.assertEqual([s['picture_scale'] for s in updated['scenes']],[125,125]);self.assertEqual(updated['picture_scale'],150)
+   self.assertEqual(c.patch(bulk,json={'scene_ids':[ids[0]],'picture_scale':None}).status_code,200);updated=server.load(pid);self.assertNotIn('picture_scale',updated['scenes'][0]);self.assertEqual(updated['scenes'][1]['picture_scale'],125)

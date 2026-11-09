@@ -1217,6 +1217,19 @@ def edit_scene_picture_scale(pid,sid):
   else:scene['picture_scale']=value
   save(p);return jsonify(public(p))
 
+@app.patch('/api/projects/<pid>/scenes/picture-scale')
+def edit_selected_picture_scale(pid):
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};ids=data.get('scene_ids');value=data.get('picture_scale')
+  if not isinstance(ids,list) or not ids or any(not isinstance(x,str) for x in ids) or len(ids)!=len(set(ids)):raise BadRequest('Select one or more distinct timeline slots.')
+  if 'picture_scale' not in data or (value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 100<=value<=200)):raise BadRequest('Picture scale must be a whole percentage from 100 to 200, or null to use the project scale.')
+  by_id={s['id']:s for s in p['scenes']}
+  if any(x not in by_id for x in ids):raise BadRequest('A selected slot is no longer in this production; no changes were made.')
+  for sid in ids:
+   if value is None:by_id[sid].pop('picture_scale',None)
+   else:by_id[sid]['picture_scale']=value
+  save(p);return jsonify(public(p))
+
 @app.post('/api/projects/<pid>/scenes/approve')
 def approve_scenes(pid):
  """Approve every scene that passes the same review export readiness applies.
