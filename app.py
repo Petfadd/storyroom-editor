@@ -1272,7 +1272,7 @@ def split_scene(pid,sid):
 def merge_scene(pid,sid):
  raise BadRequest('Merging cues is disabled: use exactly one shot per SRT cue.')
 
-def manifest(p, strict=None):
+def manifest(p, strict=None, enhance_picture=False):
  from production import reserve_id,asset_used
  root=folder(p['id']);w,h=output_size(p.get('format','landscape'),p.get('size'));assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
  for i,s in enumerate(p['scenes']):
@@ -1281,12 +1281,12 @@ def manifest(p, strict=None):
   signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
-   out=root/'.cache/prepared_images'/f'{a["id"]}.jpg';out.parent.mkdir(parents=True,exist_ok=True)
+   out=root/'.cache/prepared_images'/f'{a["id"]}.png';out.parent.mkdir(parents=True,exist_ok=True)
    im=ImageOps.exif_transpose(Image.open(root/a['path'])).convert('RGB')
    if p.get('image_layout')=='full_bleed':
-    ImageOps.fit(im,(w,h)).save(out,quality=95)
+    ImageOps.fit(im,(w,h)).save(out)
    else:
-    bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out,quality=95)
+    bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out)
    shot['image']=out.relative_to(root).as_posix()
   if strict and strict.get('required') and a['kind']=='video':
    timing=strict['shots'][i]
@@ -1295,7 +1295,7 @@ def manifest(p, strict=None):
   shot['picture_scale']=s.get('picture_scale',p.get('picture_scale',100))
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100)},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
 @app.post('/api/projects/<pid>/continuous-preview')
 def prepare_continuous_preview(pid):
@@ -1368,7 +1368,8 @@ def render(pid):
   if strict['required'] and data.get('strict_checked_version')!=p.get('updated'):
    report['errors'].append('Review and confirm the current per-shot strict cut check before export.');report['can_export']=False
   if report['errors']:return jsonify(report),400
-  manifest(p,strict);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
+  enhance_picture=data.get('enhance_picture') is True
+  manifest(p,strict,enhance_picture);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
   job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
   burn_script=data.get('script_captions') is True;burn_srt=data.get('srt_subtitles') is True
   caption_entries=[]
@@ -1383,7 +1384,7 @@ def render(pid):
   if caption_entries:
    caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
    caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'created':time.time()})
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
   one_line_file=None
   if burn_srt:
    from caption_layout import make_single_line_ass

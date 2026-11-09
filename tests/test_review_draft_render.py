@@ -1,7 +1,7 @@
-import copy,subprocess,tempfile,unittest
+import copy,subprocess,tempfile,unittest,hashlib,json
 from pathlib import Path
 from unittest.mock import patch
-from PIL import Image
+from PIL import Image,ImageDraw
 import cv2
 import app as server
 
@@ -33,7 +33,7 @@ class ReviewDraftRenderTest(unittest.TestCase):
    c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Test','picture_policy':'mixed','size':'320x180'}).get_json()['id'];root=Path(tmp)/pid;p=server.load(pid);p['srt']={'name':'test.srt','blocks':copy.deepcopy(BLOCKS)};p['production_script']={'name':'test.txt','text':SCRIPT};(root/'inputs/captions.srt').write_text('1\n00:00:00,000 --> 00:00:09,000\nFirst words\n\n2\n00:00:09,000 --> 00:00:10,000\nLast words\n')
    ff=server.FFMPEG
    subprocess.run([ff,'-loglevel','error','-y','-f','lavfi','-i','testsrc2=s=320x180:r=30:d=12','-c:v','libx264','-pix_fmt','yuv420p',str(root/'sources/video.mp4')],check=True)
-   subprocess.run([ff,'-loglevel','error','-y','-f','lavfi','-i','sine=frequency=440:duration=10','-c:a','libmp3lame',str(root/'inputs/voiceover.mp3')],check=True);Image.new('RGB',(120,80),(220,10,10)).save(root/'assets/photo.jpg')
+   subprocess.run([ff,'-loglevel','error','-y','-f','lavfi','-i','sine=frequency=440:duration=10','-c:a','libmp3lame',str(root/'inputs/voiceover.mp3')],check=True);photo=Image.new('RGB',(120,80),(220,10,10));ImageDraw.Draw(photo).rectangle((24,16,95,65),fill=(10,90,180));photo.save(root/'assets/photo.jpg')
    p['voiceover']={'name':'fixture.mp3','duration':10,'path':'inputs/voiceover.mp3'};p['assets']=[{'id':'v','name':'Source.mp4','original_name':'Source.mp4','path':'sources/video.mp4','kind':'video','duration':12,'source':'synthetic','people':[],'category':'general','verified':True,'rights':'unreviewed','notes':''},{'id':'i','name':'Person.jpg','original_name':'Person.jpg','path':'assets/photo.jpg','kind':'image','duration':0,'source':'synthetic','people':['Test Person'],'category':'person','verified':True,'rights':'unreviewed','notes':''}];server.save(p)
    res=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'require_ready':True});self.assertEqual(res.status_code,200,res.get_data(as_text=True));p=server.load(pid)
    for s in p['scenes']:s['approved']=True
@@ -43,6 +43,12 @@ class ReviewDraftRenderTest(unittest.TestCase):
    self.assertEqual(c.post(f'/api/projects/{pid}/render',json={'final':False}).status_code,400)
    res=c.post(f'/api/projects/{pid}/render',json={'strict_checked_version':server.load(pid)['updated'],'final':False});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
    cap=cv2.VideoCapture(str(root/'renders'/state['output']));count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));fps=cap.get(cv2.CAP_PROP_FPS);cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,clean=cap.read();cap.release();self.assertTrue(ok);self.assertEqual((count,fps),(300,30));self.assertFalse(state['captions'])
+   original_video=hashlib.sha256((root/'sources/video.mp4').read_bytes()).hexdigest();original_photo=hashlib.sha256((root/'assets/photo.jpg').read_bytes()).hexdigest()
+   cap=cv2.VideoCapture(str(root/'renders'/state['output']));cap.set(cv2.CAP_PROP_POS_FRAMES,280);ok,clean_photo=cap.read();cap.release();self.assertTrue(ok)
+   res=c.post(f'/api/projects/{pid}/render',json={'strict_checked_version':server.load(pid)['updated'],'final':False,'enhance_picture':True});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);enhanced=job.snapshot();self.assertEqual(enhanced['status'],'done',enhanced);self.assertTrue(enhanced['picture_enhancement'])
+   cap=cv2.VideoCapture(str(root/'renders'/enhanced['output']));self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),300);cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,enhanced_video=cap.read();self.assertTrue(ok);cap.set(cv2.CAP_PROP_POS_FRAMES,280);ok,enhanced_photo=cap.read();cap.release();self.assertTrue(ok)
+   self.assertGreater(float(abs(clean.astype('float32')-enhanced_video.astype('float32')).mean()),.05);self.assertGreater(float(abs(clean_photo.astype('float32')-enhanced_photo.astype('float32')).mean()),.05)
+   self.assertEqual(original_video,hashlib.sha256((root/'sources/video.mp4').read_bytes()).hexdigest());self.assertEqual(original_photo,hashlib.sha256((root/'assets/photo.jpg').read_bytes()).hexdigest());self.assertTrue(json.loads((root/'reviews'/(Path(enhanced['output']).stem+'.json')).read_text())['picture_enhancement'])
    res=c.post(f'/api/projects/{pid}/render',json={'strict_checked_version':server.load(pid)['updated'],'final':False,'srt_subtitles':True});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
    cap=cv2.VideoCapture(str(root/'renders'/state['output']));cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,srt_frame=cap.read();cap.release();self.assertTrue(ok);self.assertGreater(float(abs(clean.astype('float32')-srt_frame.astype('float32')).mean()),0.05);self.assertTrue(state['captions']);self.assertEqual((root/'renders'/state['output']).with_suffix('.srt').read_text(),(root/'inputs/captions.srt').read_text())
    res=c.post(f'/api/projects/{pid}/render',json={'strict_checked_version':server.load(pid)['updated'],'final':False,'script_captions':True});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)

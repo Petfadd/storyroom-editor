@@ -52,7 +52,7 @@ class RenderJob:
     def start(self, captions=False, script_caption_srt=None, narration_caption_file=None):
         if self.snapshot()['status'] in ('running','queued'): raise RuntimeError('A render is already running.')
         self.cancelled = False; self.narration_caption_file = Path(narration_caption_file) if narration_caption_file else None; self.script_caption_srt = Path(script_caption_srt) if script_caption_srt else None; self.captions_enabled = bool(captions) or bool(script_caption_srt); self.srt_captions_enabled = bool(captions)
-        self.state = {'status':'queued','progress':0.0,'stage':'Queued','detail':f'Captions {"on" if self.captions_enabled else "off"}','log':'','output':None,'error':None,'started':time.time(),'finished':None,'captions':self.captions_enabled}
+        self.state = {'status':'queued','progress':0.0,'stage':'Queued','detail':f'Captions {"on" if self.captions_enabled else "off"}','log':'','output':None,'error':None,'started':time.time(),'finished':None,'captions':self.captions_enabled,'picture_enhancement':self.story.get('settings',{}).get('enhance_picture') is True}
         self.worker_thread = threading.Thread(target=self._safe_run, daemon=True)
         self.worker_thread.start()
 
@@ -228,6 +228,9 @@ class RenderJob:
         if scale!=100:
             sw=max(ow,round(ow*scale/200)*2);sh=max(oh,round(oh*scale/200)*2)
             graph=graph.replace('[picture]',f',scale={sw}:{sh},crop={ow}:{oh}[picture]')
+        if settings.get('enhance_picture') is True:
+            # Fixed, mild processing only: no generated detail, timing, crop or audio changes.
+            graph=graph.replace('[picture]',',hqdn3d=1:1:0:0,unsharp=5:5:0.35:5:5:0[picture]')
         graph=graph.replace('[picture]',',setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[picture]')
         cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads',str(self.threads)]+PICTURE_ENCODER+['-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
         return cmd
@@ -282,7 +285,7 @@ class RenderJob:
             signature = ['missing']
         payload = {
             'source': str(path), 'signature': signature, 'type': visual['type'],
-            'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'), 'strict_source_frames': shot.get('strict_source_frames'),
+            'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'), 'strict_source_frames': shot.get('strict_source_frames'), 'enhance_picture': settings.get('enhance_picture') is True,
             'frames': shot['duration_frames'] + extra,
             'motion': shot.get('motion_plan'), 'transition': shot.get('transition'),
             'size': [settings.get('width'), settings.get('height')], 'fps': settings.get('fps'), 'picture_scale': shot.get('picture_scale',settings.get('picture_scale',100)),
