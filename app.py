@@ -251,6 +251,10 @@ def check(p,final=False):
    end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
    compare_in,compare_out=source_overlap_interval(s,a)
    ranges[a['id']].append((compare_in,compare_out,i+1))
+ if any((s.get('plan_row') or {}).get('strict_production') for s in p['scenes']) and p['scenes']:
+  still_frames=sum(s['frame_out']-s['frame_in'] for s in p['scenes'] if (assets.get(s.get('asset_id')) and (is_still(p,assets[s['asset_id']]) or (s.get('plan_row') or {}).get('native_static_interval'))))
+  total=p['scenes'][-1]['frame_out']
+  if total and still_frames/total>.1+1e-9:errors.append(f'Scheduled stills occupy {still_frames/total*100:.2f}% of the timeline, above the 10% limit. Review eligibility and replace only with appropriate footage.')
  flow=p.get('picture_flow') or {}
  from picture_flow import outstanding_notes
  notes.extend(outstanding_notes(flow))
@@ -275,7 +279,7 @@ def script_reading(p, include_shots=False):
  mismatches=sorted({b for row in rows if row.get('narration_mismatch') for b in row['srt_blocks']})
  result={'status':'read','shots':len(rows),'blocks':len({n for row in rows for n in row['srt_blocks']}),'duration_ms':rows[-1]['timeline_out_ms'],
          'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,
-         'native_static_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval')), 'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
+         'native_static_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval')), 'photo_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('uploaded_photo')), 'photo_shots':sum(bool(r.get('uploaded_photo')) for r in rows), 'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
          'video_shots':sum(r.get('requested_treatment') in ('VIDEO','CONTEXT VIDEO','ARCHIVAL REUSE') for r in rows),
          'caption_shots':sum(bool(r.get('required_caption')) for r in rows),'narration_mismatch_blocks':mismatches,
          'blocker_count':sum(bool(r.get('import_blockers')) for r in rows)}
@@ -876,20 +880,22 @@ def script_draft(pid):
   draft_rows=copy.deepcopy(rows)
   for row in draft_rows:row['review_warnings']=row.pop('import_blockers',[])
   moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
-  if moving_only:
-   prepared=draft_rows
-   for row in prepared:
-    if row.get('native_static_interval'):
-     row['native_static_review']=True
-    elif row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
-     row['import_blockers']=['Still/freeze placement is omitted from this moving-video review; no frame or clip was substituted.']
-  else:prepared=stills(p,folder(pid),draft_rows)
+  # Never extract still frames: an explicit uploaded photo is a separate static source.
+  prepared=draft_rows
+  for row in prepared:
+   if row.get('native_static_interval'):
+    row['native_static_review']=True
+   elif row.get('uploaded_photo'):
+    pass
+   elif row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+    row['import_blockers']=['Only explicitly named uploaded photographs or native static intervals can be shown; no frame was extracted or substituted.']
   original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
-  p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False
+  p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False;p['_review_root']=str(folder(pid))
   update(pid,key,'assembling',detail=f'Preparing {len(rows)} timeline shots from the explicit source ranges; unresolved shots stay empty.')
   try:assemble(p,seeds)
   except ValueError as e:raise BadRequest('Could not prepare review draft: '+str(e))
   finally:
+   p.pop('_review_root',None)
    if had_plan:p['picture_plan']=original_plan
    else:p.pop('picture_plan',None)
    if had_reuse:p['allow_archive_reuse']=reuse
@@ -899,7 +905,7 @@ def script_draft(pid):
    p['script_moving_only']=True
    for scene in p['scenes']:
     row=scene.get('plan_row') or {}
-    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval'):scene['missing_video_out']=True
+    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval') and not row.get('uploaded_photo'):scene['missing_video_out']=True
   p['script_application']['mode']='moving_video_review' if moving_only else 'script_review_draft'
   p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
   p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()

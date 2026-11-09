@@ -196,6 +196,9 @@ def assemble(p,seed):
   elif str(row.get('rights_status','')).lower()=='incompatible':problem='This mapped source has incompatible reuse rights.'
   else:
    a=matches[0];source_start=row['source_in_ms']/1000;source_end=row['source_out_ms']/1000;duration=(end-start)/30;handle=s.get('transition_handle_frames',4)/30 if s['transition']=='dissolve' else 0
+   if row.get('uploaded_photo') and (a['kind']!='image' or a.get('derived_from')):problem='The script requires an original uploaded photograph, not a video or extracted frame.'
+   elif row.get('uploaded_photo') and not (Path(p.get('_review_root',''))/a['path']).is_file() and p.get('_review_root'):problem='The requested uploaded photograph is missing from disk.'
+   elif row.get('plain_cue') and not row.get('uploaded_photo') and a['kind']=='image':problem='This script instruction requires a video source, not a photograph.'
    if row.get('map_type')=='srt_block' and scenes:
     previous=scenes[-1];prior=previous.get('plan_row',{})
     if previous.get('asset_id')==a['id'] and prior.get('parent_beat_id')==row.get('parent_beat_id') and prior.get('source_out_ms')==row['source_in_ms'] and previous['transition']=='cut':

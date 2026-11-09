@@ -16,3 +16,21 @@ The production script, SRT and uploaded files remain unchanged. A source filenam
 - Never use loops, screenshots, extracted video frames, freeze-frames, false motion, unlisted footage or unrelated repetition to fill gaps. Static photograph or document intervals, if explicitly scheduled under the approved workflow, count toward the still budget and need separate eligibility and rights checks.
 - The review can play explicitly labelled native static intervals directly from their original videos without extracting or freezing frames. Their complete duration counts toward the still budget and their eligibility, identity and rights remain unverified. Extracted stills, freeze instructions and unresolved source ranges remain unassigned. Playback pauses at missing or invalid shots; it does not guess a replacement. The review is not a finished edit or export.
 - Scripted captions appear as review text, not rendered captions. Caption layout, visual verification, media conformity and rights decisions remain outstanding. No final render is promised until required checks pass.
+
+## Explicit uploaded photographs in labelled scripts
+
+For a cue that calls for a real uploaded photo, use its exact original filename and `Treatment: PHOTO` (also accepted: `PHOTOGRAPH`, `STILL PHOTO`, `STILL HOLD`). Set both `Source IN: N/A` and `Source OUT: N/A`: a photograph has no video clock. The narration timeline must still match the one SRT cue exactly. For example:
+
+```text
+Shot: Srt001
+Narration timeline: 00:00:00,000 --> 00:00:04,000
+Exact narration: Original words
+Full source: victim photo.jpg
+Source IN: N/A
+Source OUT: N/A
+Treatment: PHOTO
+Visual direction: Victim photograph; verify identity
+Continuity/caption: Review source, rights and intended use
+```
+
+The photo must be a unique, original uploaded JPG, PNG or WebP, not an extracted video frame. It is held static for the cue in the review timeline. Missing or duplicate filenames remain unresolved. Actual identity, relevance, still eligibility and rights require human review; an uploaded filename is not proof. The review reports scheduled still time including native static intervals against the 10% maximum, and unresolved material cannot be assumed to be genuine motion. Photo use requires the mixed-picture policy for export, but a review draft is never a final render. This syntax does not change existing scripts or automatically replace video instructions with photos.

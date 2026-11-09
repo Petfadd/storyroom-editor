@@ -24,7 +24,7 @@ class ScriptDraftTest(unittest.TestCase):
             server.save(p)
             response=client.post(f'/api/projects/{pid}/script-draft',json={});self.assertEqual(response.status_code,200,response.get_data(as_text=True))
             saved=server.load(pid);self.assertTrue(saved['review_only_draft']);self.assertEqual(len(saved['scenes']),1)
-            self.assertTrue(all(s['asset_id'] for s in saved['scenes']));self.assertEqual(saved['scenes'][0]['plan_row']['extracted_frame_ms'],1000)
+            self.assertIsNone(saved['scenes'][0]['asset_id']);self.assertFalse(any(a.get('derived_from') for a in saved['assets']));self.assertIn('no frame was extracted',saved['script_application']['issues'][0])
             self.assertEqual(saved['scenes'][0]['plan_row']['required_caption'],'“Context label”')
             self.assertEqual(saved['srt']['blocks'],BLOCKS);self.assertEqual(saved['production_script']['text'],SCRIPT);self.assertEqual(saved['picture_policy'],'clips_only')
             self.assertEqual((root/'inputs/captions.srt').read_text(),'Original names exactly')

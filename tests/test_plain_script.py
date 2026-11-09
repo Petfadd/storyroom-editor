@@ -78,3 +78,25 @@ class HeadedScriptTest(unittest.TestCase):
    self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True}).status_code,200)
    saved=server.load(pid);saved['manual_scene_edits']=True;server.save(saved)
    before=server.load(pid)['scenes'];self.assertEqual(c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True}).status_code,400);self.assertEqual(server.load(pid)['scenes'],before)
+
+class UploadedPhotoTest(unittest.TestCase):
+ def test_photo_syntax_is_explicit_and_has_no_source_clock(self):
+  photo=SCRIPT.replace('Full source: S02.mp4','Full source: Victim Photo.jpg').replace('Source IN: 00:00:05,000\nSource OUT: 00:00:09,000\nTreatment: STILL (native static interval)','Source IN: N/A\nSource OUT: N/A\nTreatment: PHOTO')
+  row=parse_plain_script(photo,BLOCKS)[1];self.assertTrue(row['uploaded_photo']);self.assertFalse(row['native_static_interval']);self.assertEqual(row['source_out_ms'],4000)
+  for bad in [photo.replace('Victim Photo.jpg','S02.mp4'),photo.replace('Source IN: N/A','Source IN: 00:00:01,000'),photo.replace('Treatment: PHOTO','Treatment: VIDEO, 1.0×, loop OFF')]:
+   with self.assertRaises(ValueError):parse_plain_script(bad,BLOCKS)
+ def test_draft_assigns_only_original_exact_photo_and_reports_budget(self):
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  from PIL import Image
+  photo=SCRIPT.replace('Full source: S02.mp4','Full source: Victim Photo.jpg').replace('Source IN: 00:00:05,000\nSource OUT: 00:00:09,000\nTreatment: STILL (native static interval)','Source IN: N/A\nSource OUT: N/A\nTreatment: PHOTO')
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Photo test'}).get_json()['id'];root=Path(tmp)/pid;p=server.load(pid);p['srt']={'blocks':copy.deepcopy(BLOCKS)};p['production_script']={'text':photo}
+   (root/'sources/video.mp4').write_bytes(b'video');Image.new('RGB',(30,20),'red').save(root/'assets/photo.jpg')
+   p['assets']=[{'id':'v','name':'First video.mp4','original_name':'First video.mp4','kind':'video','duration':20,'path':'sources/video.mp4','verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''},{'id':'i','name':'Victim Photo.jpg','original_name':'Victim Photo.jpg','kind':'image','duration':0,'path':'assets/photo.jpg','verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''}];server.save(p)
+   result=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True});self.assertEqual(result.status_code,200,result.get_data(as_text=True));p=server.load(pid);scene=p['scenes'][1]
+   self.assertEqual(scene['asset_id'],'i');self.assertEqual(scene['script_camera']['move'],'static');self.assertNotIn('missing_video_out',scene);self.assertTrue(any('above the 10%' in e for e in server.check(p)['errors']));self.assertEqual(p['production_script']['text'],photo);self.assertEqual(p['srt']['blocks'],BLOCKS);self.assertEqual(len(p['assets']),2)
+   p['assets'].append(dict(p['assets'][1],id='duplicate'));server.save(p);result=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertEqual(result.status_code,200);self.assertIsNone(server.load(pid)['scenes'][1]['asset_id'])
+   p=server.load(pid);p['assets'].pop();p['assets'][1]['derived_from']={'kind':'image'};server.save(p);c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertIsNone(server.load(pid)['scenes'][1]['asset_id'])
