@@ -1,6 +1,6 @@
 /* The project system lives inside the established media/monitor/inspector/timeline shell. */
 let sourceReady=false,sourceSeekToken=0,masterSeekToken=0,editorBuffering=false;
-let timelineZoom=12,editorPlaying=false,editorMuted=false,editorCC=false,editorMaster=false,masterUrl='',sourceScene='',clockBase=0,clockAt=0,editorContext='',activeSRT=-1;
+let timelineZoom=12,editorPlaying=false,editorMuted=false,editorVideoMuted=true,editorCC=false,editorMaster=false,masterUrl='',sourceScene='',clockBase=0,clockAt=0,editorContext='',activeSRT=-1;
 const masterNode=$('#program-master'),imageNode=$('#program-image'),narrNode=$('#program-narration');
 const standbyNode=document.createElement('video');standbyNode.id='program-source-next';standbyNode.muted=true;standbyNode.playsInline=true;standbyNode.preload='auto';standbyNode.disablePictureInPicture=true;standbyNode.setAttribute('disableremoteplayback','');imageNode.before(standbyNode);
 let sourceNode=$('#program-source'),nextSourceNode=standbyNode,preparedScene='',preparedReady=false,prepareToken=0;
@@ -50,13 +50,13 @@ function renderEditor(){
  const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';$('#media-list').innerHTML=visibleAssets.map((a,i)=>`<div class="media-item ${current?.asset_id===a.id?'selected':''}" role="button" tabindex="0" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" onkeydown="if(event.key==='Enter')inspectAsset('${a.id.replace(/'/g,'')}')"><span class="source-icon">${a.reserve?E(a.source_label):a.kind==='image'?'PHOTO':/^[SV]\d+/i.test(a.name)?E(a.name.replace(/\.[^.]+$/,'')):String(i+1).padStart(2,'0')}</span><div class="media-meta"><strong>${E(a.name)}</strong><span>${a.reserve?(assetIsUsed(a)?'Reserve source · explicitly placed':'Held in reserve')+' · ':''}${a.kind==='image'?'Photograph':a.duration?a.duration.toFixed(1)+'s video':'Case video'} · ${a.verified?(a.approval_record?.independent_verification===false?'approved · user instruction':'approved'):'not approved'}</span></div><span class="ready-dot ${a.verified?'':'missing'}"></span></div>`).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
  $('#audio-status').className='audio-card '+(P?.voiceover?'ready':'missing');$('#audio-status').innerHTML=`<strong>Voiceover · ${E(P?.voiceover?.name||'not imported')}</strong><span>${P?.voiceover?P.voiceover.duration.toFixed(3)+'s · continuous original audio':'Import from Setup. No per-cut audio restarts.'}</span>`;
  $('#srt-status').className='audio-card '+(P?.srt?'ready':'missing');$('#srt-status').innerHTML=`<strong>${P?.srt?P.srt.blocks.length:0} original SRT blocks</strong><span>Timing reference · captions not baked in</span>`;
- renderProgram();renderTimeline();renderInspector();renderChecks();renderExport();updatePosition();
+ renderProgram();renderTimeline();renderInspector();renderChecks();renderExport();updateTrackMuteControls();updatePosition();
 }
 function missingVisualHTML(s){return s?.replacement_issue?`<strong>Replaced footage needs attention</strong><span>${E(s.replacement_issue)} No substitute was chosen.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:s?.missing_video_out?`<strong>Still placement not shown in video review</strong><span>${E(s.plan_row?.shot_id||'This shot')} specifies a still or freeze. No screenshot, extracted frame or guessed video is being shown.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:s?.plan_row?.strict_production?`<strong>Scripted video unavailable</strong><span>${E(s.plan_row.shot_id||'This shot')} requires ${E(s.plan_row.source_file||'a source file')} at ${E(mapClock(s.plan_row.source_in_ms))}–${E(mapClock(s.plan_row.source_out_ms))}. ${E((P?.script_application?.issues||[]).find(x=>x.startsWith('Beat '+s.plan_row.shot_id+':'))||'The file may be missing, too short, or overlap another shot.')} No substitute was chosen.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:'<strong>No visual assigned to this scene</strong><span>Choose uploaded media in the shot inspector, or import case footage.</span><button class="button secondary" onclick="manage(\'assets\')">Import media</button>'}
 function goToNextVideo(){const ss=scenes(),video=s=>assets().some(a=>a.id===s.asset_id&&a.kind==='video');let index=ss.findIndex((s,i)=>i>sceneIndex&&video(s));if(index<0)index=ss.findIndex(video);if(index>=0)selectEditorScene(index);else toast('No playable scripted video is available.') }
 function goToFirstVideo(){const index=scenes().findIndex(s=>assets().some(a=>a.id===s.asset_id&&a.kind==='video'));if(index>=0)selectEditorScene(index);else toast('No explicit video IN/OUT ranges are available yet.') }
 function renderProgram(){
- const target=P?.render?.status==='done'&&P.render.current?P.render.url:(P?.preview?.status==='done'?P.preview.url:'');
+ const target=editorVideoMuted?(P?.render?.status==='done'&&P.render.current?P.render.url:(P?.preview?.status==='done'?P.preview.url:'')):'';
  if(editorPlaying&&masterUrl!==target)return;
  const t=editorTime();
  if(target){
@@ -93,14 +93,14 @@ function usePreparedSource(s,a,t){
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
  const wasBuffering=editorBuffering;const old=sourceNode;sourceNode=nextSourceNode;nextSourceNode=old;prepareToken++;preparedScene='';preparedReady=false;
  sourceNode.onloadedmetadata=sourceNode.onseeked=sourceNode.onloadeddata=sourceNode.onerror=null;
- sourceReady=true;editorBuffering=false;clockAt=performance.now();sourceNode.playbackRate=1;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
+ sourceReady=true;editorBuffering=false;clockAt=performance.now();sourceNode.playbackRate=1;sourceNode.muted=editorVideoMuted;nextSourceNode.muted=true;sourceNode.classList.add('is-active');imageNode.hidden=true;$('#monitor-empty').hidden=true;
  if(editorPlaying&&wasBuffering&&P?.voiceover){narrNode.muted=editorMuted;narrNode.play().catch(()=>pauseEditor())}
  if(editorPlaying)sourceNode.play().catch(()=>{if(sourceScene===s.id&&!editorMaster)seekSourceAtTimeline(s,a,editorTime())});
  return true;
 }
 function seekSourceAtTimeline(s,a,t){
  // Freeze the preview clock while decoding. Never hide the last picture while audio runs.
- const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();sourceNode.playbackRate=1;
+ const token=++sourceSeekToken;sourceReady=false;sourceNode.pause();sourceNode.muted=editorVideoMuted;sourceNode.playbackRate=1;
  if(!P?.script_moving_only&&sourceNode.readyState>=2&&sourceNode.classList.contains('is-active')){
   try{const c=document.createElement('canvas');c.width=sourceNode.videoWidth;c.height=sourceNode.videoHeight;c.getContext('2d').drawImage(sourceNode,0,0);imageNode.src=c.toDataURL('image/jpeg',.88);imageNode.style.transform='none';imageNode.hidden=false}catch{}
  }
@@ -379,7 +379,22 @@ function seekEditor(t,select=true){if(!scenes().length)return;t=Math.max(0,Math.
 async function playEditor(){if(!scenes().length){toast('Import SRT and build the storyboard first.');return}if(scenes()[sceneIndex]?.missing_video_out){toast('This still or freeze is not shown in the moving-video review.');return}if(dirty){toast('Save or discard scene edits before playing.');return}if(editorTime()>=totalTime()-.01)seekEditor(0,true);editorPlaying=true;clockAt=performance.now();$('#big-play').hidden=true;try{if(editorMaster){masterNode.muted=editorMuted;await masterNode.play()}else{const s=scenes()[sceneIndex],a=assets().find(a=>a.id===s?.asset_id);if(a?.kind==='video'&&!sourceReady){seekSourceAtTimeline(s,a,editorTime());return}showSource(sceneIndex,editorTime());if(P?.voiceover){narrNode.muted=editorMuted;await narrNode.play()}if(a?.kind==='video'&&sourceReady&&sourceNode.readyState>=2)await sourceNode.play()}}catch(e){pauseEditor();toast('Playback could not start. Check the selected media or try again.')}}
 function pauseEditor(){if(editorPlaying&&!editorMaster&&!P?.voiceover)clockBase=editorTime();editorPlaying=false;masterNode.pause();sourceNode.pause();narrNode.pause();$('#big-play').hidden=!scenes().length;clockAt=performance.now()}
 function stopEditor(){pauseEditor();seekEditor(0,true)}
-function toggleEditorAudio(){editorMuted=!editorMuted;masterNode.muted=editorMuted;narrNode.muted=editorMuted;$('#audio-toggle').textContent=editorMuted?'Muted':'Narration'}
+function updateTrackMuteControls(){
+ const audio=$('#mute-audio'), video=$('#mute-mp4');
+ audio.textContent=editorMuted?'Muted':'On';audio.setAttribute('aria-pressed',String(editorMuted));audio.setAttribute('aria-label',(editorMuted?'Unmute':'Mute')+' narration track in preview');audio.title=editorMuted?'Narration muted in preview':'Narration on in preview';
+ video.textContent=editorVideoMuted?'Muted':'On';video.setAttribute('aria-pressed',String(editorVideoMuted));video.setAttribute('aria-label',(editorVideoMuted?'Unmute':'Mute')+' MP4 source audio for preview');video.title=editorVideoMuted?'MP4 source audio muted in preview':'MP4 source audio on in preview only';
+ $('#audio-toggle').textContent=editorMuted?'Muted':'Narration';
+}
+function toggleEditorAudio(){editorMuted=!editorMuted;masterNode.muted=editorMuted;narrNode.muted=editorMuted;updateTrackMuteControls()}
+function toggleVideoTrackMute(){
+ const t=editorTime(),was=editorPlaying;pauseEditor();editorVideoMuted=!editorVideoMuted;
+ sourceNode.muted=editorVideoMuted;nextSourceNode.muted=true;
+ // A rendered master has a mixed audio track, so source audio can only be auditioned
+ // independently from the original source in timeline preview, never from the master.
+ renderProgram();seekEditor(t,false);updateTrackMuteControls();
+ if(was)playEditor();
+ toast(editorVideoMuted?'MP4 source audio muted in preview.':'MP4 source audio on for source preview only; exports remain muted.');
+}
 function toggleEditorCaptions(){editorCC=!editorCC;$('#caption-toggle').textContent=editorCC?'CC On':'CC Off';updatePosition()}
 function setEditorZoom(v){timelineZoom=Number(v);renderTimeline();updatePosition()}
 masterNode.addEventListener('ended',pauseEditor);narrNode.addEventListener('ended',pauseEditor);
