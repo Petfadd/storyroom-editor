@@ -143,3 +143,16 @@ class PhotoExtensionMatchingTest(unittest.TestCase):
    errors=server.check(p)['errors'];self.assertFalse(any('selected source differs' in e for e in errors))
    (root/'assets/photo.png').write_bytes(b'image');p['assets'].append(dict(p['assets'][0],id='b',name='Victim Photo.png',original_name='Victim Photo.png',path='assets/photo.png'));server.save(p)
    res=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertEqual(res.status_code,200);p=server.load(pid);self.assertIsNone(p['scenes'][1]['asset_id']);self.assertTrue(any('Multiple uploaded photos' in i for i in p['script_application']['issues']))
+
+class PhotoShowsLabelTest(unittest.TestCase):
+ def test_shows_name_excludes_role_and_basis_but_does_not_verify_image(self):
+  from plain_script import shown_person_name
+  self.assertEqual(shown_person_name('Carl Renner (suspect). Identification basis: a caption.'),'Carl Renner')
+  self.assertEqual(shown_person_name('Ambiguous instruction'),'Ambiguous instruction')
+  import tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  import app as server
+  with tempfile.TemporaryDirectory() as tmp, patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Name'}).get_json()['id'];p=server.load(pid);asset={'id':'a','name':'a.jpg','kind':'image','path':'assets/a.jpg','verified':True,'source':'user','people':[],'category':'person','rights':'unreviewed'};(Path(tmp)/pid/'assets/a.jpg').write_bytes(b'image');p['assets']=[asset];s={'frame_in':0,'frame_out':120,'asset_id':'a','person':'Carl Renner (suspect). Identification basis: a caption.','plan_row':{'uploaded_photo':True,'shown_person':'Carl Renner (suspect). Identification basis: a caption.'},'context_only':False,'notes':'','transition':'cut','focus':'Portrait','approved':False};p['scenes']=[s]
+   errors,_=server.scene_review(p,0,s,asset,{},0);self.assertTrue(any('named person is not verified' in e for e in errors));asset['people']=['Carl Renner'];errors,_=server.scene_review(p,0,s,asset,{},0);self.assertFalse(any('named person is not verified' in e for e in errors))

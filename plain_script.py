@@ -7,6 +7,16 @@ from section_script import norm
 HEAD = re.compile(r'^Shot:\s*(Srt\d+(?:-[A-Za-z]+)?)\s*$', re.M | re.I)
 FIELDS = {'Narration timeline', 'Exact narration', 'Full source', 'Photograph', 'Shows', 'Source IN', 'Source OUT', 'Treatment', 'Visual direction', 'Continuity/caption'}
 
+def shown_person_name(value):
+    """Extract a named subject from the explicit 'Name (role). ...' sample form.
+
+    This is a script label, not identification of the uploaded image.
+    Unrecognized free text is kept unchanged for human review.
+    """
+    value=str(value or '').strip()
+    match=re.fullmatch(r'(.+?)\s*\((?:victim|suspect|defendant)\)\.?(?:\s+Identification basis:.*)?',value,re.I)
+    return match.group(1).strip() if match else value
+
 def is_plain_script(text):
     return bool(re.search(r'^Shot:\s*Srt\d+', text, re.M | re.I))
 
@@ -86,5 +96,5 @@ def parse_plain_script(text, blocks):
         if proposed:warnings.append('Source is marked PROPOSED in the script; verify before approval.')
         if mismatch:warnings.append('Script narration differs from the uploaded SRT; neither was changed.')
         if typ=='STILL':warnings.append(('Uploaded photograph held static' if photo else 'Native static interval played from the source')+' for review only; eligibility, still budget, identity and rights remain unverified.')
-        rows.append(dict(beat_id=sid,shot_id=sid,clip_id='',srt_blocks=[cue['number']],timeline_in_ms=tin,timeline_out_ms=tout,source_file=source,source_in_ms=sin,source_out_ms=sout,visual_status=typ,requested_treatment=requested,shown_person=fields.get('Shows',''),visible_content=fields['Visual direction'],picture_treatment=treatment,required_caption=fields['Continuity/caption'],match_reason=fields['Continuity/caption'],limit_on_implication='Declared visual is not independently verified.',script_narration=fields['Exact narration'],srt_narration=cue.get('text',''),narration_mismatch=mismatch,register_window='',register_visible='',register_restrictions='',coverage_review='Requires visual inspection and rights review.',import_blockers=warnings,strict_production=True,transition_out='cut',source_proposed=proposed,plain_cue=True,uploaded_photo=photo,native_static_interval=(typ=='STILL' and not photo)))
+        rows.append(dict(beat_id=sid,shot_id=sid,clip_id='',srt_blocks=[cue['number']],timeline_in_ms=tin,timeline_out_ms=tout,source_file=source,source_in_ms=sin,source_out_ms=sout,visual_status=typ,requested_treatment=requested,shown_person=shown_person_name(fields.get('Shows','')),shows_instruction=fields.get('Shows',''),visible_content=fields['Visual direction'],picture_treatment=treatment,required_caption=fields['Continuity/caption'],match_reason=fields['Continuity/caption'],limit_on_implication='Declared visual is not independently verified.',script_narration=fields['Exact narration'],srt_narration=cue.get('text',''),narration_mismatch=mismatch,register_window='',register_visible='',register_restrictions='',coverage_review='Requires visual inspection and rights review.',import_blockers=warnings,strict_production=True,transition_out='cut',source_proposed=proposed,plain_cue=True,uploaded_photo=photo,native_static_interval=(typ=='STILL' and not photo)))
     return parse(json.dumps(rows).encode(),'.json')

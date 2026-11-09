@@ -187,7 +187,14 @@ def scene_review(p,i,s,a,ranges,last,final=False):
  if s['frame_in']!=last or s['frame_out']<=last:errors.append(pre+'timeline has a gap, overlap or empty scene.')
  if not a:return errors+[pre+'assign uploaded media.'],notes
  if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
- if s['person'] and s['person'].casefold() not in [n.casefold().strip() for n in a['people']]:
+ person=s['person']
+ # Earlier review drafts stored the whole Shows instruction as the person's name.
+ # Interpret the explicit role/basis syntax without changing the saved draft or
+ # granting identity verification; the photo still needs the user's label.
+ if (s.get('plan_row') or {}).get('uploaded_photo') and person==(s.get('plan_row') or {}).get('shown_person'):
+  from plain_script import shown_person_name
+  person=shown_person_name(person)
+ if person and person.casefold() not in [n.casefold().strip() for n in a['people']]:
   # Any subject category that is not a person can carry a disclosed wide/context picture;
   # the rule is that it is disclosed in notes, not that it belongs to a fixed list.
   if not(s['context_only'] and s['notes'].strip() and a['category']!='person' and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
