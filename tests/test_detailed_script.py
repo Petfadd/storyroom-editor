@@ -81,8 +81,7 @@ class RealBuildTest(unittest.TestCase):
             failed=c.post(f'/api/projects/{pid}/storyboard',json={'replace':True});self.assertEqual(failed.status_code,400);self.assertIn('caption',failed.get_data(as_text=True).lower())
             rows=single_rows();rows[0][5]='EDITORIAL FREEZE-FRAME';rows[0][4]='00:02.000'
             saved=server.load(pid);saved['production_script']['text']=table(rows);saved['picture_policy']='mixed';server.save(saved)
-            frozen=c.post(f'/api/projects/{pid}/storyboard',json={'replace':True});self.assertEqual(frozen.status_code,200,frozen.get_data(as_text=True))
-            scene=server.load(pid)['scenes'][0];self.assertEqual(scene['plan_row']['extracted_frame_ms'],2000);self.assertEqual(scene['plan_row']['requested_treatment'],'EDITORIAL FREEZE-FRAME');self.assertEqual(scene['script_camera']['move'],'static')
+            frozen=c.post(f'/api/projects/{pid}/storyboard',json={'replace':True});self.assertEqual(frozen.status_code,400);self.assertIn('freeze-frames are prohibited',frozen.get_data(as_text=True).lower());self.assertFalse(any(a.get('derived_from') for a in server.load(pid)['assets']))
 
 if __name__=='__main__':unittest.main()
 

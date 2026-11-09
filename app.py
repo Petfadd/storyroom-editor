@@ -199,7 +199,7 @@ def scene_review(p,i,s,a,ranges,last,final=False):
  still=is_still(p,a)
  if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
  if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
- if still and a['kind']=='image' and a.get('derived_from') and not a.get('verified'):errors.append(pre+'the extracted frame was never approved for use.')
+ if a.get('derived_from'):errors.append(pre+'extracted frames are not permitted; use original uploaded media.')
  if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
  if a['kind']=='video':
   end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
@@ -1040,9 +1040,7 @@ def build(pid):
    from automatic import native_rows
    from edl import assemble
    from conform import stills
-   # Stills first, while the plan still says which beats are photographs or STILL moments:
-   # extraction registers one approved frame per requested moment and rewrites those rows.
-   # Only then are the remaining moving intervals bounded to their uploaded files.
+   # Prepare original photographs only. Never create a still from a video frame.
    if scope:
     # Rebuild only the beats covering the requested blocks. The plan rows outside the
     # range are dropped, so assembling this subset cannot disturb them.

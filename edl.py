@@ -206,7 +206,7 @@ def assemble(p,seed):
      if abs(snapped-source_start)<=.001:
       s['notes']+=' Contiguous split-source boundary adjusted by '+str(round((snapped-source_start)*1000,6))+' ms for 30-fps rounding.';source_start=snapped
    if a['kind']=='video':
-    if str(row.get('visual_status','')).upper()=='STILL' and not row.get('native_static_review'):problem='A still frame was requested from this video but no extracted frame is registered. Set picture policy to photographs and stills so the frame can be extracted, or choose a moving interval.'
+    if str(row.get('visual_status','')).upper()=='STILL' and not row.get('native_static_review'):problem='A still frame cannot be extracted from video. Use an original uploaded photo or a normal video interval.'
     elif abs((source_end-source_start)-duration)>1/30+.001:problem='Source interval and picture duration differ; no automatic trimming, stretching, looping or freezing.'
     elif max(source_end,source_start+duration)+handle>a['duration']+.001:problem='Source file is too short, including transition handles.'
     elif not p.get('allow_archive_reuse') and row.get('requested_treatment')!='ARCHIVAL REUSE' and any(source_start<out and (source_end if row.get('strict_production') else source_start+duration+handle)>inside for inside,out in used.get(a['id'],[])):problem='Selected source interval overlaps an earlier beat.'

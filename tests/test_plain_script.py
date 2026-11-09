@@ -35,7 +35,7 @@ class PlainScriptTest(unittest.TestCase):
  def test_srt_conflict_and_block_map_are_not_ignored(self):
   p={'production_script':{'text':SCRIPT},'srt':{'blocks':copy.deepcopy(BLOCKS)},'srt_block_map':{'text':'map'}}
   with self.assertRaises(ValueError):rows_for(p)
-  p.pop('srt_block_map');p['srt']['blocks'][0]['end_ms']=3999
+  p.pop('srt_block_map');p['srt']['blocks'][0]['end_ms']=4001
   with self.assertRaises(ValueError):rows_for(p)
 
 class NativeStaticReviewTest(unittest.TestCase):
@@ -100,3 +100,25 @@ class UploadedPhotoTest(unittest.TestCase):
    self.assertEqual(scene['asset_id'],'i');self.assertEqual(scene['script_camera']['move'],'static');self.assertNotIn('missing_video_out',scene);self.assertTrue(any('above the 10%' in e for e in server.check(p)['errors']));self.assertEqual(p['production_script']['text'],photo);self.assertEqual(p['srt']['blocks'],BLOCKS);self.assertEqual(len(p['assets']),2)
    p['assets'].append(dict(p['assets'][1],id='duplicate'));server.save(p);result=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertEqual(result.status_code,200);self.assertIsNone(server.load(pid)['scenes'][1]['asset_id'])
    p=server.load(pid);p['assets'].pop();p['assets'][1]['derived_from']={'kind':'image'};server.save(p);c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'replace_review':True});self.assertIsNone(server.load(pid)['scenes'][1]['asset_id'])
+
+class FencedSplitScriptTest(unittest.TestCase):
+ def test_fenced_shots_tile_lead_in_gap_and_split_cue(self):
+  blocks=[{'number':1,'start_ms':500,'end_ms':2000,'text':'First'}, {'number':2,'start_ms':2500,'end_ms':6000,'text':'Second'}]
+  def shot(id,start,end,source_in,source_out):
+   return f'''```
+Shot: {id}
+Narration timeline: {start} → {end}
+Exact narration: {'First' if id=='Srt01' else 'Second'}
+Full source: file.mp4
+Source IN: {source_in}
+Source OUT: {source_out}, exclusive
+Treatment: VIDEO, 1.0×, loop OFF
+Visual direction: Scene
+Continuity/caption: Check
+```
+'''
+  a=shot('Srt01','00:00:00.000','00:00:02.500','00:00:00.000','00:00:02.500');b=shot('Srt02-A','00:00:02.500','00:00:04.000','00:00:02.500','00:00:04.000');c=shot('Srt02-B','00:00:04.000','00:00:06.000','00:00:04.000','00:00:06.000')
+  text='# Notes\n\n'+a+b+c+'\n## Coverage summary\n';rows,mode=rows_for({'srt':{'blocks':blocks},'production_script':{'text':text}})
+  self.assertEqual([r['shot_id'] for r in rows],['Srt01','Srt02-A','Srt02-B']);self.assertEqual([(r['timeline_in_ms'],r['timeline_out_ms']) for r in rows],[(0,2500),(2500,4000),(4000,6000)])
+  with self.assertRaises(ValueError):parse_plain_script(text.replace('Shot: Srt02-B','Shot: Srt02-C'),blocks)
+  with self.assertRaises(ValueError):parse_plain_script(text.replace('00:00:04.000 → 00:00:06.000','00:00:04.100 → 00:00:06.000'),blocks)

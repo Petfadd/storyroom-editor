@@ -192,7 +192,7 @@ def rows_for(p):
   rows,mode=base_rows_for(p)
  mapping=p.get('srt_block_map')
  if not mapping:
-  if rows:require_one_shot_per_cue(rows,(p.get('srt') or {}).get('blocks',[]))
+  if rows and not all(r.get('plain_cue') for r in rows):require_one_shot_per_cue(rows,(p.get('srt') or {}).get('blocks',[]))
   return rows,mode
  from edl import srt_signature
  if mapping.get('based_on_srt') and mapping['based_on_srt']!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map.')
