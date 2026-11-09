@@ -242,6 +242,9 @@ def maybe_queue(studio,p):
   studio.write(root/'automatic_status.json',dict(payload,at=time.time()))
  def status_only(state_,detail):
   publish({'status':state_,'detail':detail})
+ if p.get('edit_mode','review')=='documentary':
+  status_only('paused','Documentary workspace: imported files are kept for planning. No review storyboard or MP4 is built automatically.')
+  return
  if state['status']!='ready' and not (state['status']=='built' and state['auto_enabled'] and not state['manual_edits']):
   # Say why, loudly, instead of sitting idle.
   publish({'status':state['status'],'detail':state['detail'],'missing':state['missing'],'plan':state['plan']})

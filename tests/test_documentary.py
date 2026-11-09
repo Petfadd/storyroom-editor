@@ -16,6 +16,15 @@ class DocumentaryPlanTest(unittest.TestCase):
   r=self.client.post(f'/api/projects/{self.pid}/documentary-bites',json=data);self.assertEqual(r.status_code,200);plan=r.get_json();self.assertEqual(plan['revision'],1);self.assertEqual(plan['bites'][0]['pause_s'],7.25);self.assertEqual((self.root/'project.json').read_bytes(),self.original)
   self.assertEqual(self.client.post(f'/api/projects/{self.pid}/documentary-bites',json=data).status_code,400)
   r=self.client.delete(f'/api/projects/{self.pid}/documentary-bites/{plan["bites"][0]["id"]}',json={'revision':1});self.assertEqual(r.status_code,200);self.assertEqual(r.get_json()['bites'],[]);self.assertEqual((self.root/'project.json').read_bytes(),self.original)
+ def test_documentary_upload_does_not_start_review_auto_assembly(self):
+  import automatic
+  self.p['edit_mode']='documentary';self.p['auto_assemble_uploads']=True;self.p['srt']={'blocks':[{'number':1}]};self.p['production_script']={'text':'test'}
+  import types
+  result=[];studio=types.SimpleNamespace(folder=lambda pid:self.root,write=lambda path,data:result.append(data))
+  with patch.object(automatic.threading,'Thread',side_effect=AssertionError('must not spawn review assembly')):
+   automatic.maybe_queue(studio,self.p)
+  self.assertEqual(result[0]['status'],'paused');self.assertIn('No review storyboard',result[0]['detail'])
+
  def test_separate_timeline_maps_all_narration_without_modifying_it(self):
   self.p['edit_mode']='documentary'
   self.p['voiceover']['duration']=20
