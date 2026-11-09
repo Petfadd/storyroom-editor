@@ -222,7 +222,13 @@ def scene_review(p,i,s,a,ranges,last,final=False):
 
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
- if p.get('review_only_draft'):errors.append('This is a script review draft, not an approved edit. Captions, layout, freeze frames, source identity and rights must be resolved before rendering or export.')
+ if p.get('review_only_draft'):
+  rows=[s.get('plan_row') or {} for s in p['scenes']]
+  supported=bool(rows) and all(r.get('plain_cue') for r in rows) and p.get('script_moving_only') and script_reading(p).get('ready_to_build') is True
+  if final or not supported:errors.append('This is a script review draft, not a finished edit. Final export is blocked; complete the script and source checks before rendering.')
+  else:
+   notes.append('Review render only: editorial captions are not burned in. Verify visual content, identity, still eligibility and reuse rights; final export remains blocked.')
+   if p.get('voiceover') and p['voiceover'].get('duration',0)>p['scenes'][-1]['frame_out']/30+.001:errors.append('Narration is longer than the picture timeline. Use matching audio; the review render must not trim narration.')
  from automatic import repetition_errors,source_capacity_errors,_plan_coverage
  errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
  # A block map written for a different runtime leaves blocks unplaced. Say so as a plan
@@ -1233,7 +1239,7 @@ def manifest(p):
  root=folder(p['id']);w,h=output_size(p.get('format','landscape'),p.get('size'));assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
  for i,s in enumerate(p['scenes']):
   a=assets[s['asset_id']];frames=s['frame_out']-s['frame_in'];m=motion(s,i);signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
-  while signature in signatures:m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
+  while signature in signatures and m.get('move')!='static':m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
   signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
