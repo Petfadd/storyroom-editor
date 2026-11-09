@@ -223,8 +223,13 @@ function planningSummaryHTML(){
 
 function planToolsHTML(){
   return `<div class="inspector-group"><label>Planning</label>
-  <div class="inline"><button type="button" onclick="openPlanDialog('index')">Shot index</button><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><button type="button" onclick="downloadMapTemplate()">Download map template</button><button type="button" onclick="openFrameQC(1)">Frame QC sheet</button><button type="button" onclick="approveReadyScenes()">Approve all ready beats</button></div>
-  <p class="small">The template fills every clock and SRT block reference from your SRT and leaves the picture columns blank on purpose. A blank row is a named gap, not a choice.</p></div>`;
+  <div class="planning-actions">
+    <div><button type="button" onclick="openPlanDialog('index')">Shot index</button><p>See the sources and timing used in each shot.</p></div>
+    <div><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><p>Check whether a block map fits the available footage.</p></div>
+    <div><button type="button" onclick="downloadMapTemplate()">Download map template</button><p>Download an optional blank picture map with SRT timing. Your script does not need a map.</p></div>
+    <div><button type="button" onclick="openFrameQC(1)">Frame QC sheet</button><p>Inspect source frames around each shot and its boundaries.</p></div>
+    <div><button type="button" onclick="approveReadyScenes()">Approve all ready beats</button><p>Marks technically ready beats approved; it does not inspect or verify picture content, identity or rights.</p></div>
+  </div></div>`;
 }
 
 async function openPlanDialog(view){
