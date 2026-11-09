@@ -1,0 +1,94 @@
+DOCUMENTARY PRODUCTION SCRIPT — TEMPLATE
+
+IMPORTANT
+This is an illustrative template, not a script for a real case. Replace the sample wording, filenames and timings with the exact contents of your own original SRT, uploaded files and verified editorial instructions. Do not change the uploaded SRT or narration to fit the examples.
+
+The shot format below is supported for reading the base picture timeline. The sound-bite section is a PROPOSED format for the automation we discussed; the app does not yet read that section or automatically place its sound bites. Final-quality documentary MP4 export is not yet implemented. Do not assume this template makes either feature available today.
+
+HOW TO FILL IT IN
+- Upload the original SRT, original narration and the exact source files alongside this script.
+- Write exactly one Shot block per SRT cue, in the original cue order. Do not add, skip, merge, split, reorder or repeat cues.
+- Copy each cue's narration exactly. The first picture slot starts at 00:00:00,000; each slot ends where the next SRT cue begins, and the last slot ends at the final SRT cue's end. Follow the actual SRT, not the sample times.
+- Use the exact full uploaded filename, including its extension. Source OUT is exclusive. For video, the source interval must have the same duration as its narration-timeline slot. Use normal 1.0× playback and no looping.
+- Continuity is an editor note, not a caption. Write the literal text for an intended on-screen caption, or None. Do not burn the SRT unless separately requested.
+- Add each requested footage speech segment to the proposed sound-bite section. The pause is measured on the ORIGINAL narration clock, not the expanded documentary timeline. Source IN and exclusive OUT are measured on the named video's own clock. The sound-bite duration is OUT minus IN. Only this selected interval's source audio should play; ordinary footage stays muted. Narration resumes at exactly the pause point.
+- If a pause falls within an SRT cue, record the last exact original word spoken before the pause. The current adjusted-SRT tool still requires a reviewed split choice; it does not read this instruction automatically. Do not rewrite the SRT wording.
+- Verify footage content, identity, chronology, provenance and reuse rights separately. A filename, instruction or example does not establish these facts.
+- Use original moving footage; no loops, slowing, freezes, extracted frames or substitutes. Named, eligible original photographs must be explicitly identified and held static. The only previously authorized source-frame exception is the next verified frame on a short shot, including a one-frame overlap at the next cut.
+- If a source, range, timing or identity is missing, ambiguous, mismatched or outside the uploaded file, report it and stop rather than guess. If extra picture extends beyond narration, obtain specific approval before padding with silence.
+
+## Storyboard Production Script
+
+Shot: Srt001
+Narration timeline: 00:00:00,000 --> 00:00:04,000
+Exact narration: Replace with the exact words of SRT cue 1
+Full source: Replace with exact first video filename.mp4
+Source IN: 00:00:10,000
+Source OUT: 00:00:14,000
+Treatment: VIDEO, 1.0×, loop OFF
+Visual direction: Describe only the visual required for this cue
+Continuity: Editor note, or None
+On-screen caption: None
+
+Shot: Srt002
+Narration timeline: 00:00:04,000 --> 00:00:08,000
+Exact narration: Replace with the exact words of SRT cue 2
+Full source: Replace with exact second video filename.mp4
+Source IN: 00:00:20,000
+Source OUT: 00:00:24,000
+Treatment: VIDEO, 1.0×, loop OFF
+Visual direction: Describe only the visual required for this cue
+Continuity: Editor note, or None
+On-screen caption: None
+
+Shot: Srt003
+Narration timeline: 00:00:08,000 --> 00:00:12,000
+Exact narration: Replace with the exact words of SRT cue 3
+Full source: Replace with exact third video filename.mp4
+Source IN: 00:00:30,000
+Source OUT: 00:00:34,000
+Treatment: VIDEO, 1.0×, loop OFF
+Visual direction: Describe only the visual required for this cue
+Continuity: Editor note, or None
+On-screen caption: None
+
+Repeat the Shot block above for every remaining SRT cue, in order. Do not leave this instruction line inside your finished shot section: replace it with the actual remaining blocks.
+
+## Documentary sound bites — proposed automation format
+
+Sound bite: 1
+Narration pause: 00:00:04,000
+Full source: Replace with exact speaking video filename.mp4
+Source IN: 00:00:10,000
+Source OUT: 00:00:22,000
+Expected duration: 00:00:12,000
+Audio: Selected source speech only; match narration loudness
+Narration resumes: 00:00:04,000
+SRT cue crossing pause: None
+Last original word before pause: N/A
+Editorial context and identity to verify: Describe the speaker and relevant context without guessing
+Reuse-rights evidence and restrictions: Record the actual permission, license or other basis and limits
+
+Sound bite: 2
+Narration pause: 00:00:08,000
+Full source: Replace with exact speaking video filename.mp4
+Source IN: 00:00:30,000
+Source OUT: 00:00:38,000
+Expected duration: 00:00:08,000
+Audio: Selected source speech only; match narration loudness
+Narration resumes: 00:00:08,000
+SRT cue crossing pause: None
+Last original word before pause: N/A
+Editorial context and identity to verify: Describe the speaker and relevant context without guessing
+Reuse-rights evidence and restrictions: Record the actual permission, license or other basis and limits
+
+The sample has a 12-second first bite and an 8-second second bite. These are examples, not a requirement for other projects unless you request those lengths. If the pause is inside a cue, replace None with its actual cue number and N/A with the last word actually spoken before the pause; listen and verify the split.
+
+## Delivery instructions
+
+Picture: Use the project's chosen output format and resolution.
+Ordinary footage audio: Muted.
+Sound-bite audio: Only the selected source IN–OUT; match narration loudness without modifying original files.
+Narration: Pause at each specified original narration time; resume at the same original time.
+Subtitles: Preserve the original SRT; create a separate adjusted SRT if requested.
+Final export: Do not treat a review preview as final. Complete source, identity, context, timing and reuse-rights review before delivery.
