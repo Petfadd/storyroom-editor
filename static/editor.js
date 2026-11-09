@@ -298,25 +298,47 @@ async function approveReadyScenes(){
 }
 
 let qcCache = {id: null, data: null};
-async function openFrameQC(sheet){
-  if(!P) return;
-  $('#plan-title').textContent = 'Frame QC';
-  $('#plan-body').innerHTML = '<p class="small">Decoding source IN, midpoint, last frame before OUT and boundary context for each shot…</p>';
-  if(!$('#plan-dialog').open) $('#plan-dialog').showModal();
+let qcRequest = 0;
+function qcPlayRange(id,start,end){
+  const media=document.getElementById(id);if(!media)return;
+  const play=()=>{media.currentTime=start;media.ontimeupdate=()=>{if(media.currentTime>=end){media.pause();media.ontimeupdate=null}};media.play().catch(()=>toast('Press play to start the selected interval.'))};
+  if(media.readyState>=1)play();else media.addEventListener('loadedmetadata',play,{once:true});
+}
+async function openFrameQC(shot){
+  if(!P)return;
+  const n=Math.max(1,Math.min(Number(shot)||1,scenes().length));if(!scenes().length){toast('Build the storyboard first.');return}
+  const request=++qcRequest, projectId=P.id;
+  $('#plan-title').textContent='Shot-by-shot frame QC';
+  $('#plan-body').innerHTML='<p class="small">Loading shot '+n+' and decoding its source frames…</p>';
+  if(!$('#plan-dialog').open)$('#plan-dialog').showModal();
   try{
-    const d = await api(`/api/projects/${P.id}/frame-qc?format=json&sheet=${sheet || 1}`);
-    qcCache = {id: P.id, data: d};
-    const sheets = Math.max(1, d.sheets);
-    $('#plan-body').innerHTML = `<div class="card"><h3>Sheet ${d.sheet} of ${sheets} · beats ${(d.sheet-1)*d.per_sheet+1}–${(d.sheet-1)*d.per_sheet+d.beats_on_sheet}</h3>
-      <p>${E(d.note)}</p>
-      <img style="width:100%;border-radius:6px" src="${d.url}" alt="Contact sheet of decoded source frames around each shot and its boundaries">
-      <div class="inline">${Array.from({length: sheets}, (_, i) => `<button type="button" onclick="openFrameQC(${i+1})" ${i+1===d.sheet?'disabled':''}>Sheet ${i+1}</button>`).join('')}</div>
-      ${d.missing.length ? `<div class="notice warn"><strong>${d.missing.length} beat(s) could not be decoded</strong>${d.missing.slice(0,6).map(b => `<p class="small">Scene ${b.scene} · SRT ${(b.srt_blocks||[]).join('-')} · ${E(b.source_file || 'no media assigned')} at ${b.in_clock}</p>`).join('')}</div>` : ''}
-      ${d.moved.length ? `<details><summary>${d.moved.length} beat(s) start somewhere other than the plan declared</summary>${d.moved.map(b => `<p class="small">Scene ${b.scene} · SRT ${(b.srt_blocks||[]).join('-')} · ${E(b.source_file)} · planned in-point moved by ${b.declared_drift_s}s → now ${b.in_clock}</p>`).join('')}</details>` : ''}
-      <p class="small">${E(d.scope)}</p></div>`;
-  }catch(e){
-    $('#plan-body').innerHTML = `<div class="notice">${E(e.message)}</div>`;
-  }
+    const d=await api(`/api/projects/${projectId}/frame-qc?format=json&per_sheet=1&sheet=${n}`);
+    if(request!==qcRequest||P?.id!==projectId)return;
+    qcCache={id:projectId,data:d};
+    const scene=scenes()[n-1], row=scene.plan_row||{}, asset=assets().find(a=>a.id===scene.asset_id), beat=d.beats[0];
+    const blocks=[...new Set(row.srt_blocks||scene.srt_blocks||[])], srt=(P.srt?.blocks||[]).filter(b=>blocks.includes(b.number)).map(b=>b.text).join('\n');
+    const start=Number(scene.in_s)||0,end=row.strict_production&&Number.isFinite(Number(row.source_out_ms))?Number(row.source_out_ms)/1000:start+(scene.frame_out-scene.frame_in)/30;
+    const timeIn=scene.frame_in/30,timeOut=scene.frame_out/30;
+    const note=row.continuity??row.match_reason??'';
+    const caption=row.plain_cue&&!Object.prototype.hasOwnProperty.call(row,'continuity')?'Not specified separately in this older script':(row.required_caption||'None');
+    $('#plan-body').innerHTML=`<div class="qc-review">
+      <div class="qc-navigation"><button type="button" onclick="openFrameQC(${n-1})" ${n<=1?'disabled':''}>← Previous shot</button><label>Shot <select aria-label="Choose shot" onchange="openFrameQC(this.value)">${scenes().map((s,i)=>`<option value="${i+1}" ${i+1===n?'selected':''}>${i+1} · ${E(s.plan_row?.shot_id||'Scene '+(i+1))}</option>`).join('')}</select> of ${scenes().length}</label><button type="button" onclick="openFrameQC(${n+1})" ${n>=scenes().length?'disabled':''}>Next shot →</button></div>
+      <h3>Shot ${n} · ${E(row.shot_id||'Scene '+n)}</h3>
+      <p><strong>Original SRT narration:</strong> ${E(srt||scene.narration||'Not available')}</p>
+      <p><strong>Script narration:</strong> ${E(row.script_narration||'Not specified')}</p>
+      <p><strong>Visual direction:</strong> ${E(row.visible_content||'Not specified')}</p>
+      <p><strong>Continuity note:</strong> ${E(note||'None')}</p><p><strong>On-screen caption:</strong> ${E(caption)}</p>
+      <p><strong>Assigned source:</strong> ${E(asset?.original_name||asset?.name||'Unassigned')} · <strong>Script source:</strong> ${E(row.source_file||'Not specified')}<br><strong>Source interval:</strong> ${E(mapClock(start*1000))} → ${E(mapClock(end*1000))} (OUT exclusive) · <strong>Timeline:</strong> ${E(mapClock(timeIn*1000))} → ${E(mapClock(timeOut*1000))}</p>
+      <h4>Boundary frames</h4><p>From left: 2 seconds before IN, IN, midpoint, last frame before OUT, and 2 seconds after OUT. Unavailable frames are marked; these are inspection images only.</p>
+      <div class="qc-image-scroll"><img src="${d.url}" alt="Five source inspection frames for shot ${n}"></div><p><a href="${d.url}" target="_blank" rel="noopener">Open full-size QC image</a></p>
+      ${beat.samples.some(x=>!x.decoded)?'<p class="notice warn">One or more inspection frames are unavailable; a boundary may be outside the source or the frame could not be decoded.</p>':''}
+      <h4>Play the full shot</h4>${asset?.kind==='video'?`<video id="qc-video" controls muted preload="metadata" src="${E(asset.url)}"></video><p><button type="button" onclick="qcPlayRange('qc-video',${start},${end})">Play selected source interval</button> Source audio is muted; use the controls to inspect nearby context.</p>`:asset?.kind==='image'?`<img class="qc-photo" src="${E(asset.url)}" alt="Assigned original photograph"><p>Original uploaded photograph. Verify who or what it shows.</p>`:'<p>No source is assigned to this shot.</p>'}
+      ${P.voiceover?.url?`<h4>Listen to narration for this shot</h4><audio id="qc-audio" controls preload="metadata" src="${E(P.voiceover.url)}"></audio><p><button type="button" onclick="qcPlayRange('qc-audio',${timeIn},${timeOut})">Play shot narration</button></p>`:''}
+      <div class="notice"><strong>Review checklist</strong><p>1. Inspect the boundary frames for unwanted cuts. 2. Play the whole interval against the narration and visual direction. 3. Independently confirm identities, source and date. 4. Correct unsuitable sources or ranges in the shot inspector. 5. Record any reuse decision separately.</p><p>This view does not automatically verify content, identity or rights. Existing approvals are not proof of inspection.</p></div>
+      <div class="qc-navigation"><button type="button" onclick="openFrameQC(${n-1})" ${n<=1?'disabled':''}>← Previous shot</button><button type="button" onclick="openFrameQC(${n+1})" ${n>=scenes().length?'disabled':''}>Next shot →</button></div>
+    </div>`;
+    $('#plan-body').scrollTop=0;
+  }catch(e){if(request===qcRequest)$('#plan-body').innerHTML=`<div class="notice">${E(e.message)}</div>`;}
 }
 
 async function saveEditorScene(e){pauseEditor();await saveScene(e);sourceScene='';renderProject()}

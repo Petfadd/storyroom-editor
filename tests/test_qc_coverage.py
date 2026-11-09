@@ -18,3 +18,7 @@ class QCAndCoverageTest(unittest.TestCase):
    c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Coverage'}).get_json()['id'];p=server.load(pid)
    # Empty productions are a supported report and retain validation issues.
    data=c.get(f'/api/projects/{pid}/coverage-summary').get_json();self.assertEqual(data['cue_count'],0);self.assertEqual(data['video_seconds'],0);self.assertTrue(data['unresolved_issues'])
+ def test_qc_image_route_supports_over_99_shots(self):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(server,'PROJECTS',Path(tmp)):
+   c=server.app.test_client();pid=c.post('/api/projects',json={'title':'Long QC'}).get_json()['id'];root=Path(tmp)/pid;cache=root/'.cache/frame_qc';cache.mkdir(parents=True,exist_ok=True);name='frame_qc_sheet_120_'+'a'*24+'.jpg';Image.new('RGB',(10,10)).save(cache/name)
+   self.assertEqual(c.get(f'/api/projects/{pid}/frame-qc/{name}').status_code,200)

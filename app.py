@@ -1450,7 +1450,7 @@ def frame_qc_sheet(pid):
 
 @app.get('/api/projects/<pid>/frame-qc/<name>')
 def frame_qc_file(pid,name):
- if not re.fullmatch(r'frame_qc_sheet_\d{2}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
+ if not re.fullmatch(r'frame_qc_sheet_\d{2,5}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
  return send_from_directory(folder(pid)/'.cache/frame_qc',name,conditional=True)
 
 @app.get('/api/local-understanding/capabilities')
