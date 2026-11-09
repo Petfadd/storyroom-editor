@@ -1334,7 +1334,15 @@ def render(pid):
    caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
    caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
   write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'created':time.time()})
-  job.start(captions=burn_srt,script_caption_srt=caption_file);return jsonify({'render':job.snapshot()}),202
+  one_line_file=None
+  if burn_srt:
+   from caption_layout import make_single_line_ass
+   if not (p.get('srt') or {}).get('blocks'):raise BadRequest('Import an SRT before burning subtitles.')
+   width,height=output_size(p.get('format','landscape'),p.get('size'))
+   try:ass=make_single_line_ass(p['srt']['blocks'],width,height)
+   except ValueError as e:raise BadRequest(str(e))
+   one_line_file=root/'reviews'/(Path(name).stem+'_srt_display.ass');one_line_file.write_text(ass,encoding='utf-8')
+  job.start(captions=burn_srt,script_caption_srt=caption_file,narration_caption_file=one_line_file);return jsonify({'render':job.snapshot()}),202
 @app.post('/api/projects/<pid>/cancel')
 def cancel(pid):
  folder(pid)

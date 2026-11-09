@@ -49,9 +49,9 @@ class RenderJob:
         with self.lock: self.state['log'] = (self.state.get('log','') + '\n' + text)[-18000:]
         if self.on_change: self.on_change(self.snapshot())
 
-    def start(self, captions=False, script_caption_srt=None):
+    def start(self, captions=False, script_caption_srt=None, narration_caption_file=None):
         if self.snapshot()['status'] in ('running','queued'): raise RuntimeError('A render is already running.')
-        self.cancelled = False; self.script_caption_srt = Path(script_caption_srt) if script_caption_srt else None; self.captions_enabled = bool(captions) or bool(script_caption_srt); self.srt_captions_enabled = bool(captions)
+        self.cancelled = False; self.narration_caption_file = Path(narration_caption_file) if narration_caption_file else None; self.script_caption_srt = Path(script_caption_srt) if script_caption_srt else None; self.captions_enabled = bool(captions) or bool(script_caption_srt); self.srt_captions_enabled = bool(captions)
         self.state = {'status':'queued','progress':0.0,'stage':'Queued','detail':f'Captions {"on" if self.captions_enabled else "off"}','log':'','output':None,'error':None,'started':time.time(),'finished':None,'captions':self.captions_enabled}
         self.worker_thread = threading.Thread(target=self._safe_run, daemon=True)
         self.worker_thread.start()
@@ -381,10 +381,10 @@ class RenderJob:
         subtitle_style = 'FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginV=34,MarginL=85,MarginR=85'
         filters = []
         # Both files are generated or uploaded locally; escape paths for libavfilter.
-        def subtitle_filter(path, style):
+        def subtitle_filter(path, style=None):
             safe = str(path).replace('\\', '\\\\').replace(':', '\\:').replace("'", "'\\\\\\''")
-            return f"subtitles='{safe}':force_style='{style}'"
-        if self.srt_captions_enabled: filters.append(subtitle_filter(srt, subtitle_style))
+            return f"subtitles='{safe}'" + (f":force_style='{style}'" if style else "")
+        if self.srt_captions_enabled: filters.append(subtitle_filter(self.narration_caption_file or srt, None if self.narration_caption_file else subtitle_style))
         if self.script_caption_srt:
             script_style = subtitle_style.replace('Alignment=2', 'Alignment=8')
             filters.append(subtitle_filter(self.script_caption_srt, script_style))
