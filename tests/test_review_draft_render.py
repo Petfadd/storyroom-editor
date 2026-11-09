@@ -13,7 +13,8 @@ Source IN: 00:00:01.000
 Source OUT: 00:00:10.000
 Treatment: VIDEO, 1.0×, loop OFF
 Visual direction: Synthetic video
-Continuity/caption: Review only
+Continuity: Review only
+On-screen caption: On screen text
 Shot: Srt02
 Narration timeline: 00:00:09.000 --> 00:00:10.000
 Exact narration: Last words
@@ -21,7 +22,8 @@ Photograph: Person.jpg
 Shows: Test Person (victim). Identification basis: synthetic test.
 Treatment: STILL — uploaded photograph, static, no motion
 Visual direction: Synthetic photo
-Continuity/caption: Review only
+Continuity: Review only
+On-screen caption: None
 '''
 BLOCKS=[{'number':1,'start_ms':0,'end_ms':9000,'text':'First words'},{'number':2,'start_ms':9000,'end_ms':10000,'text':'Last words'}]
 
@@ -39,4 +41,6 @@ class ReviewDraftRenderTest(unittest.TestCase):
    broken=copy.deepcopy(p);broken['scenes'][0]['asset_id']=None;self.assertFalse(server.check(broken)['can_export'])
    broken=copy.deepcopy(p);broken['voiceover']['duration']=10.2;self.assertTrue(any('must not trim' in e for e in server.check(broken)['errors']))
    res=c.post(f'/api/projects/{pid}/render',json={'final':False});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
-   cap=cv2.VideoCapture(str(root/'renders'/state['output']));count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));fps=cap.get(cv2.CAP_PROP_FPS);cap.release();self.assertEqual((count,fps),(300,30));self.assertFalse(state['captions'])
+   cap=cv2.VideoCapture(str(root/'renders'/state['output']));count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));fps=cap.get(cv2.CAP_PROP_FPS);cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,clean=cap.read();cap.release();self.assertTrue(ok);self.assertEqual((count,fps),(300,30));self.assertFalse(state['captions'])
+   res=c.post(f'/api/projects/{pid}/render',json={'final':False,'script_captions':True});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
+   cap=cv2.VideoCapture(str(root/'renders'/state['output']));cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,burned=cap.read();cap.release();self.assertTrue(ok);self.assertGreater(float(abs(clean.astype('float32')-burned.astype('float32')).mean()),0.05);self.assertTrue(state['captions']);self.assertEqual((root/'renders'/state['output']).with_suffix('.srt').read_text(),(root/'inputs/captions.srt').read_text())

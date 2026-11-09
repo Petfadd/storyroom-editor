@@ -28,6 +28,7 @@ class RenderJob:
         if output_name: self.output = self.render_dir / Path(output_name).name
         self.on_change = on_change
         self.lock = threading.Lock(); self.process = None; self.cancelled = False; self.captions_enabled = False
+        self.script_caption_srt = None
         self._audio_cache = {}; self._duration_cache = {}
         # Encode with the machine, not a constant: two threads per core up to a sane cap,
         # still leaving room for the server itself on a small box.
@@ -48,9 +49,9 @@ class RenderJob:
         with self.lock: self.state['log'] = (self.state.get('log','') + '\n' + text)[-18000:]
         if self.on_change: self.on_change(self.snapshot())
 
-    def start(self, captions=False):
+    def start(self, captions=False, script_caption_srt=None):
         if self.snapshot()['status'] in ('running','queued'): raise RuntimeError('A render is already running.')
-        self.cancelled = False; self.captions_enabled = bool(captions)
+        self.cancelled = False; self.script_caption_srt = Path(script_caption_srt) if script_caption_srt else None; self.captions_enabled = bool(captions) or bool(script_caption_srt); self.srt_captions_enabled = bool(captions)
         self.state = {'status':'queued','progress':0.0,'stage':'Queued','detail':f'Captions {"on" if self.captions_enabled else "off"}','log':'','output':None,'error':None,'started':time.time(),'finished':None,'captions':self.captions_enabled}
         self.worker_thread = threading.Thread(target=self._safe_run, daemon=True)
         self.worker_thread.start()
@@ -324,7 +325,8 @@ class RenderJob:
         self.update(status='running', stage='Validating timestamp matches', progress=.3)
         shots = self.story['shots']; voiceover_path = self._find_voiceover(); settings = self.story['settings']
         srt = self.root/settings['caption_srt']
-        if self.captions_enabled and not srt.exists(): raise RuntimeError(f'Missing documentary caption file: {srt.name}')
+        if self.srt_captions_enabled and not srt.exists(): raise RuntimeError(f'Missing documentary caption file: {srt.name}')
+        if self.script_caption_srt and not self.script_caption_srt.exists(): raise RuntimeError('Missing script caption file.')
         for shot in shots:
             self._resolve_visual(shot)
             if shot['kind'] == 'archival':
@@ -377,6 +379,16 @@ class RenderJob:
         end_join()
         if not base_path.exists() or base_path.stat().st_size < 10000: raise RuntimeError('The cross-dissolve pass did not produce a usable picture timeline.')
         subtitle_style = 'FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginV=34,MarginL=85,MarginR=85'
+        filters = []
+        # Both files are generated or uploaded locally; escape paths for libavfilter.
+        def subtitle_filter(path, style):
+            safe = str(path).replace('\\', '\\\\').replace(':', '\\:').replace("'", "'\\\\\\''")
+            return f"subtitles='{safe}':force_style='{style}'"
+        if self.srt_captions_enabled: filters.append(subtitle_filter(srt, subtitle_style))
+        if self.script_caption_srt:
+            script_style = subtitle_style.replace('Alignment=2', 'Alignment=8')
+            filters.append(subtitle_filter(self.script_caption_srt, script_style))
+        picture_filter = '[0:v]' + ','.join(filters) + '[picture]' if filters else ''
         duration = shots[-1]['frame_out']/settings['fps']; total_frames = shots[-1]['frame_out']
         # The mux copies picture and narration into one file; it does not re-encode the
         # picture. Progress is weighted by picture content so a 30-minute programme shows
@@ -393,7 +405,7 @@ class RenderJob:
             # its own, so it is copied (or re-encoded only if captions are being burned).
             if self.captions_enabled:
                 cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path,
-                       '-filter_complex', f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]",
+                       '-filter_complex', picture_filter,
                        '-map', '[picture]', '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),
                        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '16', '-pix_fmt', 'yuv420p', '-an',
                        '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
@@ -402,7 +414,6 @@ class RenderJob:
                        '-map', '0:v:0', '-t', f'{duration:.6f}', '-c:v', 'copy', '-an',
                        '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
         elif self.captions_enabled:
-            picture_filter = f"[0:v]subtitles='{srt}':force_style='{subtitle_style}'[picture]"
             cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path, '-i', voiceover,
                    '-filter_complex', f'{picture_filter};{audio_filter}', '-map', '[picture]', '-map', '[narration]',
                    '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),'-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '16',
@@ -434,10 +445,9 @@ class RenderJob:
         if self.cancelled: raise RuntimeError('Render cancelled by user.')
         if code != 0: raise RuntimeError('Final documentary export failed:\n'+'\n'.join(recent))
         if not temp_output.exists() or temp_output.stat().st_size < 10000: raise RuntimeError('The final export did not produce a usable MP4.')
-        if not self.captions_enabled:
-            cap = cv2.VideoCapture(str(temp_output)); exported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
-            if exported != total_frames:
-                raise RuntimeError(f'The exported picture has {exported} frames where the timeline has {total_frames}. Nothing was shortened silently.')
+        cap = cv2.VideoCapture(str(temp_output)); exported = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); cap.release()
+        if exported != total_frames:
+            raise RuntimeError(f'The exported picture has {exported} frames where the timeline has {total_frames}. Nothing was shortened silently.')
         temp_output.replace(self.output)
         end_mux()
         shutil.copy2(srt, self.output.with_suffix('.srt'))

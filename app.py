@@ -227,7 +227,7 @@ def check(p,final=False):
   supported=bool(rows) and all(r.get('plain_cue') for r in rows) and p.get('script_moving_only') and script_reading(p).get('ready_to_build') is True
   if final or not supported:errors.append('This is a script review draft, not a finished edit. Final export is blocked; complete the script and source checks before rendering.')
   else:
-   notes.append('Review render only: editorial captions are not burned in. Verify visual content, identity, still eligibility and reuse rights; final export remains blocked.')
+   notes.append('Review render only: script captions and SRT subtitles are burned in only if selected. Verify visual content, identity, still eligibility and reuse rights; final export remains blocked.')
    if p.get('voiceover'):
     audio_duration=p['voiceover'].get('duration',0);timeline_duration=p['scenes'][-1]['frame_out']/30
     if audio_duration>timeline_duration+.001:errors.append('Narration is longer than the picture timeline. Use matching audio; the review render must not trim narration.')
@@ -1316,12 +1316,25 @@ def download_scene_exports(pid,name):
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:
-  editable(pid);p=load(pid);final=(request.get_json(silent=True) or {}).get('final') is True;report=check(p,final)
+  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True;report=check(p,final)
   if report['errors']:return jsonify(report),400
   manifest(p);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
   job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':False,'created':time.time()})
-  job.start(captions=False);return jsonify({'render':job.snapshot()}),202
+  burn_script=data.get('script_captions') is True;burn_srt=data.get('srt_subtitles') is True
+  caption_entries=[]
+  if burn_script:
+   for scene in p['scenes']:
+    row=scene.get('plan_row') or {}
+    # Older combined fields are ambiguous editing instructions, not caption text.
+    caption='' if row.get('plain_cue') and 'continuity' not in row else str(row.get('required_caption') or '').strip()
+    if caption and caption.casefold() not in ('none','n/a','na','—','-'):
+     caption_entries.append((scene['frame_in'],scene['frame_out'],caption))
+  caption_file=None
+  if caption_entries:
+   caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
+   caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'created':time.time()})
+  job.start(captions=burn_srt,script_caption_srt=caption_file);return jsonify({'render':job.snapshot()}),202
 @app.post('/api/projects/<pid>/cancel')
 def cancel(pid):
  folder(pid)
