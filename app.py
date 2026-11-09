@@ -330,8 +330,9 @@ def script_reading(p, include_shots=False):
 
 def public(p):
  d=copy.deepcopy(p)
- from caption_layout import caption_phrases
- d['caption_phrases']=caption_phrases((p.get('srt') or {}).get('blocks',[]))
+ from caption_alignment import state as caption_state
+ d['caption_alignment']=caption_state(folder(p['id']),p)
+ d['caption_phrases']=d['caption_alignment'].get('phrases',[])
  from document_plan import match_report
  d['source_match_report']=match_report(d)
  from footage_requirements import footage_requirements,photo_requirements
@@ -1321,7 +1322,6 @@ def render(pid):
   editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True;report=check(p,final)
   if report['errors']:return jsonify(report),400
   manifest(p);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
-  job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
   burn_script=data.get('script_captions') is True;burn_srt=data.get('srt_subtitles') is True
   caption_entries=[]
   if burn_script:
@@ -1335,15 +1335,19 @@ def render(pid):
   if caption_entries:
    caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
    caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'created':time.time()})
   one_line_file=None
   if burn_srt:
    from caption_layout import make_single_line_ass
    if not (p.get('srt') or {}).get('blocks'):raise BadRequest('Import an SRT before burning subtitles.')
    width,height=output_size(p.get('format','landscape'),p.get('size'))
-   try:ass=make_single_line_ass(p['srt']['blocks'],width,height)
+   from caption_alignment import state as caption_state
+   alignment=caption_state(root,p)
+   if alignment.get('status')!='complete':raise BadRequest('Match all SRT captions to the narration before burning them in. '+alignment.get('detail',''))
+   try:ass=make_single_line_ass(p['srt']['blocks'],width,height,aligned_phrases=alignment['phrases'])
    except ValueError as e:raise BadRequest(str(e))
    one_line_file=root/'reviews'/(Path(name).stem+'_srt_display.ass');one_line_file.write_text(ass,encoding='utf-8')
+  job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'created':time.time()})
   job.start(captions=burn_srt,script_caption_srt=caption_file,narration_caption_file=one_line_file);return jsonify({'render':job.snapshot()}),202
 @app.post('/api/projects/<pid>/cancel')
 def cancel(pid):
@@ -1432,6 +1436,20 @@ def candidate_report(pid):
    return jsonify({'length_s':round(length,3),'needed_s':round(length+handle,3),'candidates':shots_of_length(folder(pid),p,length,handle,limit)})
   return jsonify(candidate_list(p,folder(pid),beat_id=request.args.get('beat'),limit=limit))
  except ValueError as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/caption-alignment')
+def get_caption_alignment(pid):
+ from caption_alignment import state
+ p=load(pid);return jsonify(state(folder(pid),p))
+
+@app.post('/api/projects/<pid>/caption-alignment')
+def start_caption_alignment(pid):
+ from caption_alignment import start,state
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  try:start(root,p)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify(state(root,p)),202
 
 @app.get('/api/projects/<pid>/coverage-summary')
 def coverage_summary(pid):

@@ -41,7 +41,7 @@ def caption_phrases(blocks, max_chars=36, max_words=6):
     return result
 
 
-def make_single_line_ass(blocks, width, height):
+def make_single_line_ass(blocks, width, height, aligned_phrases=None):
     """Fit each cue independently. No cue text or source file is changed."""
     xres = round(1080 * width / height)
     max_width = xres * .84
@@ -62,7 +62,7 @@ Style: Default,DejaVu Sans,56,&H00FFFFFF,&H00FFFFFF,&H00101010,&H88000000,0,0,0,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
     lines=[]
-    for cue in caption_phrases(blocks):
+    for cue in (aligned_phrases if aligned_phrases is not None else caption_phrases(blocks)):
         text=re.sub(r'\s*\n\s*',' ',str(cue.get('text',''))).strip()
         if not text: continue
         # SRT words stay intact; only original line breaks become spaces on screen.
