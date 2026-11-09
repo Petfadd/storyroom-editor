@@ -347,7 +347,9 @@ def public(p):
  if d['render'].get('output'):
   d['render']['url']=f'/api/projects/{p["id"]}/exports/{d["render"]["output"]}'
   record=folder(p['id'])/'reviews'/(Path(d['render']['output']).stem+'.json')
-  d['render']['current']=record.exists() and json.loads(record.read_text()).get('project',{}).get('updated')==p['updated']
+  saved_record=json.loads(record.read_text()) if record.exists() else {}
+  d['render']['current']=bool(saved_record) and saved_record.get('project',{}).get('updated')==p['updated']
+  if saved_record:d['render']['options']={'script_captions':saved_record.get('script_captions_requested',saved_record.get('captions_burned_in',False)), 'srt_subtitles':saved_record.get('srt_subtitles_burned_in',False), 'enhance_picture':saved_record.get('picture_enhancement',False)}
  for i,scene in enumerate(d['scenes']):scene['motion_plan']=motion(scene,i)
  from production import reserve_id
  for a in d['assets']:
@@ -1384,7 +1386,7 @@ def render(pid):
   if caption_entries:
    caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
    caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'script_captions_requested':burn_script,'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
   one_line_file=None
   if burn_srt:
    from caption_layout import make_single_line_ass
