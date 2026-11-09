@@ -30,7 +30,10 @@ Source IN: N/A
 Source OUT: N/A
 Treatment: PHOTO
 Visual direction: Victim photograph; verify identity
-Continuity/caption: Review source, rights and intended use
+Continuity: Review source, rights and intended use
+On-screen caption: None
 ```
 
 The photo must be a unique, original uploaded image, not an extracted video frame. JPG, JPEG and PNG are interchangeable when the complete filename stem matches exactly (including case); all matching extensions are checked for ambiguity. WebP requires the exact filename. It is held static for the cue in the review timeline. Missing or duplicate filenames remain unresolved. Actual identity, relevance, still eligibility and rights require human review; an uploaded filename is not proof. The review reports scheduled still time including native static intervals against the 10% maximum, and unresolved material cannot be assumed to be genuine motion. Photo use requires the mixed-picture policy for export, but a review draft is never a final render. This syntax does not change existing scripts or automatically replace video instructions with photos.
+
+Separate `Continuity` (editor note) from `On-screen caption` (literal intended video text; `None` means no caption). Legacy `Continuity/caption` is accepted as an ambiguous editor note, never automatically burned in. Inspect old scripts and use the separate field if it contains actual caption text. Currently captions are shown for review only and are not burned into exports; final script-draft export remains blocked.

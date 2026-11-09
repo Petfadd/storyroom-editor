@@ -228,7 +228,10 @@ def check(p,final=False):
   if final or not supported:errors.append('This is a script review draft, not a finished edit. Final export is blocked; complete the script and source checks before rendering.')
   else:
    notes.append('Review render only: editorial captions are not burned in. Verify visual content, identity, still eligibility and reuse rights; final export remains blocked.')
-   if p.get('voiceover') and p['voiceover'].get('duration',0)>p['scenes'][-1]['frame_out']/30+.001:errors.append('Narration is longer than the picture timeline. Use matching audio; the review render must not trim narration.')
+   if p.get('voiceover'):
+    audio_duration=p['voiceover'].get('duration',0);timeline_duration=p['scenes'][-1]['frame_out']/30
+    if audio_duration>timeline_duration+.001:errors.append('Narration is longer than the picture timeline. Use matching audio; the review render must not trim narration.')
+    elif audio_duration<timeline_duration-.001:notes.append(f'Narration is {timeline_duration-audio_duration:.3f} seconds shorter than the timeline; the review render pads the end with silence without stretching it.')
  from automatic import repetition_errors,source_capacity_errors,_plan_coverage
  errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
  # A block map written for a different runtime leaves blocks unplaced. Say so as a plan
@@ -1406,6 +1409,20 @@ def candidate_report(pid):
    return jsonify({'length_s':round(length,3),'needed_s':round(length+handle,3),'candidates':shots_of_length(folder(pid),p,length,handle,limit)})
   return jsonify(candidate_list(p,folder(pid),beat_id=request.args.get('beat'),limit=limit))
  except ValueError as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/coverage-summary')
+def coverage_summary(pid):
+ p=load(pid);assets={a['id']:a for a in p['assets']};video=still=unassigned=0;used=set()
+ for scene in p.get('scenes',[]):
+  seconds=(scene['frame_out']-scene['frame_in'])/30
+  asset=assets.get(scene.get('asset_id'))
+  if not asset:unassigned+=seconds;continue
+  used.add(asset['id'])
+  if is_still(p,asset) or (scene.get('plan_row') or {}).get('native_static_interval'):still+=seconds
+  else:video+=seconds
+ total=video+still+unassigned
+ result={'narration_duration_seconds':(p.get('voiceover') or {}).get('duration'), 'cue_count':len((p.get('srt') or {}).get('blocks',[])), 'source_count':len(used), 'timeline_seconds':round(total,3), 'video_seconds':round(video,3), 'still_seconds':round(still,3), 'unassigned_seconds':round(unassigned,3), 'video_percent':round(100*video/total,2) if total else 0, 'still_percent':round(100*still/total,2) if total else 0, 'unresolved_issues':check(p,True)['errors'], 'note':'Declared native static intervals count as stills; source identity, eligibility and rights require review.'}
+ response=jsonify(result);response.headers['Content-Disposition']='attachment; filename="coverage-summary.json"';return response
 
 @app.get('/api/projects/<pid>/frame-qc')
 @project_io_lock

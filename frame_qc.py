@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 FPS = 30
-SHEET_VERSION = 2
+SHEET_VERSION = 3
 CELL_W, CELL_H = 320, 180
 PAD, CAPTION_H = 10, 34
 
@@ -100,8 +100,8 @@ def build(root, p, per_sheet=20, group=None):
     chosen = groups[number - 1]
     first_index = (number - 1) * per_sheet
 
-    cols = 4
-    rows = (len(chosen) + cols - 1) // cols
+    cols = 5
+    rows = len(chosen)
     width = cols * (CELL_W + PAD) + PAD
     header_h = 34
     height = header_h + rows * (CELL_H + CAPTION_H + PAD) + PAD
@@ -111,35 +111,42 @@ def build(root, p, per_sheet=20, group=None):
 
     manifest = {'sheet': number, 'sheets': len(groups), 'per_sheet': per_sheet,
                 'beats': [], 'missing': [], 'moved': [],
-                'scope': 'Decoded frames stamped with their source and in-point. No face recognition, no content or identity verdict, no approval.'}
+                'scope': 'QC inspection frames only, not picture assets. No face recognition, content or identity verdict, or approval.'}
 
     for offset, scene in enumerate(chosen):
         index = first_index + offset + 1
         asset = assets.get(scene.get('asset_id'))
         file_name, at_s = _source_clock(scene, asset)
         moved = drift(scene)
-        frame = _grab(root, asset, at_s) if asset else None
-        col, row = offset % cols, offset // cols
-        x = PAD + col * (CELL_W + PAD)
-        y = header_h + row * (CELL_H + CAPTION_H + PAD)
-        canvas.paste(frame, (x, y)) if frame else draw.rectangle([x, y, x + CELL_W, y + CELL_H], outline='#5b2c2c', fill='#1b1114')
-        label = '#' + str(index) + ' · SRT ' + '-'.join(str(b) for b in scene.get('srt_blocks') or []) + ' · ' + _fmt(at_s)
-        if moved is not None and abs(moved) >= 0.001:
-            # The plan said one thing and the scene says another: say so on the picture.
-            label += ' · moved ' + ('%+.3f' % moved) + 's'
-            draw.rectangle([x, y, x + CELL_W, y + 3], fill='#d79a3a')
-        draw.text((x, y + CELL_H + 4), label[:60], fill='#f0c987' if moved is not None and abs(moved) >= 0.001 else 'white')
-        detail = file_name[:44] or 'no media assigned'
-        draw.text((x, y + CELL_H + 18), detail, fill='#9fb3c0')
-        if not frame:
-            draw.text((x + 8, y + 8), 'frame could not be decoded', fill='#e0a0a0')
+        duration = (scene.get('frame_out', 0) - scene.get('frame_in', 0)) / FPS
+        plan = scene.get('plan_row') or {}
+        out_s = float(plan.get('source_out_ms', (at_s + duration) * 1000)) / 1000 if plan.get('strict_production') else at_s + duration
+        source_fps = 0
+        if asset and asset.get('kind') == 'video':
+            import cv2
+            cap = cv2.VideoCapture(str(root / asset.get('path', '')))
+            source_fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            cap.release()
+        last_s = max(at_s, out_s - (1 / source_fps if source_fps > 0 else 1 / FPS))
+        moments = [('Before IN', at_s - 2), ('IN', at_s), ('Midpoint', (at_s + out_s) / 2), ('Last before OUT', last_s), ('After OUT', out_s + 2)]
+        samples = []
+        for col, (label, moment) in enumerate(moments):
+            is_photo = (asset or {}).get('kind') == 'image'
+            runtime = (asset or {}).get('duration')
+            available = is_photo or (moment >= 0 and (not runtime or moment < runtime))
+            frame = _grab(root, asset, moment) if asset and available else None
+            x = PAD + col * (CELL_W + PAD)
+            y = header_h + offset * (CELL_H + CAPTION_H + PAD)
+            canvas.paste(frame, (x, y)) if frame else draw.rectangle([x, y, x + CELL_W, y + CELL_H], outline='#5b2c2c', fill='#1b1114')
+            if not frame: draw.text((x + 8, y + 8), 'outside source or frame unavailable', fill='#e0a0a0')
+            draw.text((x, y + CELL_H + 4), f'#{index} {label} ' + ('photo' if is_photo else _fmt(max(0, moment))), fill='white')
+            draw.text((x, y + CELL_H + 18), (file_name[:44] or 'no media assigned'), fill='#9fb3c0')
+            samples.append({'position': label, 'source_s': None if is_photo else round(moment, 3), 'decoded': bool(frame)})
         beat = {'scene': index, 'srt_blocks': scene.get('srt_blocks'), 'source_file': file_name,
                 'in_clock': _fmt(at_s), 'in_s': round(at_s, 3), 'asset': (asset or {}).get('original_name'),
-                'kind': (asset or {}).get('kind'), 'declared_drift_s': moved, 'decoded': bool(frame)}
-        if moved is not None and abs(moved) >= 0.001:
-            manifest['moved'].append(beat)
-        if not frame:
-            manifest['missing'].append(beat)
+                'kind': (asset or {}).get('kind'), 'declared_drift_s': moved, 'decoded': samples[1]['decoded'], 'samples': samples}
+        if moved is not None and abs(moved) >= 0.001: manifest['moved'].append(beat)
+        if not samples[1]['decoded']: manifest['missing'].append(beat)
         manifest['beats'].append(beat)
 
     cache = root / '.cache' / 'frame_qc'

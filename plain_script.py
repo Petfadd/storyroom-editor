@@ -5,7 +5,7 @@ from edl import parse, timecode_ms
 from section_script import norm
 
 HEAD = re.compile(r'^Shot:\s*(Srt\d+(?:-[A-Za-z]+)?)\s*$', re.M | re.I)
-FIELDS = {'Narration timeline', 'Exact narration', 'Full source', 'Photograph', 'Shows', 'Source IN', 'Source OUT', 'Treatment', 'Visual direction', 'Continuity/caption'}
+FIELDS = {'Narration timeline', 'Exact narration', 'Full source', 'Photograph', 'Shows', 'Source IN', 'Source OUT', 'Treatment', 'Visual direction', 'Continuity/caption', 'Continuity', 'On-screen caption'}
 
 def shown_person_name(value):
     """Extract a named subject from the explicit 'Name (role). ...' sample form.
@@ -65,7 +65,12 @@ def parse_plain_script(text, blocks):
             k,sep,v=line.partition(':')
             if not sep or k not in FIELDS or k in fields: raise ValueError(sid+': duplicate or unsupported instruction: '+line[:120])
             fields[k]=v.strip()
-        required={'Narration timeline','Exact narration','Treatment','Visual direction','Continuity/caption'}
+        required={'Narration timeline','Exact narration','Treatment','Visual direction'}
+        legacy='Continuity/caption' in fields
+        if legacy and ('Continuity' in fields or 'On-screen caption' in fields):raise ValueError(sid+': use either the old combined field or the separate Continuity and On-screen caption fields, not both.')
+        if not legacy and not {'Continuity','On-screen caption'}.issubset(fields):raise ValueError(sid+': provide both Continuity and On-screen caption, or the legacy Continuity/caption field.')
+        continuity=fields.get('Continuity/caption') if legacy else fields.get('Continuity','')
+        caption='' if legacy or fields.get('On-screen caption','').strip().casefold() in ('none','n/a','na','—','-') else fields['On-screen caption'].strip()
         if not required.issubset(fields) or any(not v for v in fields.values()) or ('Full source' in fields)==('Photograph' in fields):raise ValueError(sid+': missing required labelled instruction or conflicting sources.')
         clock=lambda v:timecode_ms(v.strip(),sid)
         parts=re.split(r'\s*(?:-->|→|->)\s*',fields['Narration timeline'])
@@ -92,9 +97,9 @@ def parse_plain_script(text, blocks):
             elif re.fullmatch(r'STILL\s*(?:\(native static interval\)|[—–-]\s*native static interval in source video(?:,\s*1\.0[×x]\s*,\s*loop\s+OFF)?)',treatment,re.I):typ='STILL';requested='STILL HOLD'
             else:raise ValueError(sid+': unsupported treatment; no playback changes were assumed.')
         mismatch=norm(fields['Exact narration'])!=norm(cue.get('text',''))
-        warnings=['Visual content, identity, source version and rights are not verified.','Caption and continuity instructions require review before rendering.']
+        warnings=['Visual content, identity, source version and rights are not verified.','Continuity is an editor note; on-screen captions require review.']
         if proposed:warnings.append('Source is marked PROPOSED in the script; verify before approval.')
         if mismatch:warnings.append('Script narration differs from the uploaded SRT; neither was changed.')
         if typ=='STILL':warnings.append(('Uploaded photograph held static' if photo else 'Native static interval played from the source')+' for review only; eligibility, still budget, identity and rights remain unverified.')
-        rows.append(dict(beat_id=sid,shot_id=sid,clip_id='',srt_blocks=[cue['number']],timeline_in_ms=tin,timeline_out_ms=tout,source_file=source,source_in_ms=sin,source_out_ms=sout,visual_status=typ,requested_treatment=requested,shown_person=shown_person_name(fields.get('Shows','')),shows_instruction=fields.get('Shows',''),visible_content=fields['Visual direction'],picture_treatment=treatment,required_caption=fields['Continuity/caption'],match_reason=fields['Continuity/caption'],limit_on_implication='Declared visual is not independently verified.',script_narration=fields['Exact narration'],srt_narration=cue.get('text',''),narration_mismatch=mismatch,register_window='',register_visible='',register_restrictions='',coverage_review='Requires visual inspection and rights review.',import_blockers=warnings,strict_production=True,transition_out='cut',source_proposed=proposed,plain_cue=True,uploaded_photo=photo,native_static_interval=(typ=='STILL' and not photo)))
+        rows.append(dict(beat_id=sid,shot_id=sid,clip_id='',srt_blocks=[cue['number']],timeline_in_ms=tin,timeline_out_ms=tout,source_file=source,source_in_ms=sin,source_out_ms=sout,visual_status=typ,requested_treatment=requested,shown_person=shown_person_name(fields.get('Shows','')),shows_instruction=fields.get('Shows',''),visible_content=fields['Visual direction'],picture_treatment=treatment,required_caption=caption,continuity=continuity,legacy_combined_instruction=legacy,match_reason=continuity,limit_on_implication='Declared visual is not independently verified.',script_narration=fields['Exact narration'],srt_narration=cue.get('text',''),narration_mismatch=mismatch,register_window='',register_visible='',register_restrictions='',coverage_review='Requires visual inspection and rights review.',import_blockers=warnings,strict_production=True,transition_out='cut',source_proposed=proposed,plain_cue=True,uploaded_photo=photo,native_static_interval=(typ=='STILL' and not photo)))
     return parse(json.dumps(rows).encode(),'.json')

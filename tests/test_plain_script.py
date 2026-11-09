@@ -175,3 +175,16 @@ class BuildReadinessTest(unittest.TestCase):
    p['assets'][1]['duration']=6;self.assertTrue(any('exceed' in x for x in server.script_reading(p)['build_issues']));p['assets'][1]['duration']=20
    p['production_script']['text']=script.replace('Full source: S02.mp4','Full source: First video.mp4').replace('Source IN: 00:00:05,000\nSource OUT: 00:00:09,000','Source IN: 00:00:04,000\nSource OUT: 00:00:08,000')
    self.assertTrue(any('overlap' in x for x in server.script_reading(p)['build_issues']))
+
+class SeparateInstructionsTest(unittest.TestCase):
+ def test_separate_caption_and_continuity_and_legacy(self):
+  text=SCRIPT.replace('Continuity/caption: Unverified','Continuity: New shot at the next narration beat.\nOn-screen caption: None').replace('Continuity/caption: Check rights','Continuity: Hold the document.\nOn-screen caption: Evidence file')
+  rows=parse_plain_script(text,BLOCKS)
+  self.assertEqual(rows[0]['continuity'],'New shot at the next narration beat.')
+  self.assertEqual(rows[0]['required_caption'],'')
+  self.assertEqual(rows[1]['required_caption'],'Evidence file')
+  legacy=parse_plain_script(SCRIPT,BLOCKS)
+  self.assertEqual(legacy[0]['continuity'],'Unverified');self.assertEqual(legacy[0]['required_caption'],'');self.assertTrue(legacy[0]['legacy_combined_instruction'])
+ def test_mixed_or_missing_fields_rejected(self):
+  for text in [SCRIPT.replace('Continuity/caption: Unverified','Continuity: Cut'),SCRIPT.replace('Continuity/caption: Unverified','Continuity/caption: old\nOn-screen caption: new')]:
+   with self.assertRaises(ValueError):parse_plain_script(text,BLOCKS)
