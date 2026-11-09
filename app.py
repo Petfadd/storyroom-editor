@@ -490,6 +490,10 @@ def update_project(pid):
       if scene.get('transition')!='cut':scene['transition']='cut';scene['transition_handle_frames']=0;cleared+=1
     p.pop('dissolves_cleared',None)
     response_extra={'dissolves_cleared':cleared}
+  if 'picture_scale' in d:
+   scale=d['picture_scale']
+   if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise BadRequest('Picture scale must be a whole percentage from 100 to 200.')
+   if scale!=p.get('picture_scale',100):p['picture_scale']=scale;p['picture_rebuilt']=False
   if 'size' in d:
    if not isinstance(d['size'],str) or not valid_size(d['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
    if str(d['size'])!=str(p.get('size')):
@@ -1260,7 +1264,7 @@ def manifest(p):
    shot['image']=out.relative_to(root).as_posix()
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100)},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
 @app.post('/api/projects/<pid>/continuous-preview')
 def prepare_continuous_preview(pid):

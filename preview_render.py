@@ -61,7 +61,12 @@ def _run(root,p,job,on_complete):
             cmd=[ff,'-nostdin','-y','-v','error','-threads','2']
             if a['kind']=='image':cmd+=['-loop','1','-framerate','30','-i',str(path)]
             else:cmd+=['-ss',str(s['in_s']),'-i',str(path)]
-            vf=f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30,setsar=1,format=yuv420p'
+            scale=p.get('picture_scale',100)
+            if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise ValueError('Invalid picture scale.')
+            sw=max(w,round(w*scale/200)*2);sh=max(h,round(h*scale/200)*2)
+            vf=f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2'
+            if scale!=100:vf+=f',scale={sw}:{sh},crop={w}:{h}'
+            vf+=',fps=30,setsar=1,format=yuv420p'
             cmd+=['-vf',vf,'-frames:v',str(frames),'-an','-c:v','libx264','-preset','ultrafast','-crf','27','-threads','2','-video_track_timescale','90000',str(out)]
             result=subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=max(120,frames/30*20))
             if result.returncode:raise ValueError(f'Scene {i+1} could not be decoded: '+result.stderr.decode(errors='replace')[-400:])

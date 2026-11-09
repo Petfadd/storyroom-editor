@@ -47,3 +47,9 @@ class ReviewDraftRenderTest(unittest.TestCase):
    res=c.post(f'/api/projects/{pid}/render',json={'final':False,'script_captions':True});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
    cap=cv2.VideoCapture(str(root/'renders'/state['output']));cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,burned=cap.read();cap.release();self.assertTrue(ok);self.assertGreater(float(abs(clean.astype('float32')-burned.astype('float32')).mean()),0.05);self.assertTrue(state['captions']);self.assertEqual((root/'renders'/state['output']).with_suffix('.srt').read_text(),(root/'inputs/captions.srt').read_text())
    display=(root/'reviews'/(Path(state['output']).stem+'_script_captions.srt')).read_text();self.assertIn('On screen text',display);self.assertNotIn('Review only',display);self.assertNotIn('None',display)
+
+   for invalid in (99,201,True,105.5,'105'):
+    self.assertEqual(c.patch(f'/api/projects/{pid}',json={'picture_scale':invalid}).status_code,400)
+   before=server.load(pid);res=c.patch(f'/api/projects/{pid}',json={'picture_scale':150});self.assertEqual(res.status_code,200);after=server.load(pid);self.assertEqual(after['picture_scale'],150);self.assertEqual(before['scenes'],after['scenes'])
+   res=c.post(f'/api/projects/{pid}/render',json={'final':False});self.assertEqual(res.status_code,202,res.get_data(as_text=True));job=server.JOBS[pid];job.worker_thread.join(timeout=90);state=job.snapshot();self.assertEqual(state['status'],'done',state)
+   cap=cv2.VideoCapture(str(root/'renders'/state['output']));self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),300);cap.set(cv2.CAP_PROP_POS_FRAMES,30);ok,scaled=cap.read();cap.release();self.assertTrue(ok);self.assertGreater(float(abs(clean.astype('float32')-scaled.astype('float32')).mean()),2)
