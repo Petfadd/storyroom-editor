@@ -42,3 +42,24 @@ def annotate_plan(project,root,plan):
         if not path.is_file() or path.stat().st_size!=bite.get('narration_size') or path.stat().st_mtime_ns!=bite.get('narration_mtime_ns'):reasons.append('Narration changed; review the pause point again.')
         bite['stale_reasons']=reasons
     return plan
+
+
+def build_timeline(project, plan):
+    """Map narration and inserted footage onto a separate, immutable edit clock.
+
+    This is a planning representation only, not a rendered MP4 or subtitle file.
+    """
+    voice=project.get('voiceover') or {};duration=_number(voice.get('duration'),'Narration duration')
+    if duration<=0:raise ValueError('Upload narration to build a documentary timeline.')
+    bites=sorted(plan.get('bites',[]),key=lambda b:(b['pause_s'],b['created']))
+    if any(b.get('stale_reasons') for b in bites):raise ValueError('A sound bite uses replaced or missing media. Review it before building the documentary timeline.')
+    cursor=0;output=0;segments=[]
+    for b in bites:
+        at=_number(b['pause_s'],'Narration pause');start=_number(b['source_in_s'],'Source IN');end=_number(b['source_out_s'],'Source OUT')
+        if at<cursor or at>duration or start<0 or end<=start:raise ValueError('A planned sound bite has invalid timings. Review it before continuing.')
+        if at>cursor:
+            span=at-cursor;segments.append({'kind':'narration','source_in_s':round(cursor,3),'source_out_s':round(at,3),'timeline_in_s':round(output,3),'timeline_out_s':round(output+span,3)});output+=span
+        span=end-start;segments.append({'kind':'sound_bite','id':b['id'],'asset_id':b['asset_id'],'asset_name':b['asset_name'],'source_in_s':start,'source_out_s':end,'timeline_in_s':round(output,3),'timeline_out_s':round(output+span,3),'narration_resume_s':at});output+=span;cursor=at
+    if cursor<duration:
+        span=duration-cursor;segments.append({'kind':'narration','source_in_s':round(cursor,3),'source_out_s':duration,'timeline_in_s':round(output,3),'timeline_out_s':round(output+span,3)});output+=span
+    return {'status':'planning_only','duration_s':round(output,3),'narration_duration_s':duration,'segments':segments,'subtitles':'not_generated','export_available':False}

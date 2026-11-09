@@ -400,12 +400,14 @@ def projects():
  for f in PROJECTS.glob('*/project.json'):
   try:p=json.loads(f.read_text())
   except FileNotFoundError:continue  # A production may have been deleted while listing.
-  result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project'))})
+  result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project')),'edit_mode':p.get('edit_mode','review')})
  return jsonify({'projects':sorted(result,key=lambda x:-x['updated']),'profiles':PROFILES})
 @app.post('/api/projects')
 def create():
  d=request.get_json() or {};title=str(d.get('title','')).strip()
  if not title or len(title)>100:raise BadRequest('Enter a production title of 1–100 characters.')
+ mode=d.get('edit_mode','review')
+ if mode not in ('review','documentary'):raise BadRequest('Choose either script review or documentary edit.')
  profile=d.get('profile') or 'documentary';fmt=d.get('format','landscape')
  if profile not in PROFILES or fmt not in ASPECTS:raise BadRequest('Choose a supported profile and format.')
  requested_size=d.get('size') or DEFAULT_SIZE.get(fmt)
@@ -414,7 +416,7 @@ def create():
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
  requested=d.get('picture_policy')
  if requested is not None and requested not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
- p={'id':pid,'schema_version':1,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'size':requested_size,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
+ p={'id':pid,'schema_version':1,'edit_mode':mode,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'size':requested_size,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
@@ -1304,6 +1306,7 @@ def prepare_continuous_preview(pid):
  from preview_render import start
  with LOCKS[pid]:
   p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')=='documentary':raise BadRequest('Documentary smooth preview is not implemented yet.')
   if p.get('review_only_draft'):raise BadRequest('This review draft cannot be rendered as a smooth preview until its caption, framing and freeze-frame instructions are implemented.')
   if not p['scenes']:raise BadRequest('Build a storyboard first.')
   def publish(updated,temp,base):
@@ -1328,6 +1331,7 @@ def prepare_scene_exports(pid):
  from scene_exports import start
  with LOCKS[pid]:
   p=load(pid);root=folder(pid);data=request.get_json(silent=True) or {};kind=data.get('source')
+  if p.get('edit_mode','review')=='documentary':raise BadRequest('Documentary scene export is not implemented yet.')
   if p.get('review_only_draft'):raise BadRequest('A review draft cannot be exported as finished scene clips.')
   if kind not in ('preview','render'):raise BadRequest('Choose the smooth preview or a rendered master.')
   d=public(p)
@@ -1389,6 +1393,15 @@ def remove_documentary_bite(pid,bid):
   plan['bites']=new;plan['revision']+=1;write(root/'documentary_plan.json',plan)
   return jsonify(annotate_plan(load(pid),root,plan))
 
+@app.get('/api/projects/<pid>/documentary-timeline')
+def documentary_timeline(pid):
+ from documentary import load_plan,annotate_plan,build_timeline
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary timeline is available only in a documentary project.')
+  try:return jsonify(build_timeline(p,annotate_plan(p,folder(pid),load_plan(folder(pid)))))
+  except ValueError as e:raise BadRequest(str(e))
+
 @app.get('/api/projects/<pid>/strict-cut-check')
 def strict_cut_check(pid):
  from strict_cuts import report
@@ -1434,7 +1447,9 @@ def retry_strict_cut_status(pid):
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:
-  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True;report=check(p,final)
+  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True
+  if p.get('edit_mode','review')=='documentary':raise BadRequest('Documentary export is not implemented yet. The review renderer cannot include your sound bites.')
+  report=check(p,final)
   from strict_cuts import report as strict_report
   strict=strict_report(p,folder(pid))
   if strict['errors']:report['errors'].extend(strict['errors']);report['can_export']=False

@@ -45,8 +45,7 @@ function briefHTML(){
  const progressStatus=(P.review_only_draft||['queued','working','studying','storyboard_ready','rendering','error','interrupted'].includes(P.automatic_status?.status))?automaticStatusHTML():'';
  const reviewAction=!P.scenes.length?`<button class="new" type="button" onclick="buildStoryboard()" ${buildDisabled()}>Build storyboard</button>`:`<button class="new" type="button" onclick="openTimeline()">Open timeline</button> <button type="button" onclick="buildStoryboard()" ${buildDisabled()}>Rebuild review from script</button>`;
  return `<div class="simple-setup">
- <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>
- <section class="card"><h3>Editing modes</h3><p><strong>Script review</strong> is your current unchanged timeline. <strong>Documentary edit</strong> lets you plan and audition footage sound bites separately.</p><button type="button" onclick="openDocumentary()">Open documentary planning</button><p class="small">Planning and handoff preview only for now. The current Render MP4 does not include sound bites.</p></section>
+ <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>${P.edit_mode==='documentary'?`<div class="notice warn"><strong>Documentary workspace · in development</strong><p>Import your original files here and plan footage sound bites. The monitor and timeline currently show the base review edit only; inserted sound bites, documentary rendering and retimed subtitles are not yet available.</p><button type="button" onclick="openDocumentary()">Plan and preview sound bites</button></div>`:''}
  ${buildProgressHTML()}${reading}${progressStatus}
  <p class="setup-intro">Upload your production files below. The script tells you which footage filenames to upload.</p>
  <div class="setup-grid">

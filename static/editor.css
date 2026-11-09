@@ -128,3 +128,7 @@
 .strict-table-scroll{overflow:auto;max-height:55vh}.strict-table{border-collapse:collapse;width:100%;font:11px/1.45 system-ui}.strict-table th,.strict-table td{text-align:left;vertical-align:top;border:1px solid #3c4855;padding:7px;min-width:130px}.strict-table th{background:#25313d;position:sticky;top:0}.strict-table td{color:#dce6ef;overflow-wrap:anywhere}
 
 .enhance-export{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:6px 15px 0;color:#c7d6df;font-size:10px}.enhance-export input{accent-color:#69d8ae}.enhance-export span{color:#8395a5;font-size:9px}
+/* Documentary projects use the familiar monitor/timeline layout, with a separate identity. */
+.documentary-workspace .topbar{border-bottom-color:#8a7044}
+.documentary-workspace #documentary-button{border-color:#ae8c4e;color:#f6d69b}
+.documentary-workspace #documentary-timeline-label{color:#e4bc76}
