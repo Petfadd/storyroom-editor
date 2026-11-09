@@ -71,3 +71,18 @@ No `LICENSE` file is included. If this is a public repository and you want other
 ## Honest scope
 
 The engine can decode frames and follow explicit machine-readable source intervals. It does not independently certify people, exact exhibits, copyright status, or editorial truth. `YES` flags and automatic approval do not equal visual identity verification.
+
+## Reviewing footage with an AI agent
+
+An uploaded video is not "watched" directly — it is converted into frames the
+agent can read. `tools/watch_video.py` writes labelled contact sheets, a waveform,
+and a metadata report into a git-ignored `video_review/` folder:
+
+```sh
+python tools/watch_video.py incoming/promo_v3.mp4
+python tools/watch_video.py incoming/ --extend      # a folder of clips
+python tools/watch_video.py clip.mp4 --frames 48 --cols 6 --scale 400
+```
+
+See [VIDEO_INTAKE.md](VIDEO_INTAKE.md) for which formats to send, size limits,
+and how to read the output.

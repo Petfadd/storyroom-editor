@@ -1,0 +1,31 @@
+# Local runtime data
+projects/
+video_review/
+incoming/
+__pycache__/
+*.pyc
+
+# Uploaded media and generated output - never commit footage
+*.mp4
+*.mov
+*.m4v
+*.mkv
+*.webm
+*.avi
+*.wav
+*.m4a
+*.mp3
+*.srt
+final_*.mp4
+review_*.mp4
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.venv/
+venv/
+.env
+
+# Stray files created by a mistyped shell command
+cd
+git
