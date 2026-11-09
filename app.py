@@ -1204,6 +1204,19 @@ def edit_scene(pid,sid):
   if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
   save(p);return jsonify(public(p))
 
+@app.patch('/api/projects/<pid>/scenes/<sid>/picture-scale')
+def edit_scene_picture_scale(pid,sid):
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);scene=next((s for s in p['scenes'] if s['id']==sid),None)
+  if scene is None:raise NotFound('Scene not found.')
+  data=request.get_json(silent=True) or {}
+  if 'picture_scale' not in data:raise BadRequest('Specify a picture scale or null to use the project scale.')
+  value=data['picture_scale']
+  if value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 100<=value<=200):raise BadRequest('Picture scale must be a whole percentage from 100 to 200, or null to use the project scale.')
+  if value is None:scene.pop('picture_scale',None)
+  else:scene['picture_scale']=value
+  save(p);return jsonify(public(p))
+
 @app.post('/api/projects/<pid>/scenes/approve')
 def approve_scenes(pid):
  """Approve every scene that passes the same review export readiness applies.
@@ -1262,6 +1275,7 @@ def manifest(p):
    else:
     bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out,quality=95)
    shot['image']=out.relative_to(root).as_posix()
+  shot['picture_scale']=s.get('picture_scale',p.get('picture_scale',100))
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
  result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100)},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}

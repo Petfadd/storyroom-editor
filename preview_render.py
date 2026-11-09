@@ -61,7 +61,7 @@ def _run(root,p,job,on_complete):
             cmd=[ff,'-nostdin','-y','-v','error','-threads','2']
             if a['kind']=='image':cmd+=['-loop','1','-framerate','30','-i',str(path)]
             else:cmd+=['-ss',str(s['in_s']),'-i',str(path)]
-            scale=p.get('picture_scale',100)
+            scale=s.get('picture_scale',p.get('picture_scale',100))
             if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise ValueError('Invalid picture scale.')
             sw=max(w,round(w*scale/200)*2);sh=max(h,round(h*scale/200)*2)
             vf=f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2'

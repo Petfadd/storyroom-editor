@@ -216,7 +216,7 @@ class RenderJob:
                        f'[frontsrc]scale={ow}:{oh}:force_original_aspect_ratio=decrease[front];'
                        f'[back][front]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=end_frame={frames}[picture]')
             else: graph=f'[0:v]setpts=PTS-STARTPTS,scale={ow}:{oh},fps={fps},setsar=1,trim=end_frame={frames}[picture]'
-        scale=settings.get('picture_scale',100)
+        scale=shot.get('picture_scale',settings.get('picture_scale',100))
         if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise RuntimeError('Invalid picture scale.')
         if scale!=100:
             sw=max(ow,round(ow*scale/200)*2);sh=max(oh,round(oh*scale/200)*2)
@@ -278,7 +278,7 @@ class RenderJob:
             'in_ms': visual.get('in_ms'), 'out_ms': visual.get('out_ms'),
             'frames': shot['duration_frames'] + extra,
             'motion': shot.get('motion_plan'), 'transition': shot.get('transition'),
-            'size': [settings.get('width'), settings.get('height')], 'fps': settings.get('fps'), 'picture_scale': settings.get('picture_scale',100),
+            'size': [settings.get('width'), settings.get('height')], 'fps': settings.get('fps'), 'picture_scale': shot.get('picture_scale',settings.get('picture_scale',100)),
             'preset': SEGMENT_VERSION,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:32]
