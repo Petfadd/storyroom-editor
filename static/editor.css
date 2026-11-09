@@ -115,4 +115,3 @@
 
 /* Wider draggable handle, without blocking clicks on the tracks underneath. */
 .playhead{pointer-events:none}.playhead #playhead-handle{pointer-events:auto;position:absolute;top:-3px;left:-11px;width:23px;height:27px;background:transparent;clip-path:none;cursor:ew-resize;touch-action:none;z-index:25}.playhead #playhead-handle::before{content:"";position:absolute;left:5px;top:3px;width:13px;height:12px;background:#ff546d;clip-path:polygon(0 0,100% 0,50% 100%)}.playhead #playhead-handle:hover::before,.playhead #playhead-handle.dragging::before{background:#ffa1af}.playhead #playhead-handle:focus-visible{outline:2px solid #fff;outline-offset:0;border-radius:3px}
-.caption-alignment-status{margin:0 12px 6px;padding:7px 10px;background:#202c36;border:1px solid #4c6471;border-radius:5px;color:#d6e6ed;font-size:10px;line-height:1.4}.caption-alignment-status[hidden]{display:none}
