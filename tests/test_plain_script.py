@@ -169,6 +169,7 @@ class BuildReadinessTest(unittest.TestCase):
    for name in ('First video.mp4','S02.mp4'):
     (root/'sources'/name).write_bytes(b'fixture');p['assets'].append({'id':name,'name':name,'original_name':name,'kind':'video','duration':20,'path':'sources/'+name,'verified':False,'source':'','people':[],'category':'general','rights':'unreviewed','notes':''})
    self.assertFalse(server.script_reading(p)['ready_to_build']);self.assertIn('Upload the narration audio.',server.script_reading(p)['build_issues'])
+   server.save(p);blocked=c.post(f'/api/projects/{pid}/script-draft',json={'moving_only':True,'require_ready':True});self.assertEqual(blocked.status_code,400);self.assertIn('Upload the narration audio',blocked.get_data(as_text=True));self.assertEqual(server.load(pid)['scenes'],[])
    (root/'inputs/voiceover.mp3').write_bytes(b'audio');p['voiceover']={'duration':8,'path':'inputs/voiceover.mp3'};r=server.script_reading(p);self.assertTrue(r['ready_to_build']);self.assertEqual(r['build_issues'],[])
    p['voiceover']['duration']=20;self.assertTrue(any('Narration duration' in x for x in server.script_reading(p)['build_issues']));p['voiceover']['duration']=8
    p['assets'][1]['duration']=6;self.assertTrue(any('exceed' in x for x in server.script_reading(p)['build_issues']));p['assets'][1]['duration']=20

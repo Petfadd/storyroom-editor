@@ -898,6 +898,8 @@ def script_draft(pid):
   if mode!='detailed_production_script' or not rows:raise BadRequest('A recognized detailed production script and matching SRT are required.')
   update(pid,key,'checking_sources',detail=f'Checked {len(rows)} cue instructions. Matching filenames and source ranges to uploaded footage.')
   review=script_reading(p)
+  if payload.get('require_ready') is True and not review.get('ready_to_build'):
+   raise BadRequest('Cannot build until all input checks pass: '+(' '.join(review.get('build_issues') or [review.get('detail') or 'Read the production script and SRT first.'])))
   moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
   if (review.get('missing_files') or review.get('short_shots')) and not moving_only:raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
   seeds=[];last=0

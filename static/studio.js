@@ -20,11 +20,13 @@ function photoRequirementsHTML(){
  const files=r.files||[],list=status=>files.filter(x=>x.status===status).map(x=>E(x.name)).join(', ');
  return `<div class="notice" role="status"><strong>${r.total} photo file${r.total===1?'':'s'} named in the script</strong><p>${r.matched} matched · ${r.missing} missing${r.ambiguous?' · '+r.ambiguous+' with multiple matches':''}</p>${r.missing?`<p><strong>Photos to upload:</strong> ${list('missing')}</p>`:''}${r.ambiguous?`<p><strong>Multiple matching photos; review:</strong> ${list('ambiguous')}</p>`:''}<details><summary>Show all ${r.total} named photos</summary><p>${files.map(x=>`${E(x.name)} (${x.status==='matched'?'matched: '+(x.matched_names||[]).map(E).join(', '):x.status==='missing'?'missing':'multiple matches'})`).join(' · ')}</p></details><p class="small">Filename scan only; examples may be included. JPG, JPEG and PNG match by exact filename stem. Verify who or what the image shows, eligibility and reuse rights separately.</p></div>`;
 }
+function canBuildStoryboard(){return !!P&&P.script_reading?.status==='read'&&P.script_reading.ready_to_build===true&&!window.buildingStoryboard&&!uploading}
+function buildDisabled(){return canBuildStoryboard()?'':'disabled'}
 function briefHTML(){
  const footageCount=(P.assets||[]).filter(a=>!a.derived_from&&(a.kind==='video'||a.kind==='image')).length;
  const reading=P.srt?scriptReadingHTML():'';
  const progressStatus=(P.review_only_draft||['queued','working','studying','storyboard_ready','rendering','error','interrupted'].includes(P.automatic_status?.status))?automaticStatusHTML():'';
- const reviewAction=!P.scenes.length&&P.srt&&footageCount?'<button class="new" type="button" onclick="buildStoryboard()" '+(window.buildingStoryboard?'disabled':'')+'>Build storyboard</button>':P.scenes.length?'<button class="new" type="button" onclick="openTimeline()">Open timeline</button> <button type="button" onclick="buildStoryboard()">Rebuild review from script</button>':'';
+ const reviewAction=!P.scenes.length?`<button class="new" type="button" onclick="buildStoryboard()" ${buildDisabled()}>Build storyboard</button>`:`<button class="new" type="button" onclick="openTimeline()">Open timeline</button> <button type="button" onclick="buildStoryboard()" ${buildDisabled()}>Rebuild review from script</button>`;
  return `<div class="simple-setup">
  <div id="upload-feedback" class="notice" role="status" aria-live="polite" hidden></div>
  ${buildProgressHTML()}${reading}${progressStatus}
@@ -42,7 +44,7 @@ function scriptReadingHTML(){
  if(r.status==='error')return `<div class="notice warn"><strong>Production script needs attention</strong><p>${E(r.detail)}</p></div>`;
  if(r.status!=='read')return '';
  const issues=r.build_issues||[],ready=r.ready_to_build===true;
- return `<div class="notice ${ready?'':'warn'}" role="status"><strong>${ready?'✓ Ready to build the review timeline':'Script read · items to check'}</strong><p>${r.blocks} SRT blocks · ${r.shots} shots · ${r.video_shots} video shots · ${r.photo_shots||0} photo shots.</p>${ready?'<p>Your script, SRT, narration and named media passed the available build checks.</p>':`<ul class="issues">${issues.map(x=>`<li>${E(x)}</li>`).join('')}</ul>`}<p class="small">${ready?'Ready to build is not final-export approval.':'You can still build a partial review timeline; unresolved shots remain empty.'} Content, identity, eligibility, rights and any editorial caption instructions still need review.</p>${!P.scenes.length?'<button type="button" class="new" onclick="buildStoryboard()">Build storyboard</button> ':''}<button type="button" onclick="showScriptReading()">Read the full shot plan and differences</button><div id="script-reading-detail"></div></div>`;
+ return `<div class="notice ${ready?'':'warn'}" role="status"><strong>${ready?'✓ Ready to build the review timeline':'Script read · items to check'}</strong><p>${r.blocks} SRT blocks · ${r.shots} shots · ${r.video_shots} video shots · ${r.photo_shots||0} photo shots.</p>${ready?'<p>Your script, SRT, narration and named media passed the available build checks.</p>':`<ul class="issues">${issues.map(x=>`<li>${E(x)}</li>`).join('')}</ul>`}<p class="small">${ready?'Ready to build is not final-export approval.':'Complete the listed checks before building the timeline.'} Content, identity, eligibility, rights and any editorial caption instructions still need review.</p>${!P.scenes.length?`<button type="button" class="new" onclick="buildStoryboard()" ${buildDisabled()}>Build storyboard</button> `:''}<button type="button" onclick="showScriptReading()">Read the full shot plan and differences</button><div id="script-reading-detail"></div></div>`;
 }
 
 function buildProgressHTML(){
@@ -73,7 +75,7 @@ function automaticStatusHTML(){
  if(ready.status&&['blocked','needs_plan','manual','paused'].includes(ready.status)&&!P.scenes.length){
   const action=ready.status==='needs_plan'?'<p><button type="button" onclick="downloadMapTemplate()">Download the block-map template</button> <button type="button" onclick="chooseFile(\'srt_block_map\')">Upload a block map</button> <button type="button" onclick="chooseFile(\'production_script\')">Upload a production script</button></p>'
    :ready.status==='blocked'?`<p class="small">Still needed: ${E((ready.missing||[]).join(', ')||'see the message above')}</p>`
-   :ready.status==='manual'?'<p><button type="button" onclick="buildStoryboard()">Rebuild deliberately</button></p>'
+   :ready.status==='manual'?`<p><button type="button" onclick="buildStoryboard()" ${buildDisabled()}>Rebuild deliberately</button></p>`
    :'';
   return `<div class="notice warn"><strong>Automatic assembly is not running — ${E({blocked:'inputs are missing',needs_plan:'there is no plan yet',manual:'manual edits take precedence',paused:'it is switched off for this production'}[ready.status])}.</strong><p>${E(ready.detail||s.detail||'')}</p>${action}</div>`;
  }
@@ -157,7 +159,8 @@ async function setLayout(value){if(!P||!leave())return;try{P=await api('/api/pro
 async function chooseFile(kind){if(!P||!leave())return;const picker=$('#file-picker');picker.value='';picker.multiple=kind==='asset';picker.removeAttribute('accept');picker.onchange=()=>importSelectedFiles(kind,picker.files);picker.click()}
 
 async function buildStoryboard(){
- if(window.buildingStoryboard||!leave()||!P)return;
+ if(!canBuildStoryboard()){toast('Complete the input checks before building the timeline.');return}
+ if(!leave())return;
  if(!$('#manage-dialog').open)manage('brief');
  if(P.scenes.length&&(!P.review_only_draft||P.manual_scene_edits)){updateBuildProgress(P.id,'Existing edits preserved','This timeline contains work that cannot be automatically replaced. Review it before rebuilding.',{done:true});return}
  if(P.scenes.length&&!confirm('Rebuild the existing review timeline from the currently uploaded script? The current review placements will be replaced. Uploaded script, SRT, narration and footage will be kept.'))return;
@@ -166,14 +169,14 @@ async function buildStoryboard(){
  const buttons=[...document.querySelectorAll('button[onclick="buildStoryboard()"]')];buttons.forEach(b=>b.disabled=true);
  try{
   timer=setInterval(async()=>{try{const r=await fetch(`/api/projects/${id}/imports/${key}`);if(!r.ok)return;const state=await r.json();if(P?.id===id&&window.buildingStoryboard&&state.detail)updateBuildProgress(id,'Building storyboard',state.detail,{running:true})}catch{}},500);
-  const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true,replace_review:!!P.scenes.length})});
+  const response=await fetch(`/api/projects/${id}/script-draft`,{method:'POST',headers:{'Content-Type':'application/json','X-Upload-ID':key},body:JSON.stringify({moving_only:true,replace_review:!!P.scenes.length,require_ready:true})});
   let result;try{result=await response.json()}catch{throw Error('The server response could not be read. Check the project before retrying.')}
   if(!response.ok)throw Error(result.error||'The script could not be read.');
   if(P?.id!==id)return;P=result;sceneIndex=0;const placed=P.script_application?.placed_scenes||0,total=P.scenes.length,issues=(P.script_application?.issues||[]).length;
   updateBuildProgress(id,'Review timeline ready',`${placed} of ${total} cue shots assigned; ${issues} unresolved. Source content, photos, captions, still limits and rights still need review. No missing footage was substituted.`,{done:true});
   renderProject();await list();
  }catch(e){if(P?.id===id)updateBuildProgress(id,'Storyboard not built',e.message||'The build could not finish. Your uploads were kept.',{error:true})}
- finally{clearInterval(timer);window.buildingStoryboard=false;buttons.forEach(b=>{if(b.isConnected)b.disabled=false})}
+ finally{clearInterval(timer);window.buildingStoryboard=false;buttons.forEach(b=>{if(b.isConnected)b.disabled=!canBuildStoryboard()})}
 }
 const options=(items,v)=>items.map(([k,t])=>`<option value="${E(k)}" ${k===v?'selected':''}>${E(t)}</option>`).join('');
 function media(a,controls=true){if(!a)return '<div class="media"><span class="muted">No visual assigned</span></div>';return `<div class="media">${a.kind==='image'?`<img src="${a.url}" alt="${E(a.name)}">`:`<video ${controls?'controls':''} preload="none" src="${a.url}${a.document_plan?.cuts?.length?'#t='+(a.document_plan.cuts[0].source_in_ms/1000):''}"></video>`}</div>`}
@@ -232,7 +235,7 @@ function sourceMatchingHTML(){
  const uploads=P.assets.filter(a=>a.kind==='video'&&!a.derived_from&&!a.reserve);
  return `<div class="card"><h3>Resolve script filenames</h3>${gaps.length?'<p>Choose the correct uploaded video for each unmatched script filename, or upload the missing file. Do not guess based on similar names.</p>':'<p>All planned filenames have one selected upload. Build the storyboard to apply them.</p>'}
  ${gaps.map(r=>`<label><strong>${E(r.source_file)}</strong> · ${r.beats} beats <select data-source-file="${E(r.source_file)}" onchange="linkMissingSource(this)"><option value="">Choose the correct upload…</option>${uploads.map(a=>`<option value="${E(a.id)}">${E(a.original_name||a.name)} · ${Number(a.duration||0).toFixed(1)}s</option>`).join('')}</select></label>`).join('')}
- ${!gaps.length?'<p><button type="button" onclick="buildStoryboard()">Build storyboard →</button></p>':''}
+ ${!gaps.length?`<p><button type="button" onclick="buildStoryboard()" ${buildDisabled()}>Build storyboard →</button></p>`:''}
  <p class="small">The link preserves the original filename and does not verify video content or delete uploads. Once all names are resolved, build the storyboard.</p></div>`
 }
 async function linkMissingSource(select){
