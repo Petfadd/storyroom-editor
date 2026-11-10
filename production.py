@@ -1,4 +1,9 @@
-"""Document-led homicide planning. Deterministic parsing, never factual/visual verification."""
+"""Document-led planning for any programme. Deterministic parsing, never factual/visual verification."""
+import json as _json
+from pathlib import Path as _Path
+_PROFILE_FILE=_Path(__file__).with_name('blueprints')/'style_profiles.json'
+try:PROFILES=_json.loads(_PROFILE_FILE.read_text())
+except (OSError,ValueError):PROFILES={}
 import collections,json,re,zipfile,xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -10,7 +15,13 @@ def asset_used(p,a):
  return a['id'] in selected or any(c['id'] in selected and (c.get('derived_from') or {}).get('asset_id')==a['id'] for c in p['assets'])
 
 def asset_matches(asset,name):
- original=str(asset.get('original_name') or asset.get('name',''))
+ original=str(asset.get('original_name') or asset.get('name',''));name=str(name)
+ # Uploaded JPEG/PNG photos may use different extensions for the same exact stem.
+ # Count every matching upload (even an exact-extension match), so duplicates are
+ # ambiguous rather than silently selecting one. Never apply this to derived frames.
+ photo_extensions={'.jpg','.jpeg','.png'}
+ if asset.get('kind')=='image' and not asset.get('derived_from') and _Path(original).suffix.lower() in photo_extensions and _Path(name).suffix.lower() in photo_extensions:
+  return _Path(original).stem==_Path(name).stem
  return original.casefold()==name.casefold() or bool(not asset.get('derived_from') and reserve_id(asset) and reserve_id(asset)==name.casefold())
 
 def matching_assets(p,name):
@@ -37,7 +48,11 @@ def read_document(file,ext):
    text='\n'.join(''.join(p.itertext()) for p in root.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'))
  else:text=raw.decode('utf-8-sig')
  if not text.strip():raise ValueError('The production script is empty.')
- return text
+ # Normalise line endings once, here. A script written on Windows (CRLF) used to be
+ # unreadable: the beat reader's field patterns anchor on '^...$' and exclude \r,
+ # so every field failed and the only message was "provide exactly one Type field",
+ # which names neither Windows nor line endings.
+ return text.replace('\r\n','\n').replace('\r','\n')
 
 def document(p):return (p.get('production_script') or {}).get('text','')
 def structured(p):
@@ -76,10 +91,15 @@ def infer(p):
  else:people=[]
  people=list(dict.fromkeys(people+list(counts)))[:40]
  if anchor and anchor not in people:people.insert(0,anchor)
- profile='investigative'
- court=len(re.findall(r'\bcourt|\btrial|sentenc|prosecut|testif',narration,re.I));grief=len(re.findall(r'griev|memorial|remember|mourning|vigil',narration,re.I))
- if court>max(3,len((p.get('srt') or {}).get('blocks',[]))*.55):profile='courtroom'
- elif grief>max(3,len((p.get('srt') or {}).get('blocks',[]))*.6):profile='memorial'
+  # Profile is inferred from whichever registered profile best matches the narration's
+ # wording. Nothing here names a genre of programme: a script about a market, a product,
+ # a process or a person resolves to the profile whose hints actually fire, and to the
+ # neutral default when none do.
+ profile='documentary';best=0
+ blocks=(p.get('srt') or {}).get('blocks',[])
+ for name,meta in (PROFILES or {}).items():
+  hits=sum(len(re.findall(h.get('pattern',''),narration,re.I)) for h in meta.get('hints') or [])
+  if hits>best and hits>max(2,len(blocks)*.25):profile,best=name,hits
  return {'anchor':anchor,'people':people,'aliases':d.get('case_aliases',[]),'locations':d.get('locations',[]),'confirmed':True,'profile':profile,'basis':ambiguity,'origin':'uploaded_production_script_and_srt','text_characters':len(text)}
 
 def seconds(value):
@@ -92,9 +112,9 @@ def instructions(p):
  d=structured(p);rows=d.get('scenes',[]);issues=[];result=[]
  if not isinstance(rows,list):issues.append('The script scenes field must be a list.');rows=[]
  if not rows:
-  # Recognize explicit references only; never assume v1.mp4 means scene one.
+  # Recognize explicit references only; never infer a scene from a source number.
   for line in document(p).splitlines():
-   asset=re.search(r'\b(v\d+\.(?:mp4|mov)|r\d+(?:\.(?:mp4|mov))?)\b',line,re.I);block=re.search(r'\b(?:SRT|Scene)\s*#?\s*(\d+)(?:\s*[-–]\s*(\d+))?',line,re.I)
+   asset=re.search(r'\b((?:s|v)\d+\.(?:mp4|mov)|r\d+(?:\.(?:mp4|mov))?)\b',line,re.I);block=re.search(r'\b(?:SRT|Scene)\s*#?\s*(\d+)(?:\s*[-–]\s*(\d+))?',line,re.I)
    if not asset or not block:continue
    start=re.search(r'\b(?:in(?:_s)?|from|start)\s*[:=]?\s*(\d+(?::\d+){0,2}(?:[.,]\d+)?)',line,re.I)
    end=re.search(r'\b(?:out(?:_s)?|to|end)\s*[:=]?\s*(\d+(?::\d+){0,2}(?:[.,]\d+)?)',line,re.I)
@@ -116,7 +136,7 @@ def instructions(p):
  return result,issues
 
 def apply(p):
- rows,issues=instructions(p);used=collections.defaultdict(list);assets=p['assets'];scenes=p['scenes'];applied=0
+ rows,issues=instructions(p);used=collections.defaultdict(list);scenes=p['scenes'];applied=0
  for row in rows:
   selected=[s for s in scenes if row['srt_blocks'][0]<=s['srt_blocks'][0] and s['srt_blocks'][1]<=row['srt_blocks'][1]]
   matches=matching_assets(p,row['asset'])

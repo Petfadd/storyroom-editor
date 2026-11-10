@@ -1,0 +1,39 @@
+# Production script reading requirements
+
+The production script, SRT and uploaded files remain unchanged. A source filename and its explicit time range specify what to play; a separate clip reference is not required. These rules describe the intended review workflow, not a claim that video content or publication rights are verified.
+
+## Source-based instructions
+
+- Use exactly one shot per SRT cue, in original SRT order. Each shot covers its cue’s complete timeline IN/OUT and uses the cue ID (for example, Srt001), not A/B/C subdivisions. Preserve narration wording, names and timestamps. If an older script splits a cue or spans cues, report it for review rather than silently merging or splitting its instructions.
+- Identify each full source by its exact uploaded filename, such as `S01.mp4`. Numbering may have gaps and does not establish playback order. Do not rename sources or silently substitute a different upload.
+- For each moving shot specify its timeline IN/OUT and its source IN/OUT. Source OUT is exclusive. Use the exact source interval at 1.0×, with looping off; keep continuous footage advancing across subtitle boundaries.
+- Separate clip labels are optional in supported scripts and are not displayed on the storyboard. Older scripts that contain them remain readable; their original text and references are preserved. Where an older script provides a linked register, conflicting instructions are reported rather than silently overridden.
+- The editor can read supported labelled plain-text cue instructions, cue-per-section, section-per-SRT shot and detailed shot-table formats. For labelled plain-text cues, a `PROPOSED:` source remains provisional and requires human inspection. A source-only version of those formats can omit separate clip references. Unsupported or ambiguous formats and instructions require review; the editor must not guess source times. The current structured plan parser also requires a contiguous timeline starting at zero, so SRTs with gaps cannot yet be conformed to this rule automatically.
+
+## Safety and editorial review
+
+- Match footage to the narrative, identity, chronology and context. A filename match or decoded frame does not verify what a video shows, its provenance, or rights to publish it.
+- Never use loops, screenshots, extracted video frames, freeze-frames, false motion, unlisted footage or unrelated repetition to fill gaps. Static photograph or document intervals, if explicitly scheduled under the approved workflow, count toward the still budget and need separate eligibility and rights checks.
+- The review can play explicitly labelled native static intervals directly from their original videos without extracting or freezing frames. Their complete duration counts toward the still budget and their eligibility, identity and rights remain unverified. Extracted stills, freeze instructions and unresolved source ranges remain unassigned. Playback pauses at missing or invalid shots; it does not guess a replacement. The review is not a finished edit or export.
+- Scripted captions appear in review and may be burned in explicitly. Visual verification, media conformity and rights decisions remain outstanding. No final render is promised until required checks pass.
+
+## Explicit uploaded photographs in labelled scripts
+
+For a cue that calls for a real uploaded photo, use its exact original filename and `Treatment: PHOTO` (also accepted: `PHOTOGRAPH`, `STILL PHOTO`, `STILL HOLD`). Set both `Source IN: N/A` and `Source OUT: N/A`: a photograph has no video clock. The narration timeline must still match the one SRT cue exactly. For example:
+
+```text
+Shot: Srt001
+Narration timeline: 00:00:00,000 --> 00:00:04,000
+Exact narration: Original words
+Full source: victim photo.jpg
+Source IN: N/A
+Source OUT: N/A
+Treatment: PHOTO
+Visual direction: Victim photograph; verify identity
+Continuity: Review source, rights and intended use
+On-screen caption: None
+```
+
+The photo must be a unique, original uploaded image, not an extracted video frame. JPG, JPEG and PNG are interchangeable when the complete filename stem matches exactly (including case); all matching extensions are checked for ambiguity. WebP requires the exact filename. It is held static for the cue in the review timeline. Missing or duplicate filenames remain unresolved. Actual identity, relevance, still eligibility and rights require human review; an uploaded filename is not proof. The review reports scheduled still time including native static intervals against the 10% maximum, and unresolved material cannot be assumed to be genuine motion. Photo use requires the mixed-picture policy for export, but a review draft is never a final render. This syntax does not change existing scripts or automatically replace video instructions with photos.
+
+Separate `Continuity` (editor note) from `On-screen caption` (literal intended video text; `None` means no caption). Legacy `Continuity/caption` is accepted as an ambiguous editor note, never automatically burned in. Inspect old scripts and use the separate field if it contains actual caption text. Script captions and SRT subtitles can be burned in using separate opt-in controls; both are off by default. Final script-draft export remains blocked.

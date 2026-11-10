@@ -1,19 +1,90 @@
 from __future__ import annotations
-import copy, hashlib, json, math, re, sys, threading, time, uuid, subprocess, os
+import copy, hashlib, json, math, re, sys, threading, time, uuid, subprocess, os, shutil
 from pathlib import Path
 from collections import defaultdict
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from functools import wraps
+from flask import Flask, request, jsonify, send_from_directory, send_file, render_template, Response
 from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge
 from types import SimpleNamespace
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import cv2, imageio_ffmpeg
 BASE=Path(__file__).resolve().parent
 from engine import RenderJob
+# Verified playback schedules, keyed by project. Rebuilt only when the project or
+# plan revision changes.
+SCHEDULE_CACHE={}
+
+def _schedule_path(pid):
+ return folder(pid)/'.cache'/'playback_schedule.json'
+
+def _schedule_from_disk(pid,key):
+ """Return the cached schedule when it was built for this exact version."""
+ import json
+ try:
+  data=json.loads(_schedule_path(pid).read_text())
+ except (OSError,ValueError):
+  return None
+ if list(data.get('key') or [])!=list(key):return None
+ return data.get('events')
+
+def _schedule_to_disk(pid,key,events):
+ """Best effort: an unwritable cache must never break playback."""
+ import json
+ try:
+  path=_schedule_path(pid);path.parent.mkdir(parents=True,exist_ok=True)
+  path.write_text(json.dumps({'key':list(key),'events':events}))
+ except OSError:
+  pass
+from document_plan import synchronize
 PROJECTS=BASE/'projects';PROJECTS.mkdir(exist_ok=True)
 MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
+# Output geometry is a project setting, not a constant. `format` picks an aspect; `size`
+# picks the pixel target. Anything the engine can encode is allowed, so the same build
+# serves a 720p review, a 1080p master, a vertical cut and a square one.
+TRANSITION_POLICIES=['clean_cuts_only','allow_dissolves']
+ASPECTS={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}
+DEFAULT_SIZE={'landscape':'1080p','portrait':'1080p','square':'1080p','vertical_4_5':'1080p','cinema':'1080p'}
+SIZES={'480p':480,'540p':540,'720p':720,'1080p':1080,'1440p':1440,'4k':2160}
+def valid_size(size):
+ """True for a named target or an explicit WxH in a sane range."""
+ size=str(size or '').strip()
+ if size in SIZES:return True
+ match=re.fullmatch(r'\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*',size)
+ if not match:return False
+ w,h=int(match[1]),int(match[2])
+ return 64<=w<=7680 and 64<=h<=7680
+
+def output_size(fmt,size):
+ """Pixel width and height for an aspect and a target, rounded to even numbers.
+
+ A target names the SHORT side in every case, so "1080p" always means the number people
+ mean by it: 1920x1080 landscape, 1080x1920 portrait, 1080x1080 square, 1080x1350 for 4:5.
+ An explicit "1920x1080" is also accepted and used as written.
+ """
+ fmt=fmt if fmt in ASPECTS else 'landscape'
+ if size in SIZES:short=SIZES[size]
+ else:
+  match=re.fullmatch(r'\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*',str(size or ''))
+  if match:return (max(2,int(match[1])//2*2),max(2,int(match[2])//2*2))
+  short=SIZES['1080p']
+ aw,ah=ASPECTS[fmt]
+ if aw>=ah:w,h=int(round(short*aw/ah)),short       # landscape: short side is the height
+ else:w,h=short,int(round(short*ah/aw))             # portrait: short side is the width
+ return max(2,w//2*2),max(2,h//2*2)
+
+# clips_only keeps native moving footage everywhere; mixed allows verified stills as well.
+POLICIES={'clips_only':'Moving footage only','mixed':'Moving footage and photographs'}
+STILL_LAYOUTS={'blurred_fit':'Photograph fitted over a blurred copy of itself','full_bleed':'Photograph cropped to fill the frame'}
+
+def policy(p):return p.get('picture_policy') if p.get('picture_policy') in POLICIES else 'clips_only'
+
+def is_still(p,asset):
+ if not asset:return False
+ if asset.get('kind')=='image':return True
+ return str((asset.get('derived_from') or {}).get('kind') or '').lower()=='image'
 def uid():return uuid.uuid4().hex[:16]
 def write(path,data):
  t=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp');t.write_text(json.dumps(data,indent=2),encoding='utf-8');t.replace(path)
@@ -22,11 +93,18 @@ def folder(pid):
  p=PROJECTS/pid
  if not (p/'project.json').exists():raise NotFound('Production not found.')
  return p
-def load(pid):return json.loads((folder(pid)/'project.json').read_text())
+def load(pid):
+ # Scripts saved before Windows line endings were normalised on upload still hold
+ # CRLF text, which no field reader can parse. Repair it on read so an existing
+ # project is not stranded; the wording, order and timings are untouched.
+ p=json.loads((folder(pid)/'project.json').read_text())
+ script=p.get('production_script') or {}
+ if '\r' in (script.get('text') or ''):
+  script['text']=script['text'].replace('\r\n','\n').replace('\r','\n')
+ return p
 def save(p):
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
- from document_plan import synchronize
  synchronize(p)
  from production import reserve_id
  for a in p['assets']:
@@ -35,24 +113,38 @@ def save(p):
  for scene in p['scenes']:
   asset=by_id.get(scene.get('asset_id'));scene['source_label']=asset['source_label'] if asset else '';scene['source_role']='reserve' if asset and asset['reserve'] else 'primary' if asset else ''
  p['updated']=time.time();write(folder(p['id'])/'project.json',p)
+def project_io_lock(func):
+ @wraps(func)
+ def locked(pid,*args,**kwargs):
+  with LOCKS[pid]:return func(pid,*args,**kwargs)
+ return locked
+
 def busy(pid):return pid in JOBS and JOBS[pid].snapshot()['status'] in ['queued','running']
 def editable(pid):
  if busy(pid):raise BadRequest('This production is exporting. Wait or cancel before editing.')
 def stamp(t):
- h,m,s,ms=map(int,re.split('[:,.]',t));return ((h*60+m)*60+s)*1000+ms
+ h,m,s,ms=re.split('[:,.]',t);ms=(ms+'000')[:3]
+ return ((int(h)*60+int(m))*60+int(s))*1000+int(ms)
 
 def parse_srt(text):
  blocks=[];last=0;nums=set()
  for part in re.split(r'\n\s*\n',text.strip().replace('\r\n','\n')):
   lines=part.splitlines()
   if len(lines)<3 or not lines[0].strip().isdigit():raise BadRequest('SRT blocks need a number, time range and narration text.')
-  match=re.fullmatch(r'\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*',lines[1])
+  # Cue clocks are accepted as the tools actually write them: a one- or two-digit hour
+  # field and one to three millisecond digits. A 47-minute programme written as
+  # 0:00:00,000 used to be rejected outright, which is a length limit nobody asked for.
+  match=re.fullmatch(r'\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*',lines[1])
   if not match:raise BadRequest('Use standard SRT time ranges: 00:00:00,000 --> 00:00:05,000.')
   n=int(lines[0]);a,b=map(stamp,match.groups());txt=' '.join(lines[2:]).strip()
   if n in nums or a<last or b<=a or not txt:raise BadRequest('SRT numbers must be unique and time ranges must be ordered, positive and non-overlapping.')
   nums.add(n);last=b;blocks.append({'number':n,'start_ms':a,'end_ms':b,'text':txt})
  if not blocks:raise BadRequest('The SRT is empty.')
  return blocks
+
+def srt_stamp(ms):
+ h,rem=divmod(int(ms),3600000);m,rem=divmod(rem,60000);sec,frac=divmod(rem,1000)
+ return '%02d:%02d:%02d,%03d'%(h,m,sec,frac)
 
 def probe(path):
  try:out=subprocess.run([FFMPEG,'-nostdin','-hide_banner','-probesize','2097152','-analyzeduration','3000000','-threads','2','-i',str(path)],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15).stderr
@@ -61,11 +153,20 @@ def probe(path):
  return {'duration':int(m[1])*3600+int(m[2])*60+float(m[3]) if m else 0,'has_audio':'Audio:' in out,'has_video':'Video:' in out}
 
 def intent(text,people,profile):
+ """A coarse guess at a beat's tone, from wording alone.
+
+ These word lists are hint dictionaries, not a taxonomy of subject matter: they exist to
+ pick a movement family and an emotion label, and a production about any subject still
+ resolves to neutral defaults when nothing matches. Add a production profile with its own
+ lists instead of editing these for one programme.
+ """
  found=next((x for x in people if any(re.search(r'\b'+re.escape(a)+r'\b',text,re.I) for a in [x['name']]+x.get('aliases',[]) if a)),None)
- if re.search(r'griev|mourn|remember|loved|family|funeral|vigil',text,re.I):purpose,emotion,category='remembrance','grief / remembrance','family'
- elif re.search(r'court|judge|sentenc|plea|prosecut|attorney|trial',text,re.I):purpose,emotion,category='legal context','accountability / clarity','court'
- elif re.search(r'police|investigat|detective|evidence|search warrant',text,re.I):purpose,emotion,category='investigation','scrutiny / uncertainty','police'
- elif re.search(r'apartment|house|street|location|complex|river',text,re.I):purpose,emotion,category='orientation','place / context','location'
+ lists=(PROFILES.get(profile) or {}).get('hints') or []
+ # An unknown profile is not an error: with no hints the beat falls through to
+ # the neutral defaults below, which is what every unmatched beat already gets.
+ for hint in lists:
+  if re.search(hint['pattern'],text,re.I):
+   purpose,emotion,category=hint['purpose'],hint['emotion'],hint['category'];break
  else:purpose,emotion,category='develop the account','attention / restraint','general'
  if found:category='person'
  return purpose,emotion,category,found['name'] if found else ''
@@ -90,53 +191,228 @@ def motion(scene,index):
   shift={'left':-.20,'center':0,'right':.20}.get(scene.get('focus_position'),0);x0+=shift;x1+=shift
  y0,y1=(.46,.23) if mode=='rise' else (.36,.40)
  factor=min(1.12,max(.5,duration/4.5))*{'subtle':.65,'purposeful':1,'strong':1.18}.get(scene.get('motion_strength'),1)
- if scene.get('profile') in ['memorial','courtroom']:factor*=.82 if scene['profile']=='memorial' else .72
+ factor*=(PROFILES.get(scene.get('profile')) or {}).get('motion_scale',1)
  z0=min(1.095,1+(z0-1)*factor);z1=min(1.095,1+(z1-1)*factor)
  return dict(id='motion-'+scene['id'],mode='photo_camera',move=mode,emotion=scene['emotion'],focus=scene['focus'],duration_s=duration,zoom_start=round(z0,6),zoom_end=round(z1,6),x_start=round(x0,6),x_end=round(x1,6),y_start=y0,y_end=y1,easing='quick_settle' if mode in ['push','pull','reveal'] else 'linear',rationale=reason+f' Complete the movement over {duration:.3f}s; human review must confirm the actual composition.')
 
+def source_overlap_interval(scene, asset, project=None):
+ """Use exact script boundaries for an unmodified strict shot; otherwise actual edit timing.
+
+ The renderer's frame conformance still needs separate review. This avoids treating
+ contiguous millisecond script ranges as overlaps solely due to 30-fps rounding.
+ """
+ if project and project.get('documentary_beat_review'):
+  from documentary_storyboard import verified_source_interval
+  interval=verified_source_interval(project,scene,asset)
+  if interval is not None:return interval
+ start=float(scene.get('in_s') or 0)
+ end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene.get('transition')=='dissolve' else 0))/30
+ row=scene.get('plan_row') or {}
+ if (row.get('strict_production') and scene.get('transition')=='cut' and
+     asset.get('original_name',asset.get('name','')).casefold()==str(row.get('source_file','')).casefold() and
+     row.get('source_in_ms') is not None and row.get('source_out_ms') is not None and
+     abs(start-row['source_in_ms']/1000)<.001 and
+     scene['frame_in']==round(row['timeline_in_ms']*.03) and scene['frame_out']==round(row['timeline_out_ms']*.03)):
+  return start,row['source_out_ms']/1000
+ return start,end
+
+def beat_approvals(p):
+ """Beat pairs whose source reuse the editor explicitly approved when building.
+
+ The Beat storyboard saves the exact overlap and repeat decisions it was given.
+ Re-flagging those same decisions at export time would mean nobody could ever
+ finish a review, so they are read back here instead of being re-litigated.
+ """
+ review=p.get('documentary_beat_review') or {}
+ pairs=set()
+ for pair in review.get('approved_overlaps') or []:
+  try:
+   if isinstance(pair,(list,tuple)) and len(pair)==2:pairs.add(tuple(sorted((int(pair[0]),int(pair[1])))))
+  except (TypeError,ValueError):continue
+ repeats=set()
+ for beat in review.get('repeated_ranges') or []:
+  try:repeats.add(int(beat))
+  except (TypeError,ValueError):continue
+ return pairs,repeats
+
+def scene_beat(s):
+ """The script Beat label a review scene was built from, or '' if it has none."""
+ match=re.search(r'beat\s+(\d+)',str((s.get('plan_row') or {}).get('continuity') or ''),re.I)
+ return int(match.group(1)) if match else None
+
+def scene_review(p,i,s,a,ranges,last,final=False):
+ """Review one scene exactly as export readiness does. Bulk approval reuses this.
+
+ Returns (errors, notes). `ranges` is the per-asset list of intervals already claimed
+ by earlier scenes, so an overlap is caught the same way in both paths.
+ """
+ errors=[];notes=[];pre=f'Scene {i+1}: '
+ if s['frame_in']!=last or s['frame_out']<=last:errors.append(pre+'timeline has a gap, overlap or empty scene.')
+ if not a:return errors+[pre+'assign uploaded media.'],notes
+ if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
+ person=s['person']
+ # Earlier review drafts stored the whole Shows instruction as the person's name.
+ # Interpret the explicit role/basis syntax without changing the saved draft or
+ # granting identity verification; the photo still needs the user's label.
+ if (s.get('plan_row') or {}).get('uploaded_photo') and person==(s.get('plan_row') or {}).get('shown_person'):
+  from plain_script import shown_person_name
+  person=shown_person_name(person)
+ if person and person.casefold() not in [n.casefold().strip() for n in a['people']]:
+  # Any subject category that is not a person can carry a disclosed wide/context picture;
+  # the rule is that it is disclosed in notes, not that it belongs to a fixed list.
+  if not(s['context_only'] and s['notes'].strip() and a['category']!='person' and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
+  else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
+ lastscene=i==len(p['scenes'])-1
+ if s['transition']=='dissolve' and lastscene:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
+ if s['transition']=='dissolve' and not lastscene and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
+ if s['transition']=='dissolve' and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
+ still=is_still(p,a)
+ if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
+ if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
+ if a.get('derived_from'):errors.append(pre+'extracted frames are not permitted; use original uploaded media.')
+ if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
+ if a['kind']=='video':
+  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
+  if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
+  compare_in,compare_out=source_overlap_interval(s,a,p)
+  approved_pairs,approved_beats=beat_approvals(p)
+  own_beat=scene_beat(s)
+  for start,stop,number,other_beat in ranges.get(a['id'],[]):
+   if ((s.get('plan_row') or {}).get('strict_production') or not p.get('allow_archive_reuse')) and (s.get('plan_row') or {}).get('requested_treatment')!='ARCHIVAL REUSE' and compare_in<stop and compare_out>start:
+    # A reuse the editor already approved when building the Beat plan is a saved
+    # decision, not a new problem. Report only the ones never approved.
+    pair=tuple(sorted((own_beat,other_beat))) if own_beat and other_beat else None
+    if pair and pair in approved_pairs:notes.append(pre+f'source interval reuses footage from scene {number}; this repeat was approved in the Beat plan.')
+    else:errors.append(pre+f'source interval overlaps scene {number}.')
+ if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
+ if not s['focus'].strip():errors.append(pre+'set the story focus.')
+ if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
+ if final and ((a.get('reuse_review') or {}).get('decision')!='approved' or not (a.get('reuse_review') or {}).get('details','').strip()):errors.append(pre+'record an explicit reuse-rights approval and supporting details for this source before final export.')
+ return errors,notes
+
 def check(p,final=False):
  errors=[];notes=[];assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
- from automatic import repetition_errors
- errors.extend(repetition_errors(p))
+ if p.get('review_only_draft'):
+  rows=[s.get('plan_row') or {} for s in p['scenes']]
+  supported=bool(rows) and all(r.get('plain_cue') for r in rows) and p.get('script_moving_only') and script_reading(p).get('ready_to_build') is True
+  if final or not supported:errors.append('This is a script review draft, not a finished edit. Final export is blocked; complete the script and source checks before rendering.')
+  else:
+   notes.append('Review render only: script captions and SRT subtitles are burned in only if selected. Verify visual content, identity, still eligibility and reuse rights; final export remains blocked.')
+   if p.get('voiceover'):
+    audio_duration=p['voiceover'].get('duration',0);timeline_duration=p['scenes'][-1]['frame_out']/30
+    if audio_duration>timeline_duration+.001:errors.append('Narration is longer than the picture timeline. Use matching audio; the review render must not trim narration.')
+    elif audio_duration<timeline_duration-.001:notes.append(f'Narration is {timeline_duration-audio_duration:.3f} seconds shorter than the timeline; the review render pads the end with silence without stretching it.')
+ from automatic import repetition_errors,source_capacity_errors,_plan_coverage
+ errors.extend(repetition_errors(p));errors.extend(source_capacity_errors(p))
+ # A block map written for a different runtime leaves blocks unplaced. Say so as a plan
+ # problem with the numbers, rather than letting the picture come up short at the end.
+ uncovered=_plan_coverage(p)
+ if uncovered and p['scenes']:
+  errors.append(str(len(uncovered))+' SRT block(s) are not placed by the block map (first is block '+str(uncovered[0])+'). Extend the map over the whole narration, or download a fresh template for this SRT.')
  if not p['brief'].strip() and not p.get('srt'):errors.append('Import your SRT story, or add a case brief.')
+ if p.get('srt_removed') and p['scenes'] and not p.get('srt'):errors.append('The SRT was removed. Import an SRT and rebuild before exporting.')
  from production import document
  from edl import signature
- if p['scenes'] and (p.get('edit_decision_list') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current optional EDL / production script.')
+ if p['scenes'] and (p.get('picture_plan') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current SRT block map / production script.')
  if p.get('production_script') and p['scenes'] and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
- if not p['voiceover']:errors.append('Import the original narration audio.')
- if not p['scenes']:errors.append('Import an SRT and build the storyboard.')
- if p['voiceover'] and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
+ # Narration is optional. A programme may be carried by its text alone; what is not
+ # allowed is a narration track whose length disagrees with the picture it sits under.
+ if not p['scenes']:errors.append('Build the storyboard from the imported SRT.' if p.get('srt') else 'Import an SRT and build the storyboard.')
+ if p.get('voiceover') and p['scenes'] and abs(p['voiceover']['duration']-p['scenes'][-1]['frame_out']/30)>.25:errors.append('Narration duration must match the SRT timeline within 0.25 seconds. Correct the timing; do not silently trim the voiceover.')
  for i,s in enumerate(p['scenes']):
-  pre=f'Scene {i+1}: '
-  if s['frame_in']!=last or s['frame_out']<=last:errors.append(pre+'timeline has a gap, overlap or empty scene.')
-  last=s['frame_out'];a=assets.get(s['asset_id'])
-  if not a:errors.append(pre+'assign uploaded media.');continue
-  if not a['verified'] or not a['source'].strip():errors.append(pre+'confirm the asset’s identity/context and record its source.')
-  if s['person'] and s['person'].casefold() not in [n.casefold().strip() for n in a['people']]:
-   if not(s['context_only'] and s['notes'].strip() and a['category'] in ['court','location','police','general'] and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
-   else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
-  if s['transition']=='dissolve' and i==len(p['scenes'])-1:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
-  if s['transition']=='dissolve' and i+1<len(p['scenes']) and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
-  if s['transition']=='dissolve' and i+1<len(p['scenes']) and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
-  if p.get('picture_policy')=='clips_only' and a['kind']!='video':errors.append(pre+'clips-only timeline contains a still image.')
-  if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
-  if a['kind']=='video':
-   end=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
-   if s['in_s']<0 or end>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
-   for start,stop,number in ranges[a['id']]:
-    if not p.get('allow_archive_reuse') and s['in_s']<stop and end>start:errors.append(pre+f'source interval overlaps scene {number}.')
-   ranges[a['id']].append((s['in_s'],end,i+1))
-  if p.get('transition_policy')=='clean_cuts_only' and s['transition']!='cut':errors.append(pre+'only clean cuts are enabled for this production.')
-  if not s['focus'].strip():errors.append(pre+'set the story focus.')
-  if final and not s['approved']:errors.append(pre+'editorial approval is pending.')
-  if final and (a['rights']=='unreviewed' or not a['notes'].strip()):errors.append(pre+'document the rights/reuse decision and notes before final export.')
+  a=assets.get(s['asset_id'])
+  scene_errors,scene_notes=scene_review(p,i,s,a,ranges,last,final)
+  row=s.get('plan_row') or {}
+  if s.get('source_replacement_pending'):scene_errors.append(f'Scene {i+1}: review and approve the replaced source {s["source_replacement_pending"]} before export.')
+  if row.get('strict_production'):
+   if not s.get('approved'):scene_errors.append(f'Scene {i+1}: inspect the picture, identity, context and official source provenance before approval.')
+   if s['frame_in']!=round(row['timeline_in_ms']*.03) or s['frame_out']!=round(row['timeline_out_ms']*.03) or s.get('transition')!='cut' or (a and abs(s.get('in_s',0)-row['source_in_ms']/1000)>.001):
+    scene_errors.append(f'Scene {i+1}: edited timing or transition differs from the production script.')
+   if a:
+    from production import asset_matches
+    if not asset_matches(a,row['source_file']):scene_errors.append(f'Scene {i+1}: selected source differs from the production script.')
+   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and (s.get('script_camera') or {}).get('move')!='static':scene_errors.append(f'Scene {i+1}: still must remain a static hold.')
+   if row.get('requested_treatment')=='CONTEXT VIDEO' and not s.get('context_only'):scene_errors.append(f'Scene {i+1}: context footage must remain labelled as context.')
+  errors.extend(scene_errors);notes.extend(scene_notes)
+  last=s['frame_out']
+  if a and a['kind']=='video':
+   compare_in,compare_out=source_overlap_interval(s,a,p)
+   ranges[a['id']].append((compare_in,compare_out,i+1,scene_beat(s)))
+ if any((s.get('plan_row') or {}).get('strict_production') for s in p['scenes']) and p['scenes']:
+  still_frames=sum(s['frame_out']-s['frame_in'] for s in p['scenes'] if (assets.get(s.get('asset_id')) and (is_still(p,assets[s['asset_id']]) or (s.get('plan_row') or {}).get('native_static_interval'))))
+  total=p['scenes'][-1]['frame_out']
+  if total and still_frames/total>.1+1e-9:errors.append(f'Scheduled stills occupy {still_frames/total*100:.2f}% of the timeline, above the 10% limit. Review eligibility and replace only with appropriate footage.')
+ flow=p.get('picture_flow') or {}
+ from picture_flow import outstanding_notes
+ notes.extend(outstanding_notes(flow))
  if not final and any(not s['approved'] for s in p['scenes']):notes.append('Review export only. Scene approval and rights review are required for final delivery.')
  return {'errors':errors,'notes':notes,'can_export':not errors,'final':final}
 
+def is_plain_summary(text):
+ return bool(re.search(r'^##\s+Storyboard Production Script\s*$',text,re.M|re.I))
+
+def script_reading(p, include_shots=False):
+ from document_plan import rows_for
+ from production import asset_matches
+ try:rows,mode=rows_for(p)
+ except ValueError as e:return {'status':'error','detail':str(e)}
+ if mode!='detailed_production_script':
+  if p.get('edit_mode')=='documentary':
+   from documentary_script_diagnostics import diagnose
+   return diagnose(p,folder(p['id']))
+  return {'status':'not_detailed'}
+ missing=[];short=[];overlaps=[];used={}
+ for row in rows:
+  matches=[a for a in p['assets'] if asset_matches(a,row['source_file'])]
+  if len(matches)!=1 or not (folder(p['id'])/matches[0]['path']).is_file():missing.append(row['source_file']);continue
+  asset=matches[0]
+  if asset.get('kind')=='video' and (row['source_in_ms']/1000>=float(asset.get('duration') or 0) or ((row['visual_status']=='VIDEO' or row.get('native_static_interval')) and row['source_out_ms']/1000>float(asset.get('duration') or 0)+.001)):short.append(row['shot_id'])
+  if asset.get('kind')=='video' and row.get('source_in_ms') is not None and row.get('source_out_ms') is not None:
+   for start,end,shot in used.get(asset['id'],[]):
+    if row['source_in_ms']<end and row['source_out_ms']>start:
+     overlaps.append({'shot':row['shot_id'],'earlier_shot':shot});break
+   used.setdefault(asset['id'],[]).append((row['source_in_ms'],row['source_out_ms'],row['shot_id']))
+ mismatches=sorted({b for row in rows if row.get('narration_mismatch') for b in row['srt_blocks']})
+ build_issues=[]
+ if missing:build_issues.append('Missing or ambiguous source files: '+', '.join(sorted(set(missing)))+'.')
+ if short:build_issues.append('Source intervals exceed uploaded file duration: '+', '.join(short)+'.')
+ if overlaps:build_issues.append('Source intervals overlap earlier shots: '+', '.join(x['shot']+' / '+x['earlier_shot'] for x in overlaps)+'.')
+ if mismatches:build_issues.append('Script narration differs from the SRT in '+str(len(mismatches))+' cue(s).')
+ if not p.get('voiceover'):build_issues.append('Upload the narration audio.')
+ elif not p['voiceover'].get('path') or not (folder(p['id'])/p['voiceover']['path']).is_file():build_issues.append('The narration audio file is missing from disk.')
+ elif abs(float(p['voiceover'].get('duration') or 0)-rows[-1]['timeline_out_ms']/1000)>.25:build_issues.append('Narration duration does not match the SRT timeline.')
+ unsupported=[r['shot_id'] for r in rows if r.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not r.get('native_static_interval') and not r.get('uploaded_photo')]
+ if unsupported:build_issues.append('Unsupported still or freeze instructions: '+', '.join(unsupported)+'. No frames will be extracted.')
+ if policy(p)!='mixed' and any(r.get('uploaded_photo') for r in rows):build_issues.append('Enable moving footage and photographs for this project.')
+ still_ms=sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval') or r.get('uploaded_photo'))
+ if rows[-1]['timeline_out_ms'] and still_ms/rows[-1]['timeline_out_ms']>.1+1e-9:build_issues.append('Script-declared stills exceed the 10% limit.')
+
+ result={'status':'read','shots':len(rows),'blocks':len({n for row in rows for n in row['srt_blocks']}),'duration_ms':rows[-1]['timeline_out_ms'],
+         'source_count':len({r['source_file'] for r in rows}),'missing_files':sorted(set(missing)), 'short_shots':short,'overlap_shots':overlaps,'build_issues':build_issues,'ready_to_build':not build_issues,
+         'native_static_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('native_static_interval')), 'photo_ms':sum(r['timeline_out_ms']-r['timeline_in_ms'] for r in rows if r.get('uploaded_photo')), 'photo_shots':sum(bool(r.get('uploaded_photo')) for r in rows), 'still_shots':sum(r.get('requested_treatment')=='STILL HOLD' for r in rows),'freeze_shots':sum(r.get('requested_treatment')=='EDITORIAL FREEZE-FRAME' for r in rows),
+         'video_shots':sum(r.get('requested_treatment') in ('VIDEO','CONTEXT VIDEO','ARCHIVAL REUSE') for r in rows),
+         'caption_shots':sum(bool(r.get('required_caption')) for r in rows),'narration_mismatch_blocks':mismatches,
+         'blocker_count':sum(bool(r.get('import_blockers')) for r in rows)}
+ if include_shots:
+  result['shots_detail']=rows
+  text=(p.get('production_script') or {}).get('text','')
+  for key,title in (('project_instructions','Editor Assembly Instructions' if is_plain_summary(text) else 'Project instructions'),('final_checks','Final Coverage Summary' if is_plain_summary(text) else 'Final production checks')):
+   section=re.search(r'^##\s+'+re.escape(title)+r'\s*$\n(.*?)(?=^##\s|\Z)',text,re.M|re.S|re.I)
+   result[key]=section[1].strip() if section else ''
+ return result
+
 def public(p):
  d=copy.deepcopy(p)
+ from caption_layout import caption_phrases
+ d['caption_phrases']=caption_phrases((p.get('srt') or {}).get('blocks',[]))
  from document_plan import match_report
  d['source_match_report']=match_report(d)
+ from footage_requirements import footage_requirements,photo_requirements
+ d['footage_requirements']=footage_requirements(p);d['photo_requirements']=photo_requirements(p)
+ if p.get('production_script'):
+  from cue_script import is_cue_script
+  from plain_script import is_plain_script
+  if p.get('edit_mode')=='documentary' or is_plain_script(p['production_script'].get('text','')) or is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
  d['validation']=check(p);d['final_validation']=check(p,True)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
@@ -144,39 +420,103 @@ def public(p):
  if d['render'].get('output'):
   d['render']['url']=f'/api/projects/{p["id"]}/exports/{d["render"]["output"]}'
   record=folder(p['id'])/'reviews'/(Path(d['render']['output']).stem+'.json')
-  d['render']['current']=record.exists() and json.loads(record.read_text()).get('project',{}).get('updated')==p['updated']
+  saved_record=json.loads(record.read_text()) if record.exists() else {}
+  d['render']['current']=bool(saved_record) and saved_record.get('project',{}).get('updated')==p['updated']
+  if saved_record:
+   d['render']['options']={'script_captions':saved_record.get('script_captions_requested',saved_record.get('captions_burned_in',False)), 'srt_subtitles':saved_record.get('srt_subtitles_burned_in',False), 'enhance_picture':saved_record.get('picture_enhancement',False)}
+   if p.get('edit_mode')=='documentary' and saved_record.get('plan_revision') is not None:
+    from documentary import load_plan,annotate_plan
+    try:d['render']['current']=d['render']['current'] and load_plan(folder(p['id']))['revision']==saved_record['plan_revision'] and not any(b.get('stale_reasons') for b in annotate_plan(p,folder(p['id']),load_plan(folder(p['id'])))['bites'])
+    except (OSError,ValueError,KeyError):d['render']['current']=False
+    if saved_record.get('input_signatures'):
+     try:
+      for item in saved_record['input_signatures']:
+       if item[0]=='frame_decisions_present':
+        if (folder(p['id'])/'reviews'/'documentary_frame_decisions.json').exists()!=item[1]:d['render']['current']=False
+       else:
+        path=(folder(p['id'])/item[0]).resolve()
+        if not path.is_relative_to(folder(p['id']).resolve()):raise ValueError('Invalid render input path.')
+        stat=path.stat()
+        if (stat.st_size,stat.st_mtime_ns)!=(item[2],item[3]):d['render']['current']=False
+     except (OSError,ValueError,TypeError,IndexError):d['render']['current']=False
+    name=saved_record.get('adjusted_srt')
+    if name and re.fullmatch(r'documentary_final_[a-f0-9]{32}\.adjusted\.srt',name) and (folder(p['id'])/'renders'/name).is_file():d['render']['adjusted_srt_url']=f'/api/projects/{p["id"]}/exports/{name}'
  for i,scene in enumerate(d['scenes']):scene['motion_plan']=motion(scene,i)
  from production import reserve_id
  for a in d['assets']:
-  a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file';a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
- if d['voiceover']:d['voiceover']['url']=f'/api/projects/{p["id"]}/narration'
+  a['url']=f'/api/projects/{p["id"]}/assets/{a["id"]}/file'+(f'?v={a["revision"]}' if a.get('revision') else '');a['reserve']=bool(reserve_id(a));a['source_label']=reserve_id(a) or Path(a.get('original_name',a['name'])).stem
+ if d['voiceover']:
+  voice_path=folder(p['id'])/d['voiceover']['path']
+  revision=str(voice_path.stat().st_mtime_ns) if voice_path.is_file() else 'missing'
+  d['voiceover']['url']=f'/api/projects/{p["id"]}/narration?v={revision}'
+ from automatic import automatic_readiness
+ d['automatic_readiness']=automatic_readiness(p)
  status_path=folder(p['id'])/'automatic_status.json'
  try:d['automatic_status']=json.loads(status_path.read_text()) if status_path.exists() else {'status':'idle','detail':''}
  except (OSError,ValueError):d['automatic_status']={'status':'idle','detail':''}
- d['inputs_ready']=bool(p.get('srt') and p.get('voiceover') and p.get('production_script') and p.get('assets'))
+ # Persisted progress is not proof of a live thread after a server restart or crash.
+ from automatic import _QUEUE_LOCK, _PENDING
+ with _QUEUE_LOCK:auto_active=p['id'] in _PENDING
+ if d['automatic_status'].get('status') in ('queued','working','studying','storyboard_ready','rendering') and not auto_active and not busy(p['id']):
+  d['automatic_status']={'status':'interrupted','detail':'The previous automatic job stopped. Check the storyboard and export validation before retrying.'}
+ from preview_render import status as preview_status
+ d['preview']=preview_status(folder(p['id']),p['id'],p['updated'])
+ if d['preview'].get('status')=='done':d['preview']['url']=f'/api/projects/{p["id"]}/continuous-preview?version={p["updated"]}'
+ from scene_exports import status as scene_export_status
+ d['scene_exports']=scene_export_status(folder(p['id']),p['id'],p['updated'])
+ if d['scene_exports'].get('status')=='done':d['scene_exports']['url']=f'/api/projects/{p["id"]}/scene-exports/{d["scene_exports"]["output"]}'
+ d['inputs_ready']=bool(p.get('srt') and p.get('production_script') and p.get('assets'))
+ d['picture_flow']=p.get('picture_flow') or None
+ d['flow_review']=[{'scene':b.get('scene'),'asset':b.get('asset'),'status':b.get('status'),'note':b.get('note'),'declared_in_s':b.get('declared_in_s'),'conformed_in_s':b.get('conformed_in_s'),'shot':b.get('shot'),'suggestions':b.get('suggestions') or []} for b in ((p.get('picture_flow') or {}).get('picture') or {}).get('beats',[]) if b.get('review')]
+ d['flow_summary']=(p.get('picture_flow') or {}).get('summary') or {}
+ d['rebuild_report']=p.get('rebuild_report')
+ # What the next export will actually be, resolved once here so the studio never has to
+ # guess and no two parts of the app can disagree about the size.
+ width,height=output_size(p.get('format','landscape'),p.get('size'))
+ d['output']={'format':p.get('format','landscape'),'size':p.get('size'),'width':width,'height':height,
+              'label':str(width)+'×'+str(height),'aspect':ASPECTS.get(p.get('format','landscape'))}
  return d
 
 @app.get('/')
-def home():return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()))
+def home():
+ options=''.join('<option value="'+name+'"'+( ' selected' if name=='documentary' else '')+'>'+str(meta.get('name') or name)+'</option>' for name,meta in PROFILES.items())
+ return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options)
 @app.after_request
 def cache(response):
- if not request.path.endswith('/file'):response.headers['Cache-Control']='no-store'
+ # Two things are immutable once written and too large to re-fetch on every seek:
+ # source media (the URL carries the asset revision) and the narration mix (a
+ # fresh uuid per render). A 50MB clip served no-cache re-downloaded on each
+ # seek, which is what left the monitor hanging on a black frame.
+ replayable=(request.path.endswith('/file')
+             or re.fullmatch(r'/api/projects/[^/]+/documentary-audio/documentary_audio_[a-f0-9]{32}\.(wav|m4a)',request.path))
+ if replayable and request.args.get('download')!='1' and response.status_code in (200,206):
+  response.headers['Cache-Control']='private, max-age=31536000, immutable'
+ else:
+  response.headers['Cache-Control']='no-store'
  return response
 @app.get('/api/projects')
 def projects():
  result=[]
  for f in PROJECTS.glob('*/project.json'):
-  p=json.loads(f.read_text());result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project'))})
+  try:p=json.loads(f.read_text())
+  except FileNotFoundError:continue  # A production may have been deleted while listing.
+  result.append({k:p[k] for k in ['id','title','profile','format','updated']}|{'scenes':len(p['scenes']),'approved':sum(s['approved'] for s in p['scenes']),'portable':bool(p.get('portable_from_project')),'edit_mode':p.get('edit_mode','review')})
  return jsonify({'projects':sorted(result,key=lambda x:-x['updated']),'profiles':PROFILES})
 @app.post('/api/projects')
 def create():
  d=request.get_json() or {};title=str(d.get('title','')).strip()
  if not title or len(title)>100:raise BadRequest('Enter a production title of 1–100 characters.')
- profile=d.get('profile','investigative');fmt=d.get('format','landscape')
- if profile not in PROFILES or fmt not in ['landscape','portrait']:raise BadRequest('Choose a supported profile and format.')
+ mode=d.get('edit_mode','review')
+ if mode not in ('review','documentary'):raise BadRequest('Choose either script review or documentary edit.')
+ profile=d.get('profile') or 'documentary';fmt=d.get('format','landscape')
+ if profile not in PROFILES or fmt not in ASPECTS:raise BadRequest('Choose a supported profile and format.')
+ requested_size=d.get('size') or DEFAULT_SIZE.get(fmt)
+ if not isinstance(requested_size,str) or not valid_size(requested_size):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
  pid=uid();root=PROJECTS/pid;root.mkdir()
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
- p={'id':pid,'schema_version':1,'picture_policy':'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
+ requested=d.get('picture_policy')
+ if requested is not None and requested not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
+ p={'id':pid,'schema_version':1,'edit_mode':mode,'picture_policy':requested or 'clips_only','transition_policy':'clean_cuts_only','repetition_policy':{'cooldown_slots':6,'source_interval_overlap_forbidden_within_window':True},'auto_assemble_uploads':True,'title':title,'profile':profile,'format':fmt,'size':requested_size,'brief':str(d.get('brief','')),'people':[],'assets':[],'scenes':[],'voiceover':None,'srt':None,'updated':time.time()}
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
@@ -187,6 +527,33 @@ def get_project(pid):
   from approval import ensure_automatic_policy
   if ensure_automatic_policy(p):save(p)
   return jsonify(public(p))
+@app.delete('/api/projects/<pid>')
+def delete_project(pid):
+ # The ID is validated by folder(), and all project writers/start operations use this lock.
+ with LOCKS[pid]:
+  root=folder(pid)
+  if (request.get_json(silent=True) or {}).get('confirm') is not True:
+   raise BadRequest('Confirm permanent deletion of the production and its files.')
+  if busy(pid):raise BadRequest('This production is rendering. Wait for it to finish or cancel the render before deleting.')
+  import automatic, preview_render, scene_exports, local_understanding
+  with automatic._QUEUE_LOCK:
+   if pid in automatic._PENDING:raise BadRequest('This production is assembling. Wait for it to finish before deleting.')
+  for module,label in ((preview_render,'preview'),(scene_exports,'scene-clip export')):
+   with module.GUARD:
+    job=module.JOBS.get(pid)
+    if job and job.get('status') in ('queued','running'):raise BadRequest('A '+label+' is being prepared. Wait for it to finish before deleting.')
+  with local_understanding._GUARD:
+   if any(Path(project)==root for project,target in local_understanding._RUNNING):raise BadRequest('Local media analysis is running. Wait for it to finish before deleting.')
+  if root.is_symlink():raise BadRequest('Cannot delete a linked project folder. Remove it manually after checking its location.')
+  try:shutil.rmtree(root)
+  except OSError as e:
+   app.logger.exception('Could not completely delete production %s',pid)
+   raise BadRequest('Deletion could not finish; some project files may remain. Check the project folder and file permissions or close programs using them. '+str(e))
+  JOBS.pop(pid,None)
+  with preview_render.GUARD:preview_render.JOBS.pop(pid,None)
+  with scene_exports.GUARD:scene_exports.JOBS.pop(pid,None)
+  return jsonify({'deleted':True,'id':pid})
+
 @app.patch('/api/projects/<pid>')
 def update_project(pid):
  with LOCKS[pid]:
@@ -196,9 +563,72 @@ def update_project(pid):
   if not p['title'].strip():raise BadRequest('A production title is required.')
   if 'people' in d:
    p['people']=[{'name':str(x.get('name','')).strip()[:120],'role':str(x.get('role',''))[:80],'aliases':[str(a).strip()[:120] for a in x.get('aliases',[]) if str(a).strip()]} for x in d['people'] if str(x.get('name','')).strip()]
+  if 'picture_policy' in d:
+   if d['picture_policy'] not in POLICIES:raise BadRequest('Choose a picture policy: '+', '.join(POLICIES))
+   p['picture_policy']=d['picture_policy']
+   for scene in p['scenes']:scene['approved']=False
+  if 'image_layout' in d:
+   if d['image_layout'] not in STILL_LAYOUTS:raise BadRequest('Choose a photograph layout: '+', '.join(STILL_LAYOUTS))
+   p['image_layout']=d['image_layout']
+  # Output geometry. Changing it does not change a single cut: it re-encodes the picture
+  # at the new size, so the beats, wording, approvals and duration all stay as reviewed.
+  if 'format' in d:
+   if d['format'] not in ASPECTS:raise BadRequest('Choose a format: '+', '.join(ASPECTS))
+   if d['format']!=p.get('format'):
+    p['format']=d['format']
+    p['size']=d.get('size') or DEFAULT_SIZE[d['format']]
+    if not valid_size(p['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
+    p['picture_rebuilt']=False
+  response_extra={}
+  if 'transition_policy' in d:
+   if d['transition_policy'] not in TRANSITION_POLICIES:raise BadRequest('Choose a transition policy: '+', '.join(TRANSITION_POLICIES))
+   if d['transition_policy']!=p.get('transition_policy'):
+    p['transition_policy']=d['transition_policy']
+    cleared=0
+    if d['transition_policy']=='clean_cuts_only':
+     # Turning dissolves off has to mean something for the scenes that already carry them.
+     # Clearing them is the only consistent reading of "clean cuts only", and the response
+     # says how many so a caller is never left guessing where its dissolves went. It is
+     # reported rather than saved: it describes this request, not the production.
+     for scene in p['scenes']:
+      if scene.get('transition')!='cut':scene['transition']='cut';scene['transition_handle_frames']=0;cleared+=1
+    p.pop('dissolves_cleared',None)
+    response_extra={'dissolves_cleared':cleared}
+  if 'picture_scale' in d:
+   scale=d['picture_scale']
+   if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise BadRequest('Picture scale must be a whole percentage from 100 to 200.')
+   if scale!=p.get('picture_scale',100):p['picture_scale']=scale;p['picture_rebuilt']=False
+  if 'size' in d:
+   if not isinstance(d['size'],str) or not valid_size(d['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
+   if str(d['size'])!=str(p.get('size')):
+    p['size']=str(d['size'])
+    p['picture_rebuilt']=False
+  # On-screen script captions are opt-in. Turning them off only changes what is
+  # burned into the picture; the script, the SRT and every cut stay as reviewed.
+  if 'burn_captions' in d:
+   if not isinstance(d['burn_captions'],bool):raise BadRequest('On-screen captions must be on or off.')
+   p['burn_captions']=d['burn_captions']
+  # The script's Cut Action fade. A fade ramps brightness on existing frames, so
+  # it never changes a cut, a frame count or the reviewed timing.
+  if 'documentary_fades' in d:
+   fades=d['documentary_fades']
+   if not isinstance(fades,dict):raise BadRequest('Fade settings must be an object.')
+   current=dict(p.get('documentary_fades') or {})
+   if 'enabled' in fades:
+    if not isinstance(fades['enabled'],bool):raise BadRequest('Fades must be on or off.')
+    current['enabled']=fades['enabled']
+   for key in ('in_s','out_s'):
+    if key in fades:
+     try:value=float(fades[key])
+     except (TypeError,ValueError):raise BadRequest('A fade length must be a number of seconds.')
+     if not 0<=value<=5:raise BadRequest('A fade must be between 0 and 5 seconds.')
+     current[key]=round(value,3)
+   p['documentary_fades']=current
   if p['brief']!=old_brief or p['people']!=old_people:
    for scene in p['scenes']:scene['approved']=False
-  save(p);return jsonify(public(p))
+  save(p);body=public(p)
+  if response_extra:body.update(response_extra)
+  return jsonify(body)
 @app.get('/api/projects/<pid>/imports/<key>')
 def import_status(pid,key):
  from import_status import token,get
@@ -225,6 +655,50 @@ def upload(pid):
  except Exception as e:
   update(pid,key,'error',detail=str(getattr(e,'description',e))[:500]);raise
 
+def mp4_moov_at_end(path):
+ """True when the MP4 index sits after the media, so a player must fetch it all.
+
+ A browser needs the moov atom before it can decode or seek. When it is written
+ last, every seek re-reads the file from the end and the monitor sits black --
+ which is what happened with 9 of the 11 source clips in one project.
+ """
+ import struct
+ try:
+  size=path.stat().st_size
+  with open(path,'rb') as handle:
+   pos=0
+   while pos<size-8:
+    handle.seek(pos);header=handle.read(8)
+    if len(header)<8:return False
+    box=struct.unpack('>I',header[:4])[0];kind=header[4:8]
+    if box==1:box=struct.unpack('>Q',handle.read(8))[0]
+    if box<=0:return False
+    if kind==b'moov':return pos>size*0.5
+    pos+=box
+ except OSError:return False
+ return False
+
+def make_fast_start(path,out=None):
+ """Write a copy with the index first. Never changes a frame or a timestamp.
+
+ The uploaded file is left exactly as it arrived -- preserving the source bytes
+ is a promise the editor already makes -- and the seekable copy is cached beside
+ it. Best effort: a file that cannot be remuxed is simply served as it is.
+ """
+ import imageio_ffmpeg
+ if not mp4_moov_at_end(path):return False
+ tmp=out if out is not None else path.with_name(path.stem+'.faststart'+path.suffix)
+ try:
+  result=subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(),'-v','error','-y','-i',str(path),
+    '-map','0','-c','copy','-movflags','+faststart',str(tmp)],
+    stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=900)
+  if result.returncode!=0 or not tmp.exists() or tmp.stat().st_size<1024:
+   tmp.unlink(missing_ok=True);return False
+  if out is None:tmp.replace(path)
+  return True
+ except (OSError,subprocess.SubprocessError):
+  tmp.unlink(missing_ok=True);return False
+
 def perform_upload(pid,key=''):
  from import_status import update,check,project_lock,save_local
  with project_lock(LOCKS[pid]):
@@ -246,22 +720,22 @@ def perform_upload(pid,key=''):
    except UnicodeDecodeError:raise BadRequest('SRT must be UTF-8 text.')
    blocks=parse_srt(text)
    if p['scenes'] and request.form.get('replace')!='yes':raise BadRequest('Replacing the SRT invalidates the current storyboard. Confirm replacement first.')
-   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[]
-  elif kind in ['edit_decision_list','srt_block_map']:
+   (root/'inputs/captions.srt').write_text(text);p['srt']={'blocks':blocks,'name':f.filename};p['scenes']=[];p.pop('srt_recovery',None);p.pop('srt_removed',None)
+  elif kind=='srt_block_map':
    from edl import parse,srt_signature
+   expected_srt=request.form.get('expected_srt_signature')
+   if expected_srt and (not p.get('srt') or expected_srt!=srt_signature(p)):
+    raise BadRequest('The SRT changed while you were editing the block map. Reopen the editor to review the current SRT.')
    try:
     from automatic import link_frame_csv
     payload=f.read(4_000_001);payload=link_frame_csv(payload,p) if ext=='.csv' else payload
     beats=parse(payload,ext)
-   except (ValueError,UnicodeError) as e:raise BadRequest('Edit decision list: '+str(e))
-   is_map=all(row.get('map_type')=='srt_block' for row in beats)
-   if kind=='srt_block_map' and not is_map:raise BadRequest('Choose a block-map CSV with block,start,end,beat,media_file,source_in,source_out columns.')
-   target='srt_block_map' if is_map else 'edit_decision_list'
-   if is_map:
-    numbers=[row['srt_blocks'][0] for row in beats]
-    if numbers!=list(range(1,len(numbers)+1)):raise BadRequest('Block map must contain unique ordered SRT blocks 1 through its final block.')
-   p[target]={'name':f.filename,'beats':beats,'schema_version':1,'based_on_srt':srt_signature(p) if p.get('srt') else None,'import_notes':list(dict.fromkeys(note for row in beats for note in row.get('import_notes',[]))),'import_blockers':[{'beat_id':row['beat_id'],'note':note} for row in beats for note in row.get('import_blockers',[])]}
-   write(root/('inputs/srt_block_map.json' if is_map else 'inputs/edit_decision_list.json'),p[target])
+   except (ValueError,UnicodeError) as e:raise BadRequest('SRT block map: '+str(e))
+   if not all(row.get('map_type')=='srt_block' for row in beats):raise BadRequest('Choose a block-map CSV with block,start,end,beat,media_file,source_in,source_out columns.')
+   numbers=[row['srt_blocks'][0] for row in beats]
+   if numbers!=list(range(1,len(numbers)+1)):raise BadRequest('Block map must contain unique ordered SRT blocks 1 through its final block.')
+   p['srt_block_map']={'name':f.filename,'beats':beats,'schema_version':1,'based_on_srt':srt_signature(p) if p.get('srt') else None,'import_notes':list(dict.fromkeys(note for row in beats for note in row.get('import_notes',[]))),'import_blockers':[{'beat_id':row.get('beat_id') or row.get('plan_row_id',''),'note':note} for row in beats for note in row.get('import_blockers',[])]}
+   write(root/'inputs/srt_block_map.json',p['srt_block_map'])
    for scene in p['scenes']:scene['approved']=False
   elif kind=='production_script':
    if ext not in ['.txt','.md','.json','.docx']:raise BadRequest('Upload a TXT, Markdown, JSON or DOCX production script.')
@@ -269,6 +743,16 @@ def perform_upload(pid,key=''):
    try:text=read_document(f,ext)
    except Exception as e:raise BadRequest('The production script could not be read: '+str(e)[:200])
    (root/'inputs/production_script.txt').write_text(text,encoding='utf-8');p['production_script']={'name':f.filename,'text':text}
+   from document_plan import srt_outline_blocks
+   recovered,outline_problems,outline_notes=srt_outline_blocks(text)
+   if recovered and not p.get('srt'):
+    p['srt']={'blocks':recovered,'name':f.filename+' · narration table','recovered_from':f.filename};p.pop('srt_removed',None)
+    (root/'inputs/captions.srt').write_text('\n\n'.join('%d\n%s --> %s\n%s'%(b['number'],srt_stamp(b['start_ms']),srt_stamp(b['end_ms']),b['text']) for b in recovered),encoding='utf-8')
+    p['srt_recovery']={'source':f.filename,'blocks':len(recovered),'total_s':recovered[-1]['end_ms']/1000,'note':'Narration blocks were recovered verbatim from a table in the production script. Wording, order and timing were copied, not rewritten; a separate .srt can still replace this.','adjustments':outline_notes}
+   elif recovered and p.get('srt'):
+    p['srt_recovery']={'source':f.filename,'blocks':len(recovered),'total_s':recovered[-1]['end_ms']/1000,'skipped':True,'note':'This production script also contains a narration block table. The separate .srt already uploaded is used; upload the table as .srt if you want it instead.'}
+   elif outline_problems:
+    p['srt_recovery']={'source':f.filename,'blocks':0,'problems':outline_problems[:5],'note':'A narration block table was found but not used; the reported problems would require altering timing.'}
    for scene in p['scenes']:scene['approved']=False
   elif kind=='voiceover':
    if ext not in ['.mp3','.wav','.m4a','.aac','.flac','.ogg']:raise BadRequest('Use MP3, WAV, M4A, AAC, FLAC or OGG narration.')
@@ -285,7 +769,19 @@ def perform_upload(pid,key=''):
    for scene in p['scenes']:scene['approved']=False
   elif kind=='asset':
    if ext not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use MP4/MOV video or JPG/PNG/WebP photographs.')
-   aid=uid();photo=ext in ['.jpg','.jpeg','.png','.webp'];dest=root/('assets' if photo else 'sources')/(aid+ext);update(pid,key,'saving')
+   photo=ext in ['.jpg','.jpeg','.png','.webp'];name=Path(f.filename).name
+   # Only identical video filenames replace each other; source numbers alone are not identities.
+   matches=[] if photo else [a for a in p['assets'] if a.get('kind')=='video' and not a.get('derived_from') and str(a.get('original_name') or a.get('name') or '').casefold()==name.casefold()]
+   replacement=None;old_paths=[]
+   if matches:
+    ids={a['id'] for a in matches};related=[a for a in p['assets'] if (a.get('derived_from') or {}).get('asset_id') in ids]
+    removable(pid,ids|{a['id'] for a in related})
+    import preview_render,scene_exports
+    # A job may be rendering an older project revision but still reading these paths.
+    with preview_render.GUARD: preview_busy=(preview_render.JOBS.get(pid) or {}).get('status') in ('running','queued')
+    with scene_exports.GUARD: scene_export_busy=(scene_exports.JOBS.get(pid) or {}).get('status') in ('running','queued')
+    if preview_busy or scene_export_busy:raise BadRequest('Wait for the current preview or scene export to finish before replacing footage.')
+   aid=matches[0]['id'] if matches else uid();dest=root/('assets' if photo else 'sources')/(uid()+ext);update(pid,key,'saving')
    try:
     save_local(f,dest,pid,key);check(pid,key);update(pid,key,'checking_image' if photo else 'checking_metadata')
     if photo:
@@ -300,7 +796,29 @@ def perform_upload(pid,key=''):
     dest.unlink(missing_ok=True)
     if isinstance(e,BadRequest):raise
     raise BadRequest('Media check failed: '+str(e)[:350])
-   p['assets'].append({'id':aid,'name':Path(f.filename).name,'original_name':Path(f.filename).name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':''})
+   asset={'id':aid,'name':name,'original_name':name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':'','revision':uid()}
+   if matches:
+    duplicate_ids={a['id'] for a in matches};derived_ids={a['id'] for a in related};affected=0;unassigned=0
+    # Derived images came from the old bytes: preserve them, but never keep them on the timeline as if they came from the replacement.
+    for item in related:
+     item['verified']=False;item['derived_from']['source_replaced']=True
+     if item.get('approval_record'):item['approval_record']['active']=False
+    for scene in p['scenes']:
+     old_id=scene.get('asset_id')
+     if old_id not in duplicate_ids|derived_ids:continue
+     affected+=1;scene['approved']=False;scene['source_replacement_pending']=name;scene.pop('thumbnail',None)
+     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if scene.get('transition')=='dissolve' else 0))/30
+     if old_id in derived_ids or float(scene.get('in_s') or 0)+length>duration+.001:
+      scene['review_previous_asset_id']=old_id;scene['asset_id']=None;unassigned+=1
+      scene['replacement_issue']='The replacement video is too short for this shot, or this shot used a frame derived from the previous upload.'
+     else:scene['asset_id']=aid;scene.pop('replacement_issue',None)
+    p['assets']=[a for a in p['assets'] if a['id'] not in duplicate_ids]+[asset]
+    p['source_bindings']={key:(aid if value in duplicate_ids else value) for key,value in (p.get('source_bindings') or {}).items()}
+    kept={a.get('path') for a in p['assets']};old_paths=[root/a['path'] for a in matches if a.get('path') and a['path'] not in kept]
+    from local_understanding import result_path
+    old_paths += [result_path(root,x) for x in duplicate_ids|derived_ids]
+    replacement={'name':name,'affected_scenes':affected,'unassigned_scenes':unassigned,'replaced_count':len(matches)}
+   else:p['assets'].append(asset)
   else:raise BadRequest('Unknown import type.')
   if kind=='asset':
    from approval import auto_approve_upload
@@ -308,10 +826,47 @@ def perform_upload(pid,key=''):
   if kind in ['srt','production_script']:
    from production import infer
    p['profile']=infer(p)['profile']
-  update(pid,key,'indexing');save(p)
+  update(pid,key,'indexing')
+  # Report a script/file duration mismatch the moment the pieces are together,
+  # instead of letting it surface later as a wall of per-beat errors.
+  preflight=[]
+  try:
+   if p.get('edit_mode')=='documentary' and (p.get('production_script') or {}).get('text'):
+    from documentary_script_diagnostics import diagnose
+    report=diagnose(p,root)
+    found=list(report.get('build_issues') or [])
+    # The panel now reports what the plan will change as notes rather than as a
+    # demand for a different file, so preflight has to read those too. The
+    # source/file mismatch must still reach the browser on upload.
+    found.extend(x.get('text','') if isinstance(x,dict) else x for x in report.get('build_notes') or [])
+    preflight=[x for x in found if 'run past the end of the uploaded file' in x
+               or 'is past the end of' in x
+               or 'The audio is not the timeline the script describes' in x
+               or 'script ends its narration at' in x
+               or 'is missing or ambiguous' in x
+               or 'but the uploaded narration' in x
+               or 'cannot cover this' in x]
+  except Exception:
+   preflight=[]
+  try:save(p)
+  except Exception:
+   if kind=='asset':dest.unlink(missing_ok=True)
+   raise
+  replacement_warnings=remove_local_files(root,old_paths) if kind=='asset' and old_paths else []
   from automatic import maybe_queue
   maybe_queue(sys.modules[__name__],p)
-  result=jsonify(public(p));update(pid,key,'done');return result
+  # Automatic analysis only when explicitly enabled; it never delays the upload or
+  # changes the authored SRT/storyboard. The manual control works independently.
+  if os.environ.get('STORYROOM_UNDERSTANDING_AUTO','0')=='1':
+   try:
+    from local_understanding import enqueue
+    if kind=='voiceover':enqueue(root,'narration',root/p['voiceover']['path'],'audio',p['voiceover']['duration'])
+    elif kind=='asset' and not photo:enqueue(root,aid,dest,'video',duration)
+   except Exception as e:app.logger.warning('Could not queue local understanding: %s',e)
+  result=public(p)
+  if preflight:result['script_preflight']=preflight
+  if kind=='asset' and replacement:result['replaced_video']=replacement;result['replacement_warnings']=replacement_warnings
+  result=jsonify(result);update(pid,key,'done');return result
 @app.delete('/api/projects/<pid>/srt-block-map')
 def remove_block_map(pid):
  with LOCKS[pid]:
@@ -319,13 +874,74 @@ def remove_block_map(pid):
   for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
 
-@app.delete('/api/projects/<pid>/edit-decision-list')
-def remove_edl(pid):
+def removable(pid, targets=()):
+ editable(pid)
+ from automatic import _QUEUE_LOCK, _PENDING
+ with _QUEUE_LOCK:
+  if pid in _PENDING:raise BadRequest('Wait for automatic assembly or rendering to finish before removing files.')
+ from local_understanding import _GUARD, _RUNNING
+ with _GUARD:
+  if any((str(folder(pid)),target) in _RUNNING for target in targets):
+   raise BadRequest('Wait for local analysis of this file to finish before removing it.')
+
+def remove_local_files(root, paths):
+ warnings=[]
+ for path in paths:
+  try:
+   path=Path(path).resolve()
+   if not path.is_relative_to(root.resolve()):raise ValueError('File is outside this project')
+   path.unlink(missing_ok=True)
+  except (OSError,ValueError) as e:warnings.append('Could not remove a local file: '+str(e))
+ return warnings
+
+@app.delete('/api/projects/<pid>/assets/<aid>')
+def delete_asset(pid,aid):
  with LOCKS[pid]:
-  editable(pid);p=load(pid);p.pop('edit_decision_list',None)
-  (folder(pid)/'inputs/edit_decision_list.json').unlink(missing_ok=True)
+  p=load(pid);root=folder(pid);asset=next((a for a in p['assets'] if a['id']==aid),None)
+  if not asset:raise NotFound('Media not found.')
+  related=[asset]+[a for a in p['assets'] if (a.get('derived_from') or {}).get('asset_id')==aid]
+  ids={a['id'] for a in related};removable(pid,ids)
+  d=request.get_json(silent=True) or {}
+  if d.get('confirm') is not True:raise BadRequest('Confirm removal of this file.')
+  affected=[s for s in p['scenes'] if s.get('asset_id') in ids]
+  if (affected or len(related)>1) and d.get('confirm_used') is not True:
+   raise BadRequest('Confirm removal of the source and any extracted frames; affected storyboard scenes will become unassigned.')
+  remaining=[a for a in p['assets'] if a['id'] not in ids]
+  remaining_paths={a.get('path') for a in remaining}
+  paths=[root/a['path'] for a in related if a.get('path') and a['path'] not in remaining_paths]
+  from local_understanding import result_path
+  paths += [result_path(root, a['id']) for a in related]
+  p['assets']=remaining
+  p['source_bindings']={name:asset_id for name,asset_id in (p.get('source_bindings') or {}).items() if asset_id not in ids}
+  for scene in affected:scene['asset_id']=None;scene['approved']=False
+  save(p)
+  warnings=remove_local_files(root,paths)
+  result=public(p);result['removal_warnings']=warnings
+  return jsonify(result)
+
+@app.delete('/api/projects/<pid>/inputs/<kind>')
+def delete_input(pid,kind):
+ if kind not in ('voiceover','srt','production_script'):raise NotFound('Input not found.')
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid);removable(pid,['narration'] if kind=='voiceover' else [])
+  d=request.get_json(silent=True) or {}
+  if d.get('confirm') is not True:raise BadRequest('Confirm removal of this file.')
+  if not p.get(kind):raise NotFound('Input not found.')
+  if p['scenes'] and d.get('confirm_used') is not True:raise BadRequest('Confirm removal: the existing storyboard will need review or rebuilding.')
+  paths=[]
+  if kind=='voiceover':
+   paths.append(root/p['voiceover']['path'])
+   from local_understanding import result_path
+   paths.append(result_path(root,'narration'))
+  elif kind=='srt':
+   paths.append(root/'inputs/captions.srt');p.pop('srt_recovery',None);p['srt_removed']=True
+  else:paths.append(root/'inputs/production_script.txt')
+  p[kind]=None
   for scene in p['scenes']:scene['approved']=False
-  save(p);return jsonify(public(p))
+  save(p)
+  warnings=remove_local_files(root,paths)
+  result=public(p);result['removal_warnings']=warnings
+  return jsonify(result)
 
 @app.post('/api/projects/<pid>/assets/approve-all')
 def approve_all_assets(pid):
@@ -351,7 +967,7 @@ def asset_approval_policy(pid):
 def bind_script_source(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);data=request.get_json() or {};name=str(data.get('source_file') or '').strip();aid=data.get('asset_id')
-  if not name or len(name)>200 or '/' in name or chr(92) in name or Path(name).suffix.lower() not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use a script filename such as v1.mp4, not a path or source label.')
+  if not name or len(name)>200 or '/' in name or chr(92) in name or Path(name).suffix.lower() not in ['.mp4','.mov','.jpg','.jpeg','.png','.webp']:raise BadRequest('Use a script filename such as S01.mp4, not a path or source label.')
   asset=next((a for a in p['assets'] if a['id']==aid),None)
   if not asset:raise BadRequest('Choose an existing upload from this project.')
   if asset.get('derived_from'):raise BadRequest('Choose the original source upload, not an extracted frame.')
@@ -363,33 +979,274 @@ def bind_script_source(pid):
   for scene in p['scenes']:scene['approved']=False
   save(p);return jsonify(public(p))
 
+@app.put('/api/projects/<pid>/assets/<aid>/reuse-rights')
+def set_asset_reuse_rights(pid,aid):
+ """Record the user's specific decision; never infer ownership or legal clearance."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
+  if not a:raise NotFound('Asset not found.')
+  d=request.get_json(silent=True) or {};decision=d.get('decision');basis=d.get('basis','');details=str(d.get('details') or '').strip()
+  if decision not in ('unreviewed','approved','not_approved'):raise BadRequest('Choose a reuse-rights decision.')
+  if len(details)>5000:raise BadRequest('Rights details must be at most 5,000 characters.')
+  if decision=='approved':
+   if d.get('attested') is not True:raise BadRequest('Confirm your reuse-rights decision for this file.')
+   if basis not in ('permission','license','public_domain','other'):raise BadRequest('Choose the basis for your reuse decision.')
+   if not details:raise BadRequest('Add the source, permission, license or other basis and any limits for this specific file.')
+  else:basis=''
+  if a.get('reuse_review'):a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+  a['reuse_review']={'decision':decision,'basis':basis,'details':details,'at':time.time(),'attested':decision=='approved','independent_verification':False}
+  for scene in p['scenes']:
+   if scene.get('asset_id')==aid:scene['approved']=False
+  save(p);return jsonify(public(p))
+
+@app.put('/api/projects/<pid>/assets/reuse-rights')
+def set_all_asset_reuse_rights(pid):
+ """Apply one expressly attested decision to the exact set shown to the user."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {};assets=p['assets'];ids=d.get('asset_ids')
+  if not assets:raise BadRequest('There are no uploaded sources to review.')
+  if not isinstance(ids,list) or len(ids)!=len(assets) or any(not isinstance(i,str) for i in ids) or set(ids)!={a['id'] for a in assets}:raise BadRequest('The uploaded sources changed. Refresh and review the list before approving.')
+  basis=d.get('basis','');details=str(d.get('details') or '').strip()
+  if d.get('attested') is not True:raise BadRequest('Confirm that your decision applies to every listed file.')
+  if basis not in ('permission','license','public_domain','other'):raise BadRequest('Choose the basis for your reuse decision.')
+  if not details or len(details)>5000:raise BadRequest('Provide supporting details and limits, up to 5,000 characters.')
+  now=time.time()
+  for a in assets:
+   if a.get('reuse_review'):a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+   a['reuse_review']={'decision':'approved','basis':basis,'details':details,'at':now,'attested':True,'independent_verification':False}
+  for scene in p['scenes']:
+   if scene.get('asset_id') in ids:scene['approved']=False
+  save(p);return jsonify(public(p))
+
 @app.patch('/api/projects/<pid>/assets/<aid>')
 def update_asset(pid,aid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
   if not a:raise NotFound('Asset not found.')
   d=request.get_json() or {}
+  if 'source' in d and str(d['source'])[:5000]!=a.get('source','') and a.get('reuse_review'):
+   a.setdefault('reuse_review_history',[]).append(copy.deepcopy(a['reuse_review']))
+   a['reuse_review']={'decision':'unreviewed','basis':'','details':'Source provenance changed; review reuse again.','at':time.time(),'attested':False,'independent_verification':False}
   for k in ['name','source','notes']:
    if k in d:a[k]=str(d[k])[:5000]
   if 'people' in d:a['people']=[str(n).strip()[:120] for n in d['people'] if str(n).strip()]
   if 'verified' in d:
    a['verified']=d['verified'] is True
    if not a['verified'] and a.get('approval_record'):a['approval_record']['active']=False
-  if d.get('category') in ['person','police','court','location','family','general']:a['category']=d['category']
+  if 'category' in d:
+   # Categories are a free label ("person", "place", "institution", "product", anything).
+   # Only "person" is meaningful to the rules; the rest is the editor's own vocabulary.
+   value=str(d.get('category') or '').strip()[:40]
+   if value:a['category']=value
   if d.get('rights') in ['unreviewed','permission','licensed','public_domain','reviewed_other']:a['rights']=d['rights']
   for s in p['scenes']:
    if s['asset_id']==aid:s['approved']=False
   save(p);return jsonify(public(p))
+def merge_scoped_rebuild(previous, rebuilt, blocks):
+ """Splice a rebuilt block range back into the saved timeline. Returns scenes plus a note.
+
+ A block can belong to several beats (a parent beat spread across blocks 9 and 10 is one
+ row per block, and both rows carry the same parent), so "beats touching these blocks" is
+ the unit of replacement, not single blocks. Those beats are dropped from the saved
+ timeline, the rebuilt ones are shifted so the range starts where it used to start, and
+ the range is spliced back where the first dropped beat sat.
+
+ Re-basing a range onto frame 0 can leave a sub-frame residue at its far end (a 268-frame
+ range rebuilt alone can measure 269 because each end was rounded independently). A
+ residue of at most 1 frame is absorbed at the last rebuilt beat and reported; anything
+ larger is left alone so the caller's continuity guard refuses the save.
+ """
+ if not previous or not rebuilt:
+  return {'scenes': previous or rebuilt, 'rounding_frames': 0, 'of': blocks}
+ inside = set(blocks)
+ def overlaps(scene):
+  return bool(set(scene.get('srt_blocks') or []) & inside)
+ replaced = [s for s in previous if overlaps(s)]
+ rounding = 0
+ if replaced:
+  offset = min(s['frame_in'] for s in replaced) - min(s['frame_in'] for s in rebuilt)
+  for scene in rebuilt:
+   scene['frame_in'] += offset
+   scene['frame_out'] += offset
+  old_span = max(s['frame_out'] for s in replaced) - min(s['frame_in'] for s in replaced)
+  new_span = max(s['frame_out'] for s in rebuilt) - min(s['frame_in'] for s in rebuilt)
+  residue = old_span - new_span
+  if residue and abs(residue) <= 1:
+   last = max(rebuilt, key=lambda s: s['frame_out'])
+   last['frame_out'] += residue
+   rounding = residue
+ ordered = []
+ placed = False
+ for scene in previous:
+  if overlaps(scene):
+   if not placed:
+    ordered.extend(rebuilt)
+    placed = True
+   continue
+  ordered.append(scene)
+ if not placed:
+  ordered.extend(rebuilt)
+ return {'scenes': ordered, 'rounding_frames': rounding, 'of': blocks}
+
+@app.post('/api/projects/<pid>/script-draft')
+def script_draft(pid):
+ """Display script shots for review; never claim unsupported instructions are rendered."""
+ from import_status import token,update
+ key=token(request.headers.get('X-Upload-ID',''))
+ update(pid,key,'reading_script',detail='Reading the production script and matching each shot to its SRT cue.')
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  payload=request.get_json(silent=True) or {}
+  if p.get('scenes') and not (payload.get('replace_review') is True and p.get('review_only_draft') and not p.get('manual_scene_edits')):
+   raise BadRequest('Existing storyboard was not replaced. Only an unmodified review draft can be rebuilt; manual edits must be preserved.')
+  from document_plan import rows_for
+  from edl import assemble,signature
+  try:rows,mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production script: '+str(e))
+  if mode!='detailed_production_script' or not rows:raise BadRequest('A recognized detailed production script and matching SRT are required.')
+  update(pid,key,'checking_sources',detail=f'Checked {len(rows)} cue instructions. Matching filenames and source ranges to uploaded footage.')
+  review=script_reading(p)
+  if payload.get('require_ready') is True and not review.get('ready_to_build'):
+   raise BadRequest('Cannot build until all input checks pass: '+(' '.join(review.get('build_issues') or [review.get('detail') or 'Read the production script and SRT first.'])))
+  moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
+  if (review.get('missing_files') or review.get('short_shots')) and not moving_only:raise BadRequest('The review draft cannot be made: source files are missing, ambiguous or too short. No footage was substituted.')
+  seeds=[];last=0
+  for block in p['srt']['blocks']:
+   end=round(block['end_ms']*.03)
+   seeds.append(dict(id=uid(),srt_blocks=[block['number'],block['number']],frame_in=last,frame_out=end,narration=block['text'],purpose='script review',emotion='neutral',focus='Script review',category='general',person='',asset_id=None,in_s=0,motion='auto',transition='cut',context_only=False,notes='',approved=False,profile=p['profile'],focus_position='center',motion_strength='subtle'))
+   last=end
+  draft_rows=copy.deepcopy(rows)
+  for row in draft_rows:row['review_warnings']=row.pop('import_blockers',[])
+  moving_only=(request.get_json(silent=True) or {}).get('moving_only') is True
+  # Never extract still frames: an explicit uploaded photo is a separate static source.
+  prepared=draft_rows
+  for row in prepared:
+   if row.get('native_static_interval'):
+    row['native_static_review']=True
+   elif row.get('uploaded_photo'):
+    pass
+   elif row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME'):
+    row['import_blockers']=['Only explicitly named uploaded photographs or native static intervals can be shown; no frame was extracted or substituted.']
+  original_plan=p.get('picture_plan');had_plan='picture_plan' in p;reuse=p.get('allow_archive_reuse');had_reuse='allow_archive_reuse' in p
+  p['picture_plan']={'beats':prepared};p['allow_archive_reuse']=False;p['_review_root']=str(folder(pid))
+  update(pid,key,'assembling',detail=f'Preparing {len(rows)} timeline shots from the explicit source ranges; unresolved shots stay empty.')
+  try:assemble(p,seeds)
+  except ValueError as e:raise BadRequest('Could not prepare review draft: '+str(e))
+  finally:
+   p.pop('_review_root',None)
+   if had_plan:p['picture_plan']=original_plan
+   else:p.pop('picture_plan',None)
+   if had_reuse:p['allow_archive_reuse']=reuse
+   else:p.pop('allow_archive_reuse',None)
+  p['review_only_draft']=True
+  if moving_only:
+   p['script_moving_only']=True
+   for scene in p['scenes']:
+    row=scene.get('plan_row') or {}
+    if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval') and not row.get('uploaded_photo'):scene['missing_video_out']=True
+  p['script_application']['mode']='moving_video_review' if moving_only else 'script_review_draft'
+  p['script_application']['note']='Review draft only: caption layout, framing instructions and exact freeze frames are not verified or rendered. Names, uploaded SRT and script remain unchanged. Export is blocked.'
+  p['edit_script_hash']=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest()
+  p['assembly_signature']=signature(p)
+  update(pid,key,'saving_storyboard',detail='Saving the review timeline and its unresolved-shot report.')
+  save(p);result=jsonify(public(p));update(pid,key,'done',detail=f'Review timeline saved: {p["script_application"]["placed_scenes"]} of {len(p["scenes"])} shots assigned.');return result
+
+@app.post('/api/projects/<pid>/native-static-review')
+def update_native_static_review(pid):
+ """Enable explicit native intervals in an existing untouched review, without rebuilding it."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('review_only_draft') or not p.get('script_moving_only') or p.get('manual_scene_edits'):
+   raise BadRequest('An unmodified moving-video review is required; existing edits were not changed.')
+  if p.get('edit_script_hash')!=hashlib.sha256((p.get('production_script') or {}).get('text','').encode()).hexdigest():
+   raise BadRequest('The production script changed; existing shots were not changed.')
+  from document_plan import rows_for
+  from production import matching_assets
+  try:rows,mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production script: '+str(e))
+  if mode!='detailed_production_script':raise BadRequest('The script cannot be safely read.')
+  by_shot={r['shot_id']:r for r in rows};placed=[];unresolved=[]
+  for scene in p['scenes']:
+   old=scene.get('plan_row') or {};row=by_shot.get(old.get('shot_id'))
+   if not row or not row.get('native_static_interval'):continue
+   if scene.get('asset_id') or not scene.get('missing_video_out') or any(old.get(k)!=row.get(k) for k in ('shot_id','source_file','source_in_ms','source_out_ms','timeline_in_ms','timeline_out_ms')):
+    unresolved.append(row['shot_id']+': existing shot differs or is already assigned; left unchanged.');continue
+   matches=matching_assets(dict(p,source_bindings={}),row['source_file'])
+   if len(matches)!=1 or matches[0].get('kind')!='video' or not (folder(pid)/matches[0]['path']).is_file():
+    unresolved.append(row['shot_id']+': exact source missing or ambiguous.');continue
+   asset=matches[0];start=row['source_in_ms']/1000;end=row['source_out_ms']/1000
+   if end>float(asset.get('duration') or 0)+.001:
+    unresolved.append(row['shot_id']+': source video is too short.');continue
+   if any(other is not scene and other.get('asset_id')==asset['id'] and start < float((other.get('plan_row') or {}).get('source_out_ms',0))/1000 and end > float((other.get('plan_row') or {}).get('source_in_ms',0))/1000 for other in p['scenes']):
+    unresolved.append(row['shot_id']+': source interval overlaps another assigned shot.');continue
+   old.update(native_static_interval=True,native_static_review=True)
+   old['review_warnings']=[x for x in old.get('review_warnings',[]) if 'omitted from moving-only' not in x]+['Native static interval: count toward still allowance; identity, eligibility and rights need review.']
+   scene['asset_id']=asset['id'];scene['in_s']=start;scene['missing_video_out']=False;scene['approved']=False
+   scene['notes']+=' Native static interval is played directly for review; still eligibility, budget, identity and rights are unverified.'
+   placed.append(row['shot_id'])
+  info=p.get('script_application') or {};info['placed_scenes']=sum(bool(s.get('asset_id')) for s in p['scenes'])
+  info['issues']=[issue for issue in info.get('issues',[]) if not any(issue.startswith('Beat '+sid+':') for sid in placed)]
+  p['script_application']=info
+  if placed:save(p)
+  result=public(p);result['native_static_update']={'placed':placed,'unresolved':unresolved,'note':'Native intervals remain unverified still candidates, not genuine motion.'}
+  return jsonify(result)
+
+@app.post('/api/projects/<pid>/moving-review')
+def moving_review(pid):
+ """Remove stills from the review timeline; never invent missing source OUTs."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('review_only_draft') or not p.get('scenes'):
+   raise BadRequest('Create a detailed script review timeline first; this action cannot replace an existing edit.')
+  if p.get('manual_scene_edits'):
+   raise BadRequest('This review timeline has manual edits. They were not replaced; review the source ranges first.')
+  assets={a['id']:a for a in p['assets']};missing=[];moving=0
+  for scene in p['scenes']:
+   row=scene.get('plan_row') or {};asset=assets.get(scene.get('asset_id'))
+   if row.get('requested_treatment') in ('STILL HOLD','EDITORIAL FREEZE-FRAME') and not row.get('native_static_interval'):
+    if scene.get('asset_id'):scene['review_previous_asset_id']=scene['asset_id']
+    scene['asset_id']=None;scene['in_s']=0;scene['approved']=False;scene.pop('script_camera',None)
+    scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
+   elif (row.get('requested_treatment')=='VIDEO' or row.get('native_static_interval')) and asset and asset.get('kind')=='video':
+    scene['missing_video_out']=False;moving+=1
+   else:
+    scene['asset_id']=None;scene['approved']=False;scene['missing_video_out']=True;missing.append(row.get('shot_id') or scene.get('plan_row_id'))
+  p['script_moving_only']=True
+  p['script_application'].update(mode='moving_video_review',placed_scenes=moving,
+   issues=[str(len(missing))+' shots specify a single still/frame, not a video IN/OUT range. Moving-video IN and OUT times are needed; no video segment was guessed.'],
+   note='Moving-video review only: no loops, no still holds and no invented source ranges. The original script, SRT, filenames and narration are unchanged; captions/layout remain unimplemented and export is blocked.')
+  save(p);return jsonify(public(p))
+
 @app.post('/api/projects/<pid>/storyboard')
 def build(pid):
  with LOCKS[pid]:
   editable(pid);p=load(pid)
   if not p['srt']:raise BadRequest('Import the narration SRT first.')
-  if p['scenes'] and not (request.get_json(silent=True) or {}).get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
-  from automatic import restore_reviewed,full_source_analysis
-  if p.get('picture_policy')=='clips_only':
-   full_source_analysis(p,folder(pid))
-  if restore_reviewed(p,folder(pid)):
+  payload=request.get_json(silent=True) or {}
+  if p['scenes'] and not payload.get('replace'):raise BadRequest('A storyboard already exists. Confirm rebuilding to discard scene edits.')
+  # Optional block range: rebuild only the beats covering these SRT blocks and leave the
+  # rest of the timeline exactly as saved, approvals included.
+  scope=None;adopted_surfaces=0
+  if payload.get('blocks'):
+   try:scope=sorted({int(x) for x in payload['blocks']})
+   except (TypeError,ValueError):raise BadRequest('blocks must be a list of SRT block numbers.')
+   if not scope:raise BadRequest('blocks must name at least one SRT block.')
+   known={b['number'] for b in p['srt']['blocks']}
+   unknown=[n for n in scope if n not in known]
+   if unknown:raise BadRequest('These SRT blocks do not exist: '+', '.join(map(str,unknown[:8]))+'.')
+  from document_plan import rows_for
+  try:preflight_rows,preflight_mode=rows_for(p)
+  except ValueError as e:raise BadRequest('Production plan: '+str(e))
+  if preflight_mode=='detailed_production_script':
+   blockers=[f"{r['shot_id']}: {issue}" for r in preflight_rows for issue in r.get('import_blockers',[])]
+   if blockers:raise BadRequest('Detailed script needs attention: '+' '.join(blockers[:8]))
+  from automatic import restore_reviewed,full_source_analysis,carry_previous_review
+  previous=copy.deepcopy(p.get('scenes') or [])
+  full_source_analysis(p,folder(pid))
+  # A cached timeline may only stand in for a whole rebuild. On a block-range rebuild it
+  # would replace the entire storyboard with the cached one, so a request that named three
+  # blocks would silently rebuild (and resequence) all of them.
+  if not scope and preflight_mode!='detailed_production_script' and restore_reviewed(p,folder(pid)):
    save(p);return jsonify(public(p))
   from production import infer
   detected=infer(p);p['profile']=detected['profile']
@@ -402,7 +1259,7 @@ def build(pid):
    if end<=last:raise BadRequest('An SRT block is shorter than one output frame.')
    s=dict(id=uid(),srt_blocks=[b['number'],b['number']],frame_in=last,frame_out=end,narration=b['text'],purpose=purpose,emotion=emotion,focus=person or category,category=category,person=person,asset_id=None,in_s=0,motion='auto',transition='cut',context_only=False,notes='',approved=False)
    for a in sorted(p['assets'],key=lambda a:(a['id']==(scenes[-1]['asset_id'] if scenes else None),usage[a['id']])):
-    if p.get('production_script') or p.get('edit_decision_list'):break
+    if p.get('production_script') or p.get('srt_block_map'):break
     from production import reserve_id
     if reserve_id(a):continue
     matches=person.casefold() in [n.casefold() for n in a['people']] if person else a['category']==category
@@ -414,51 +1271,108 @@ def build(pid):
    s['profile']=p['profile'];s['focus_position']='center';s['motion_strength']='purposeful';scenes.append(s);last=end
   p['scenes']=scenes
   from production import apply,document
-  from document_plan import rows_for,synchronize
+  from document_plan import rows_for
+  from conform import stills
   try:decisions,plan_mode=rows_for(p)
-  except ValueError as e:raise BadRequest('Production table: '+str(e))
+  except ValueError as e:raise BadRequest('SRT block map: '+str(e) if p.get('srt_block_map') else 'Production table: '+str(e))
   if decisions:
-   if p.get('picture_policy')=='clips_only':
-    from automatic import native_rows
-    decisions=native_rows(p,decisions);p['allow_archive_reuse']=True
+   from automatic import native_rows
    from edl import assemble
-   from conform import stills
-   original=p.get('edit_decision_list')
-   p['edit_decision_list']={**(original or {}),'beats':decisions}
-   try:assemble(p,scenes)
-   except ValueError as e:raise BadRequest('Edit plan: '+str(e))
-   adapted=decisions if p.get('picture_policy')=='clips_only' else stills(p,folder(pid),decisions)
-   p['edit_decision_list']={**(original or {}),'beats':adapted}
-   try:assemble(p,scenes)
-   except ValueError as e:raise BadRequest('Edit plan: '+str(e))
+     # Prepare original photographs only. Never create a still from a video frame.
+   if scope:
+    # Rebuild only the beats covering the requested blocks. The plan rows outside the
+    # range are dropped, so assembling this subset cannot disturb them.
+    inside=[r for r in decisions if set(r.get('srt_blocks') or []) & set(scope)]
+    if not inside:raise BadRequest('No planned beat covers blocks '+', '.join(map(str,scope[:8]))+'.')
+    timeline_start=min(r['timeline_in_ms'] for r in inside)
+    decisions=[copy.deepcopy(r) for r in inside]
+    for r in decisions:
+     r['timeline_in_ms']-=timeline_start;r['timeline_out_ms']-=timeline_start
+    # A cut can sit anywhere inside a beat's own wording and still be faithful to it: the
+    # saved storyboard holds the surfaces the editor actually reviewed, block boundaries
+    # nudged by up to 0.35s into narration breaths. When the range is one saved beat per
+    # planned beat - the normal case - those exact surfaces are reused, so a rebuild
+    # reproduces the reviewed picture instead of silently moving cuts and changing the
+    # length of the range it was asked to preserve.
+    saved=[s for s in previous if set(s.get('srt_blocks') or [])&set(scope)]
+    if saved and len(saved)==len(decisions):
+     first=min(s['frame_in'] for s in saved)
+     for row,hit in zip(decisions,saved):
+      row['timeline_in_ms']=round((hit['frame_in']-first)/30*1000)
+      row['timeline_out_ms']=round((hit['frame_out']-first)/30*1000)
+     adopted_surfaces=len(saved)
+   if plan_mode=='detailed_production_script' and scope:raise BadRequest('Detailed shot scripts require a whole-timeline rebuild; partial rebuilding could change shot order.')
+   if plan_mode=='detailed_production_script' and policy(p)!='mixed' and any(r.get('visual_status')=='STILL' for r in decisions):raise BadRequest('This script requests still holds or freeze-frames. Allow photographs and stills, or revise the script; no substitute was chosen.')
+   still_plan=stills(p,folder(pid),copy.deepcopy(decisions))
+   extracted=sum(bool(a.get('derived_from')) for a in p['assets'])
+   if plan_mode!='detailed_production_script':
+    still_plan=native_rows(p,still_plan)
+    p['allow_archive_reuse']=True
+   else:p['allow_archive_reuse']=False
+   original=p.get('picture_plan')
+   p['picture_plan']={'name':(p.get('srt_block_map') or {}).get('name','SRT block map'),'beats':still_plan,'schema_version':1,'partial':bool(scope)}
+   try:
+    # The plan decides the cuts. On a range rebuild the seed must also be limited to the
+    # blocks being rebuilt: passing the whole-timeline seeds assembled every beat with
+    # whole-timeline frame numbers, so a one-block rebuild moved the entire storyboard.
+    assemble(p,[s for s in scenes if set(s['srt_blocks'])&set(scope)] if scope else scenes)
+   except ValueError as e:raise BadRequest('SRT block map: '+str(e))
    finally:
-    if original is None:p.pop('edit_decision_list',None)
-    else:p['edit_decision_list']=original
-   p['script_application']['mode']=plan_mode;p['script_application']['generated_stills']=0 if p.get('picture_policy')=='clips_only' else sum(bool(a.get('derived_from')) for a in p['assets'])
+    if original is None:p.pop('picture_plan',None)
+    else:p['picture_plan']=original
+   p['script_application']['mode']=plan_mode;p['script_application']['generated_stills']=extracted
   elif p.get('production_script'):apply(p)
   from edl import signature
   p['assembly_signature']=signature(p)
   p['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
-  if p.get('picture_policy')=='clips_only':
-   from automatic import validate_assembly
-   decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
-   if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join(decoded['errors'][:3]))
+  from picture_flow import apply_flow
+  if plan_mode=='detailed_production_script':
+   p['picture_flow']={'note':'Exact script timings retained; no automatic source conform or breath snapping.'}
+  else:p['picture_flow']=apply_flow(p,folder(pid))
+  from automatic import validate_assembly
+  decoded=validate_assembly(p,folder(pid));write(folder(pid)/'reviews/Automatic_frame_checks.json',decoded)
+  if decoded['errors']:raise BadRequest('Automatic assembly stopped before saving an empty or undecodable timeline: '+' '.join((p.get('script_application') or {}).get('issues',[])[:3]+decoded['errors'][:3]))
+  # An incremental rebuild: restore the review state of every beat whose picture the
+  # rebuild reproduced exactly, and leave the rest unapproved. `scope` narrows this to a
+  # block range, so editing one region does not disturb approvals elsewhere.
+  if scope:
+   if not decisions:raise BadRequest('An incremental rebuild needs a block map: the production script path has no per-block plan to rebuild by range.')
+   spliced=merge_scoped_rebuild(previous,p['scenes'],scope);merged=spliced['scenes']
+   # A range rebuild must reproduce the same timeline it replaces. If it does not, the
+   # saved timeline would gain a gap or an overlap, so refuse rather than save a broken
+   # storyboard and ask for a full rebuild instead.
+   previous_last=0
+   for i,scene in enumerate(merged):
+    if scene['frame_in']!=previous_last:
+     raise BadRequest('Rebuilding blocks '+', '.join(map(str,scope[:6]))+' would change the length of the surrounding timeline. Rebuild the whole storyboard instead.')
+    previous_last=scene['frame_out']
+   p['scenes']=merged
+  if plan_mode=='detailed_production_script':p.pop('review_only_draft',None)
+  carried=carry_previous_review({'scenes':previous},p['scenes'])
+  p['rebuild_report']={'at':time.time(),'beats':len(p['scenes']),'approvals_carried':carried['carried'],'needs_review':carried['requiring_review'],'scope':scope,'previous_scenes':len(previous),'rounding_frames':(spliced['rounding_frames'] if scope else 0),'cut_surfaces_adopted':adopted_surfaces}
   save(p);return jsonify(public(p))
 @app.patch('/api/projects/<pid>/scenes/<sid>')
 def edit_scene(pid,sid):
  with LOCKS[pid]:
   editable(pid);p=load(pid);s=next((s for s in p['scenes'] if s['id']==sid),None)
   if not s:raise NotFound('Scene not found.')
-  d=request.get_json() or {};p['manual_scene_edits']=True
+  d=request.get_json() or {}
+  if p.get('script_moving_only'):
+   if d.get('asset_id',s.get('asset_id'))!=s.get('asset_id'):
+    raise BadRequest('The moving-video review uses only explicit script source intervals. Change the production script with an explicit IN and OUT, then rebuild; no substitute or timing guess was applied.')
+  p['manual_scene_edits']=True
   for k in ['purpose','emotion','focus','person','notes']:
    if k in d:s[k]=str(d[k])[:5000]
   if 'asset_id' in d:
    if d['asset_id'] is not None and not any(a['id']==d['asset_id'] for a in p['assets']):raise BadRequest('Asset does not belong to this production.')
    s['asset_id']=d['asset_id']
+  moved_in_point=False
   if 'in_s' in d:
    try:n=float(d['in_s'])
    except (TypeError,ValueError):raise BadRequest('Source in-point must be a number.')
    if not math.isfinite(n) or n<0:raise BadRequest('Source in-point must be a nonnegative finite number.')
+   moved_in_point=abs(n-float(s.get('in_s') or 0))>.001
+   if p.get('script_moving_only') and moved_in_point:raise BadRequest('The moving-video review uses the script source IN; edit the script and rebuild instead.')
    s['in_s']=n
   if d.get('motion') in ['auto','push','pull','pan-left','pan-right','rise','reveal']:
    if d['motion']!='auto' and d['motion']!=s.get('motion'):s.pop('script_camera',None)
@@ -466,64 +1380,812 @@ def edit_scene(pid,sid):
   if d.get('focus_position') in ['left','center','right']:s['focus_position']=d['focus_position']
   if d.get('motion_strength') in ['subtle','purposeful','strong']:s['motion_strength']=d['motion_strength']
   if d.get('transition') in ['cut','dissolve']:
+   # A dissolve is refused while the production is clean-cuts-only rather than silently
+   # rewritten to a cut. Silently forcing it meant the request appeared to succeed and the
+   # scene then validated as a cut, so the policy error it should have produced could never
+   # be reached and there was nothing to explain why the dissolve never appeared.
+   if d['transition']=='dissolve' and p.get('transition_policy')=='clean_cuts_only':
+    raise BadRequest('This production uses clean cuts only. Allow dissolves for it before setting a dissolve on a scene.')
    s['transition']=d['transition'];s['transition_handle_frames']=(s.get('transition_handle_frames') or 4) if s['transition']=='dissolve' else 0
-  if p.get('transition_policy')=='clean_cuts_only':s['transition']='cut';s['transition_handle_frames']=0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
+  if s['approved'] and s.get('asset_id'):
+   s.pop('source_replacement_pending',None);s.pop('replacement_issue',None)
+  if moved_in_point:s.pop('picture_flow',None)  # an explicit human in-point overrides the automatic conform
   save(p);return jsonify(public(p))
+
+@app.patch('/api/projects/<pid>/scenes/<sid>/picture-scale')
+def edit_scene_picture_scale(pid,sid):
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);scene=next((s for s in p['scenes'] if s['id']==sid),None)
+  if scene is None:raise NotFound('Scene not found.')
+  data=request.get_json(silent=True) or {}
+  if 'picture_scale' not in data:raise BadRequest('Specify a picture scale or null to use the project scale.')
+  value=data['picture_scale']
+  if value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 100<=value<=200):raise BadRequest('Picture scale must be a whole percentage from 100 to 200, or null to use the project scale.')
+  if value is None:scene.pop('picture_scale',None)
+  else:scene['picture_scale']=value
+  save(p);return jsonify(public(p))
+
+@app.patch('/api/projects/<pid>/scenes/picture-scale')
+def edit_selected_picture_scale(pid):
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};ids=data.get('scene_ids');value=data.get('picture_scale')
+  if not isinstance(ids,list) or not ids or any(not isinstance(x,str) for x in ids) or len(ids)!=len(set(ids)):raise BadRequest('Select one or more distinct timeline slots.')
+  if 'picture_scale' not in data or (value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 100<=value<=200)):raise BadRequest('Picture scale must be a whole percentage from 100 to 200, or null to use the project scale.')
+  by_id={s['id']:s for s in p['scenes']}
+  if any(x not in by_id for x in ids):raise BadRequest('A selected slot is no longer in this production; no changes were made.')
+  for sid in ids:
+   if value is None:by_id[sid].pop('picture_scale',None)
+   else:by_id[sid]['picture_scale']=value
+  save(p);return jsonify(public(p))
+
+@app.post('/api/projects/<pid>/scenes/approve')
+def approve_scenes(pid):
+ """Approve every scene that passes the same review export readiness applies.
+
+ A scene that raises any export-readiness error is left unapproved and reported with
+ its reasons. That keeps bulk approval honest: it cannot approve a beat whose media,
+ timing or disclosure would block the export a moment later.
+ """
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if d.get('attested') is not True:raise BadRequest('Confirm that you have reviewed the picture beats before approving them.')
+  scope=str(d.get('scope') or 'ready')
+  if scope not in ['ready','all']:raise BadRequest('Choose scope "ready" (default) or "all".')
+  assets={x['id']:x for x in p['assets']};ranges=defaultdict(list);last=0
+  approved=[];skipped=[]
+  for i,scene in enumerate(p['scenes']):
+   a=assets.get(scene['asset_id'])
+   errors,_=scene_review(p,i,scene,a,ranges,last)
+   if not errors:
+    if not scene['approved']:
+     scene['approved']=True;scene['approval_record']={'method':'bulk_scene_approval','scope':scope,'at':time.time(),'reasons':'media assigned, source recorded, timing valid, no blocking review item'}
+     approved.append(i+1)
+   else:
+    scene['approved']=False;skipped.append({'scene':i+1,'srt_blocks':scene.get('srt_blocks'),'reasons':errors})
+   last=scene['frame_out']
+   if a and a['kind']=='video':
+    ranges[a['id']].append((*source_overlap_interval(scene,a,p),i+1,scene_beat(scene)))
+  p.setdefault('scene_approval_history',[]).append({'action':'bulk_scene_approval','scope':scope,'approved':len(approved),'skipped':len(skipped),'at':time.time()})
+  if scope=='all' and skipped:raise BadRequest(str(len(skipped))+' picture beat(s) cannot be approved yet. Nothing was approved; open the first one to see why: Scene '+str(skipped[0]['scene'])+' — '+skipped[0]['reasons'][0])
+  save(p)
+  result=public(p);result['bulk_approval']={'approved':approved,'skipped':skipped,'scope':scope}
+  return jsonify(result)
 
 @app.post('/api/projects/<pid>/scenes/<sid>/split')
 def split_scene(pid,sid):
- with LOCKS[pid]:
-  editable(pid);p=load(pid);i=next((i for i,s in enumerate(p['scenes']) if s['id']==sid),None)
-  if i is None:raise NotFound('Scene not found.')
-  a=p['scenes'][i];d=request.get_json() or {}
-  try:offset=float(d.get('offset_s',0))
-  except (ValueError,TypeError):raise BadRequest('Enter a valid split offset in seconds.')
-  if not math.isfinite(offset):raise BadRequest('Enter a finite split offset.')
-  frame=a['frame_in']+round(offset*30)
-  if frame-a['frame_in']<15 or a['frame_out']-frame<15:raise BadRequest('Leave at least half a second on each side of a picture split.')
-  b=copy.deepcopy(a);b['id']=uid();b['frame_in']=frame;a['frame_out']=frame
-  words=a['narration'].split();at=max(1,min(len(words)-1,round(len(words)*offset/((b['frame_out']-a['frame_in'])/30))))
-  a['narration']=' '.join(words[:at]);b['narration']=' '.join(words[at:]);a['approved']=b['approved']=False;a['transition']='cut';a['transition_handle_frames']=0;b['asset_id']=a['asset_id'];b['in_s']=a['in_s']+(frame-a['frame_in'])/30;p['manual_scene_edits']=True
-  p['scenes'].insert(i+1,b);save(p);return jsonify(public(p))
+ raise BadRequest('Splitting a cue is disabled: use exactly one shot per SRT cue.')
+
 @app.post('/api/projects/<pid>/scenes/<sid>/merge')
 def merge_scene(pid,sid):
- with LOCKS[pid]:
-  editable(pid);p=load(pid);i=next((i for i,s in enumerate(p['scenes']) if s['id']==sid),None)
-  if i is None or i+1>=len(p['scenes']):raise BadRequest('Choose a scene with a following picture beat.')
-  a,b=p['scenes'][i:i+2];a['frame_out']=b['frame_out'];a['narration']+=' '+b['narration'];a['srt_blocks']=[a['srt_blocks'][0],b['srt_blocks'][1]];a['transition']=b['transition'];a['transition_handle_frames']=b.get('transition_handle_frames',4 if b['transition']=='dissolve' else 0);a['approved']=False;a['notes']=' '.join(x for x in [a['notes'],b['notes']] if x)
-  p['scenes'].pop(i+1);save(p);return jsonify(public(p))
+ raise BadRequest('Merging cues is disabled: use exactly one shot per SRT cue.')
 
-def manifest(p):
+def manifest(p, strict=None, enhance_picture=False):
  from production import reserve_id,asset_used
- root=folder(p['id']);w,h=(720,1280) if p['format']=='portrait' else (1280,720);assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
+ root=folder(p['id']);w,h=output_size(p.get('format','landscape'),p.get('size'));assets={a['id']:a for a in p['assets']};shots=[];signatures=set()
  for i,s in enumerate(p['scenes']):
   a=assets[s['asset_id']];frames=s['frame_out']-s['frame_in'];m=motion(s,i);signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
-  while signature in signatures:m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
+  while signature in signatures and m.get('move')!='static':m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
   signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
-   out=root/'.cache/prepared_images'/f'{a["id"]}.jpg';out.parent.mkdir(parents=True,exist_ok=True)
+   out=root/'.cache/prepared_images'/f'{a["id"]}.png';out.parent.mkdir(parents=True,exist_ok=True)
    im=ImageOps.exif_transpose(Image.open(root/a['path'])).convert('RGB')
    if p.get('image_layout')=='full_bleed':
-    ImageOps.fit(im,(w,h)).save(out,quality=95)
+    ImageOps.fit(im,(w,h)).save(out)
    else:
-    bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out,quality=95)
+    bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out)
    shot['image']=out.relative_to(root).as_posix()
+  if strict and strict.get('required') and a['kind']=='video':
+   timing=strict['shots'][i]
+   shot['strict_source_frames']=[timing['source_start_frame'],timing['source_end_frame']]
+   shot['video_in_ms']=timing['placed_in_ms'];shot['video_out_ms']=timing['placed_out_ms']
+  shot['picture_scale']=s.get('picture_scale',p.get('picture_scale',100))
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
+@app.post('/api/projects/<pid>/continuous-preview')
+def prepare_continuous_preview(pid):
+ from preview_render import start
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')=='documentary':raise BadRequest('Documentary smooth preview is not implemented yet.')
+  if p.get('review_only_draft'):raise BadRequest('This review draft cannot be rendered as a smooth preview until its caption, framing and freeze-frame instructions are implemented.')
+  if not p['scenes']:raise BadRequest('Build a storyboard first.')
+  def publish(updated,temp,base):
+   with LOCKS[pid]:
+    if load(pid)['updated']!=updated:return False
+    temp.replace(base/'preview.mp4')
+    write(base/'status.json',{'status':'done','updated':updated,'progress':100,'detail':'Temporary smooth preview ready.'})
+    return True
+  try:result=start(root,p,publish)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify(result),202
+
+@app.get('/api/projects/<pid>/continuous-preview')
+def continuous_preview_file(pid):
+ from preview_render import status as preview_status
+ p=load(pid);root=folder(pid);state=preview_status(root,pid,p['updated'])
+ if state.get('status')!='done' or request.args.get('version')!=str(p['updated']):raise NotFound('Preview is not current.')
+ return send_from_directory(root/'.cache/continuous_preview','preview.mp4',conditional=True)
+
+@app.post('/api/projects/<pid>/scene-exports')
+def prepare_scene_exports(pid):
+ from scene_exports import start
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid);data=request.get_json(silent=True) or {};kind=data.get('source')
+  if p.get('edit_mode','review')=='documentary':raise BadRequest('Documentary scene export is not implemented yet.')
+  if p.get('review_only_draft'):raise BadRequest('A review draft cannot be exported as finished scene clips.')
+  if kind not in ('preview','render'):raise BadRequest('Choose the smooth preview or a rendered master.')
+  d=public(p)
+  if kind=='preview':
+   if d['preview'].get('status')!='done':raise BadRequest('Prepare a current smooth preview first.')
+   source=root/'.cache/continuous_preview/preview.mp4'
+  else:
+   render_info=d['render']
+   if render_info.get('status')!='done' or not render_info.get('current'):raise BadRequest('Render the current storyboard first.')
+   name=render_info.get('output','')
+   if Path(name).name!=name:raise BadRequest('Invalid rendered video name.')
+   source=root/'renders'/name
+  def publish(updated,archive,name,source_kind):
+   with LOCKS[pid]:
+    if load(pid)['updated']!=updated:return False
+    dest=root/'renders/scene_exports';dest.mkdir(parents=True,exist_ok=True);archive.replace(dest/name)
+    write(root/'scene_exports_status.json',{'status':'done','updated':updated,'source_kind':source_kind,'naming':'C','output':name,'progress':100,'detail':str(len(p['scenes']))+' scene clips ready.'})
+    return True
+  try:result=start(root,p,source,kind,publish)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify(result),202
+
+@app.get('/api/projects/<pid>/scene-exports/<name>')
+def download_scene_exports(pid,name):
+ if not re.fullmatch(r'scenes_[0-9]{8}_[0-9]{6}_[a-f0-9]{8}\.zip',name):raise NotFound('Scene archive not found.')
+ return send_from_directory(folder(pid)/'renders/scene_exports',name,conditional=True,as_attachment=True)
+
+@app.get('/api/projects/<pid>/documentary-bites')
+def get_documentary_bites(pid):
+ from documentary import load_plan,annotate_plan
+ root=folder(pid)
+ with LOCKS[pid]:
+  try:return jsonify(annotate_plan(load(pid),root,load_plan(root)))
+  except ValueError as e:raise BadRequest(str(e))
+
+@app.post('/api/projects/<pid>/documentary-bites')
+def add_documentary_bite(pid):
+ from documentary import load_plan,validate_bite,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before saving.')
+  if len(plan['bites'])>=200:raise BadRequest('The plan is limited to 200 sound bites.')
+  try:bite=validate_bite(load(pid),root,data,lambda path:probe(path)['has_audio'])
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+  plan['bites'].append(bite);plan['bites'].sort(key=lambda x:(x['pause_s'],x['created']))
+  plan['revision']+=1;write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(load(pid),root,plan))
+
+@app.put('/api/projects/<pid>/documentary-bites')
+def replace_documentary_bites(pid):
+ from documentary import load_plan,validate_bite,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  project=load(pid)
+  if project.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite editing is only available in documentary mode.')
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before saving.')
+  items=data.get('bites')
+  if not isinstance(items,list) or len(items)>200:raise BadRequest('Provide a list of at most 200 sound bites.')
+  try:
+   new=[validate_bite(project,root,x,lambda path:probe(path)['has_audio']) for x in items]
+  except (ValueError,OSError,TypeError,AttributeError) as e:raise BadRequest(str(e))
+  new.sort(key=lambda b:(b['pause_s'],b['created']));plan['bites']=new;plan['revision']+=1
+  write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(project,root,plan))
+
+@app.patch('/api/projects/<pid>/documentary-bites/<bid>')
+def move_documentary_bite(pid,bid):
+ from documentary import load_plan,validate_bite,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite dragging is only available in documentary mode.')
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before moving the bite.')
+  old=next((b for b in plan['bites'] if b['id']==bid),None)
+  if not old:raise NotFound('Sound bite not found.')
+  if annotate_plan(p,root,{'bites':[copy.deepcopy(old)]})['bites'][0]['stale_reasons']:raise BadRequest('The source or narration changed; review this sound bite before moving it.')
+  try:
+   checked=validate_bite(p,root,{'asset_id':old['asset_id'],'pause_s':data.get('pause_s'),'source_in_s':old['source_in_s'],'source_out_s':old['source_out_s']},lambda path:probe(path)['has_audio'])
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+  old['pause_s']=checked['pause_s'];plan['bites'].sort(key=lambda b:(b['pause_s'],b['created']));plan['revision']+=1
+  write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(p,root,plan))
+
+@app.delete('/api/projects/<pid>/documentary-bites/<bid>')
+def remove_documentary_bite(pid,bid):
+ from documentary import load_plan,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed in another window. Reopen it before removing anything.')
+  new=[x for x in plan['bites'] if x['id']!=bid]
+  if len(new)==len(plan['bites']):raise NotFound('Sound bite not found.')
+  plan['bites']=new;plan['revision']+=1;write(root/'documentary_plan.json',plan)
+  return jsonify(annotate_plan(load(pid),root,plan))
+
+@app.post('/api/projects/<pid>/documentary-audio')
+def start_documentary_audio(pid):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan,build_timeline
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary audio is available only in a documentary project.')
+  plan=load_plan(root)
+  try:
+   timeline=build_timeline(p,annotate_plan(p,root,copy.deepcopy(plan)))
+   if not any(s['kind']=='sound_bite' for s in timeline['segments']):raise ValueError('Add a sound bite first.')
+   def current(original,source_plan):
+    with LOCKS[pid]:
+     current_p=load(pid);current_plan=load_plan(root)
+     if current_p.get('updated')!=original.get('updated') or current_plan['revision']!=source_plan['revision']:return False
+     return not any(x.get('stale_reasons') for x in annotate_plan(current_p,root,current_plan)['bites'])
+   # The preview mix carries narration and the chosen bites only. Background music
+   # is played as its own live browser layer against the same clock, so the bed is
+   # never doubled and a level or ducking change is heard without re-rendering.
+   return jsonify(documentary_audio.start(root,copy.deepcopy(p),copy.deepcopy(plan),current,music=False)),202
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/documentary-audio')
+def documentary_audio_status(pid):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid);plan=load_plan(root);state=documentary_audio.status(pid,root)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary audio is available only in a documentary project.')
+  if state.get('status')=='done':
+   from documentary_music import settings as music_settings,music_path
+   music=music_settings(p);expected_music=bool(music['enabled'] and music['present'] and music_path(root).is_file())
+   mixed_music=bool((state.get('music') or {}).get('present') if isinstance(state.get('music'),dict) else state.get('music_baked'))
+   # A silent bed changes nothing, so only a real music difference invalidates it.
+   # Only real assembly changes invalidate the mix. Music level, music on/off,
+   # ducking and other review settings are applied live, so they must not force an
+   # eight-minute re-render; what matters is whether the picture, narration or
+   # bites moved.
+   audio_signature=documentary_audio.signature(p,plan)
+   stale=(state.get('audio_signature') not in (None,audio_signature) and state.get('audio_signature')!=audio_signature) or state.get('audio_processing_version')!=documentary_audio.AUDIO_PROCESSING_VERSION or state.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites'])
+   # The bed is NOT mixed into the file any more: since v2 the browser plays it
+   # as a live layer, so adding or removing music must never invalidate a mix.
+   # (Comparing it against the recorded output marked every mix stale forever as
+   # soon as a bed was added, which blanked the monitor and stopped playback.)
+   # Only a v1 mix, which does have the bed baked in, can disagree with it.
+   legacy_baked=state.get('audio_processing_version')!=documentary_audio.AUDIO_PROCESSING_VERSION
+   if not stale and legacy_baked and expected_music!=mixed_music:stale=True
+   if stale:state={'status':'stale','detail':'Project or plan changed; prepare documentary audio again.'}
+   else:state['url']=f'/api/projects/{pid}/documentary-audio/{state["output"]}'
+  return jsonify(state)
+
+@app.get('/api/projects/<pid>/documentary-audio/<name>')
+def documentary_audio_file(pid,name):
+ import documentary_audio
+ from documentary import load_plan,annotate_plan
+ if not re.fullmatch(r'documentary_audio_[a-f0-9]{32}\.(wav|m4a)',name):raise NotFound('Documentary audio not found.')
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid);plan=load_plan(root);job=documentary_audio.status(pid,root)
+  current=(job.get('audio_signature') or documentary_audio.signature(p,plan))==documentary_audio.signature(p,plan)
+  if p.get('edit_mode','review')!='documentary' or job.get('status')!='done' or job.get('audio_processing_version')!=documentary_audio.AUDIO_PROCESSING_VERSION or job.get('output')!=name or not current or job.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites']):raise NotFound('Documentary audio is not current.')
+  return send_from_directory(root/'renders',name,conditional=True,as_attachment=request.args.get('download')=='1')
+
+@app.get('/api/projects/<pid>/documentary-music')
+def documentary_music_state(pid):
+ from documentary_music import settings,music_path
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Background music is available only in a documentary project.')
+  state=settings(p)
+  state['file_present']=music_path(root).is_file()
+  state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
+ return jsonify(state)
+
+@app.post('/api/projects/<pid>/documentary-music')
+def upload_documentary_music(pid):
+ from documentary_music import save_upload,settings
+ root=folder(pid)
+ upload=request.files.get('music')
+ if not upload or not upload.filename:raise BadRequest('Choose an audio file for the background music.')
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Background music is available only in a documentary project.')
+  try:record=save_upload(root,upload,upload.filename)
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+  music=dict(p.get('documentary_music') or {})
+  music.update(record);music.setdefault('enabled',True);music.setdefault('volume_percent',35);music.setdefault('narration_level','duck')
+  p['documentary_music']=music;save(p)
+ return jsonify(settings(p))
+
+@app.patch('/api/projects/<pid>/documentary-music')
+def update_documentary_music(pid):
+ from documentary_music import settings,music_path
+ data=request.get_json(silent=True) or {}
+ root=folder(pid)
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Background music is available only in a documentary project.')
+  music=dict(p.get('documentary_music') or {})
+  if 'enabled' in data:
+   if not isinstance(data['enabled'],bool):raise BadRequest('Music on/off must be true or false.')
+   music['enabled']=data['enabled']
+  # A sound bite always carries the only audio, so there is no setting that puts
+  # music under one. Only the narration behaviour is a choice.
+  if 'duck_under_speech' in data:
+   raise BadRequest('Music is always cut under a sound bite. Use narration_level to choose what happens under the narration.')
+  if 'narration_level' in data:
+   if data['narration_level'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
+   music['narration_level']=data['narration_level']
+  if 'speech_mode' in data:
+   if data['speech_mode'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
+   music['narration_level']=data['speech_mode']
+  music.pop('duck_under_speech',None)
+  if 'volume_percent' in data:
+   value=data['volume_percent']
+   if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Music volume must be a whole percentage from 0 to 100.')
+   if value==0:raise BadRequest('Use the music switch to turn the bed off instead of a zero volume.')
+   if not -12<=value<=100:raise BadRequest('Music volume must be between -12 and 100 percent.')
+   music['volume_percent']=value
+  if data.get('remove') is True:
+   for stale in (root/'inputs').glob('background_music*'):
+    stale.unlink(missing_ok=True)
+   music={'name':'','size':0,'duration_s':0,'path':'','version':music.get('version','')}
+  if not music_path(root).is_file():music['enabled']=False
+  p['documentary_music']=music;save(p)
+  state=settings(p);state['file_present']=music_path(root).is_file();state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
+ return jsonify(state)
+
+@app.get('/api/projects/<pid>/documentary-music/file')
+def documentary_music_file(pid):
+ from documentary_music import music_path
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid)
+  if not (p.get('documentary_music') or {}).get('name') or not music_path(root).is_file():raise NotFound('No background music is saved in this production.')
+  return send_file(music_path(root),conditional=True,as_attachment=request.args.get('download')=='1')
+
+@app.get('/api/projects/<pid>/documentary-beat-proposal')
+def documentary_beat_proposal(pid):
+ """Show how each scripted Beat would be fitted, before anything is built."""
+ from documentary_beats import read_beats
+ from documentary_beat_plan import proposal
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode')!='documentary':raise BadRequest('Beat proposals are available only in documentary mode.')
+  script=(p.get('production_script') or {}).get('text','')
+  try:
+   beats=read_beats(script)
+   from documentary_beat_plan import frame_limits
+   data=proposal(p,beats,request.args.get('scripted_review_beat'),request.args.get('scripted_review_source'),frame_limits(folder(pid),p['assets']))
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify({'project_version':p.get('updated'),'script_sha256':hashlib.sha256(script.encode()).hexdigest(),
+                  'assets':[{'name':a.get('original_name') or a.get('name'),'duration':a.get('duration')} for a in p.get('assets',[])],
+                  **data})
+
+@app.post('/api/projects/<pid>/documentary-beat-storyboard')
+def build_documentary_beat_storyboard(pid):
+ """Build a review-only plan after explicit range decisions; no input is replaced."""
+ from documentary import load_plan
+ from documentary_storyboard import prepare
+ from strict_cuts import source_rate,inspect_video,_nearest_frame
+ from production import document
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);current=load_plan(root)
+  if p.get('edit_mode')!='documentary':raise BadRequest('This operation is available only in documentary mode.')
+  if data.get('confirmed') is not True:raise BadRequest('Explicit confirmation of the proposed gap ranges and repeats is required.')
+  if data.get('project_version')!=p.get('updated') or data.get('plan_revision')!=current['revision']:raise BadRequest('The project or sound-bite plan changed; review the proposal again.')
+  if current['bites']:raise BadRequest('Existing sound bites will not be replaced automatically.')
+  script=(p.get('production_script') or {}).get('text','')
+  if data.get('script_sha256')!=hashlib.sha256(script.encode()).hexdigest():raise BadRequest('The production script changed; review the proposal again.')
+  try:
+   from documentary_beats import read_beats
+   from documentary_beat_plan import fit
+   beats=read_beats(script)
+   # Fitting is mechanical and every change is saved with the storyboard, so the
+   # review timeline states exactly which ranges differ from the script.
+   from documentary_beat_plan import frame_limits
+   beats,adjustments,issues=fit(beats,p['assets'],data.get('scripted_review_beat'),data.get('scripted_review_source'),frame_limits(root,p['assets']))
+   if issues:raise BadRequest(' '.join(issues))
+   fitted={b['label']:{'source_file':b['source_file'],'source_in_ms':b['source_in_ms'],'source_out_ms':b['source_out_ms']} for b in beats}
+   staged,plan=prepare(p,root,data.get('approved_gaps'),data.get('approved_overlaps'),data.get('allow_silent_tail') is True,lambda path:probe(path)['has_audio'],beats=beats,allow_consecutive_bites=data.get('approve_consecutive_bites') is True,fitted_ranges=fitted)
+   staged['documentary_beat_adjustments']=list(adjustments)+list(staged.get('documentary_beat_adjustments') or [])
+   assets={(a.get('original_name') or a.get('name')):a for a in p['assets']}
+   for name in {b['source_file'] for b in beats}:
+    asset=assets[name];path=root/asset['path'];rate=source_rate(path)
+    end=max(b['source_out_ms'] for b in beats if b['source_file']==name)
+    end=max([end]+[g['source_out_ms'] for g in data.get('approved_gaps',[]) if g['source_file']==name])
+    inspect_video(path,_nearest_frame(end,rate))
+   staged['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
+   staged['documentary_beat_review']['at']=time.time()
+   # A failed project save restores the pre-existing plan; no user plan is overwritten.
+   oldpath=root/'documentary_plan.json';old=oldpath.read_bytes() if oldpath.exists() else None
+   try:
+    write(oldpath,plan);save(staged)
+   except Exception:
+    if old is None:oldpath.unlink(missing_ok=True)
+    else:
+     temp=oldpath.with_name(oldpath.name+'.'+uuid.uuid4().hex+'.restore');temp.write_bytes(old);temp.replace(oldpath)
+    raise
+   return jsonify(public(staged)),201
+  except (ValueError,OSError,KeyError) as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/documentary-timeline')
+def documentary_timeline(pid):
+ from documentary import load_plan,annotate_plan,build_timeline
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary timeline is available only in a documentary project.')
+  try:return jsonify(build_timeline(p,annotate_plan(p,folder(pid),load_plan(folder(pid)))))
+  except ValueError as e:raise BadRequest(str(e))
+
+def documentary_review_preview_state(pid):
+ from documentary import load_plan,annotate_plan
+ from documentary_audio import AUDIO_PROCESSING_VERSION
+ root=folder(pid);p=load(pid)
+ if p.get('edit_mode','review')!='documentary':return {'status':'unavailable'}
+ try:
+  record=json.loads((root/'reviews'/'documentary_review_preview.json').read_text(encoding='utf-8'))
+  name=record['output']
+  if not re.fullmatch(r'documentary_review_[a-f0-9]{32}\.mp4',name) or not (root/'renders'/name).is_file():return {'status':'unavailable'}
+  plan=load_plan(root)
+  if record.get('audio_processing_version')!=AUDIO_PROCESSING_VERSION or record.get('project_version')!=p.get('updated') or record.get('plan_revision')!=plan['revision'] or any(x.get('stale_reasons') for x in annotate_plan(p,root,plan)['bites']):return {'status':'stale'}
+  return {'status':'ready','url':f'/api/projects/{pid}/documentary-review-preview/{name}','detail':'Low-resolution review preview; selected sound-bite levels matched to narration. Not a final export.','narration_lufs':record.get('narration_lufs'),'sound_bite_levels':record.get('sound_bite_levels',[])}
+ except (OSError,ValueError,KeyError,TypeError):return {'status':'unavailable'}
+
+@app.get('/api/projects/<pid>/documentary-bite-speech')
+def documentary_bite_speech_status(pid):
+ from documentary import load_plan,annotate_plan
+ import bite_speech
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite speech is available only in a documentary project.')
+  plan=annotate_plan(p,folder(pid),load_plan(folder(pid)))
+ ok,reason=bite_speech.available()
+ return jsonify({'available':ok,'detail':reason,'model':bite_speech.model_dir().name if ok else '',
+                 'revision':plan['revision'],'captions':int(p.get('captions') or 0),
+                 'bites':[{'id':b['id'],'script_beat':b.get('script_beat'),'has_speech':bool(b.get('speech'))} for b in plan['bites']]})
+
+@app.post('/api/projects/<pid>/documentary-bites/<bid>/speech')
+def transcribe_documentary_bite(pid,bid):
+ """Transcribe one saved bite locally; save only the words, never the media."""
+ from documentary import load_plan,annotate_plan
+ import bite_speech
+ from documentary_speech import save
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite speech is available only in a documentary project.')
+  plan=load_plan(root)
+  if data.get('revision')!=plan['revision']:raise BadRequest('The sound-bite plan changed. Reload before transcribing.')
+  bite=next((b for b in plan['bites'] if b['id']==bid),None)
+  if not bite:raise NotFound('That sound bite is no longer in the plan.')
+  asset=next((a for a in p.get('assets',[]) if a.get('id')==bite.get('asset_id')),None)
+  reasons=annotate_plan(p,root,{'bites':[dict(bite)]})['bites'][0].get('stale_reasons') or []
+  if reasons:raise BadRequest(' '.join(reasons))
+  source=(root/asset.get('path','')).resolve()
+  if not asset or not source.is_relative_to((root/'sources').resolve()) or not source.is_file():raise BadRequest('The sound-bite source video is missing.')
+ try:
+  segments,meta=bite_speech.transcribe(source,bite['source_in_s'],bite['source_out_s'])
+  entry=save(root,plan,bite,asset,segments,meta)
+ except (ValueError,OSError,KeyError,TypeError) as e:raise BadRequest(str(e))
+ with LOCKS[pid]:
+  current=load(pid)
+  if current.get('updated')!=p.get('updated'):raise BadRequest('The project changed while transcribing. Review the words again before saving.')
+ return jsonify({'bite_id':bid,'segments':entry['segments'],'transcript':entry['transcript'],
+                 'note':'Machine transcription of this bite only. Listen before publishing; speaker identity is not established by audio.'})
+
+@app.delete('/api/projects/<pid>/documentary-bites/<bid>/speech')
+def remove_documentary_bite_speech(pid,bid):
+ from documentary_speech import load as load_speech,path as speech_path
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite speech is available only in a documentary project.')
+  data=load_speech(root)
+  if bid not in data['bites']:raise NotFound('That sound bite has no saved speech.')
+  data['bites'].pop(bid);write(speech_path(root),data)
+ return jsonify({'removed':bid})
+
+@app.get('/api/projects/<pid>/documentary-beat-playback-schedule')
+def documentary_beat_playback_schedule(pid):
+ """Verified source ranges for browser review playback, not a final render."""
+ from documentary import load_plan,annotate_plan
+ from documentary_frame_audit import playback_schedule
+ root=folder(pid)
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode')!='documentary' or not p.get('documentary_beat_review'):raise BadRequest('This is not a Beat storyboard.')
+  try:
+   plan=annotate_plan(p,root,load_plan(root))
+   key=(p.get('updated'),plan['revision'])
+   # This audits every source frame: over a minute on a 121-scene storyboard. It is
+   # deterministic for a given project version, so a second request must not pay
+   # for the same walk again -- the browser asks again on every reload.
+   cached=SCHEDULE_CACHE.get(pid)
+   if cached and cached[0]==key:
+    events=cached[1]
+   else:
+    # The audit walks every source frame (~16s here). Keeping it only in memory
+    # meant every server restart paid for it again, and the browser asks on each
+    # reload. It is deterministic for a project version, so it is written beside
+    # the project and reused across restarts.
+    events=_schedule_from_disk(pid,key)
+    if events is None:
+     events=playback_schedule(p,root,plan)
+     _schedule_to_disk(pid,key,events)
+    SCHEDULE_CACHE[pid]=(key,events)
+   return jsonify({'project_version':p.get('updated'),'plan_revision':plan['revision'],'events':events})
+  except (ValueError,OSError,KeyError,TypeError) as e:raise BadRequest(str(e))
+
+@app.post('/api/projects/<pid>/documentary-review-preview')
+def start_documentary_review_preview(pid):
+ import documentary_preview
+ from documentary import load_plan,annotate_plan
+ root=folder(pid);data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary preview is available only in a documentary project.')
+  if p.get('documentary_beat_review'):raise BadRequest('This beat storyboard is review-only. Its scripted captions, final fade and exact source-frame timing are not yet implemented in documentary playback; no incomplete MP4 was made.')
+  plan=load_plan(root)
+  try:
+   documentary_preview.picture_plan(p,annotate_plan(p,root,copy.deepcopy(plan)),data.get('allow_silent_tail') is True)
+   def current(original,original_plan):
+    with LOCKS[pid]:
+     now=load(pid);now_plan=load_plan(root)
+     return now.get('updated')==original.get('updated') and now_plan['revision']==original_plan['revision'] and not any(x.get('stale_reasons') for x in annotate_plan(now,root,now_plan)['bites'])
+   result=documentary_preview.start(root,copy.deepcopy(p),copy.deepcopy(plan),data.get('allow_silent_tail') is True,current)
+   return jsonify(result),202
+  except (ValueError,OSError,KeyError) as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/documentary-review-preview')
+def documentary_review_preview_status(pid):
+ import documentary_preview
+ with LOCKS[pid]:
+  job=documentary_preview.status(pid)
+  if job.get('status') in ('queued','running','error'):return jsonify(job)
+  return jsonify(documentary_review_preview_state(pid))
+
+@app.get('/api/projects/<pid>/documentary-review-preview/<name>')
+def documentary_review_preview_file(pid,name):
+ with LOCKS[pid]:
+  state=documentary_review_preview_state(pid)
+  if state.get('status')!='ready' or state['url'].rsplit('/',1)[-1]!=name:raise NotFound('This documentary review preview is no longer current.')
+  return send_from_directory(folder(pid)/'renders',name,conditional=True,as_attachment=request.args.get('download')=='1')
+
+@app.route('/api/projects/<pid>/documentary-subtitles',methods=['GET','POST'])
+def documentary_subtitles(pid):
+ from documentary import load_plan,annotate_plan,adjusted_srt
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Adjusted subtitles are available only in a documentary project.')
+  if not p.get('srt') or p['srt'].get('recovered_from'):raise BadRequest('Upload the original SRT before creating adjusted subtitles.')
+  try:
+   original=(root/'inputs'/'captions.srt').read_text(encoding='utf-8-sig')
+   # Confirm the on-disk original still has the timings stored in the project.
+   if parse_srt(original)!=p['srt']['blocks']:raise ValueError('The uploaded SRT no longer matches the project. Upload it again.')
+   plan=load_plan(root);data=request.get_json(silent=True) or {}
+   if request.method=='POST' and data.get('revision')!=plan['revision']:raise ValueError('The sound-bite plan changed. Review subtitle splits again.')
+   result=adjusted_srt(original,p,annotate_plan(p,root,plan),data.get('splits',[]) if request.method=='POST' else None)
+  except (ValueError,OSError) as e:raise BadRequest(str(e))
+  return Response(result,content_type='application/x-subrip; charset=utf-8',headers={'Content-Disposition':'attachment; filename="documentary-adjusted.srt"','Cache-Control':'no-store'})
+
+# Frame verification may require decoding the entire source. Cache the result in
+# memory by project/plan version and source stat; no project data is changed.
+DOCUMENTARY_FRAME_JOBS={}
+DOCUMENTARY_FRAME_LOCK=threading.Lock()
+
+def documentary_frame_preflight(pid,p,root,plan):
+ from documentary_render_plan import plan as make_plan, load_decisions
+ files=[]
+ for asset in p.get('assets',[]):
+  path=(root/asset.get('path','')).resolve()
+  try:
+   stat=path.stat();files.append((asset.get('id'),str(path),stat.st_size,stat.st_mtime_ns))
+  except OSError:files.append((asset.get('id'),str(path),None,None))
+ decision_path=root/'reviews'/'documentary_frame_decisions.json'
+ try:
+  decision_stat=decision_path.stat();decision_key=(decision_stat.st_size,decision_stat.st_mtime_ns)
+ except OSError:decision_key=None
+ key=(pid,p.get('updated'),plan.get('revision'),tuple(files),decision_key)
+ with DOCUMENTARY_FRAME_LOCK:
+  job=DOCUMENTARY_FRAME_JOBS.get(key)
+  if job is None:
+   job={'status':'checking'};DOCUMENTARY_FRAME_JOBS[key]=job
+   for old in list(DOCUMENTARY_FRAME_JOBS):
+    if old!=key and old[0]==pid and DOCUMENTARY_FRAME_JOBS[old]['status']!='checking':DOCUMENTARY_FRAME_JOBS.pop(old,None)
+   def run():
+    try:
+     result=make_plan(p,root,plan,load_decisions(root))
+     with DOCUMENTARY_FRAME_LOCK:job.update(status='done',report=result)
+    except Exception:
+     app.logger.exception('Documentary frame preflight failed')
+     with DOCUMENTARY_FRAME_LOCK:job.update(status='error',error='Frame preflight failed; no export was made.')
+   threading.Thread(target=run,daemon=True,name='documentary-frame-preflight').start()
+  return copy.deepcopy(job)
+
+_DOCUMENTARY_DRAFT_BLOCKER='This is a script review draft, not a finished edit. Final export is blocked; complete the script and source checks before rendering.'
+
+def documentary_final_errors(p,root,plan):
+ from documentary_cue_groups import groups
+ errors=[]
+ if not p.get('documentary_beat_review'):return ['Final documentary export currently supports script-driven Beat storyboards only.']
+ # A Beat storyboard has its own source-range, cue and sound-bite validation.
+ # Do not mutate the draft flag or infer approvals from it.
+ errors.extend(e for e in check(p,True)['errors'] if e!=_DOCUMENTARY_DRAFT_BLOCKER)
+ if not p.get('scenes') or any(not s.get('approved') for s in p['scenes']):errors.append('Review and approve every picture slot before final export.')
+ try:groups(p)
+ except ValueError as e:errors.append(str(e))
+ if not plan.get('bites'):errors.append('The script-driven sound-bite plan is empty.')
+ for b in plan.get('bites',[]):
+  if b.get('stale_reasons'):errors.extend(b['stale_reasons'])
+ assets={a['id']:a for a in p.get('assets',[])}
+ used={s.get('asset_id') for s in p.get('scenes',[])}|{b.get('asset_id') for b in plan.get('bites',[])}
+ for aid in used:
+  a=assets.get(aid)
+  if not a:errors.append('A used picture or sound-bite source is missing.');continue
+  review=a.get('reuse_review') or {}
+  if review.get('decision')!='approved' or review.get('attested') is not True or not str(review.get('details') or '').strip():errors.append(f"{a.get('original_name') or a.get('name')}: record explicit reuse-rights approval and details.")
+ return list(dict.fromkeys(errors))
+
+@app.get('/api/projects/<pid>/documentary-export-readiness')
+def documentary_export_readiness(pid):
+ from documentary import load_plan,annotate_plan,build_timeline
+ with LOCKS[pid]:
+  p=load(pid);root=folder(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Documentary readiness is only available in documentary projects.')
+  report=check(p,True);errors=list(report['errors']);warnings=[];frame_preflight=None;implemented=bool(p.get('documentary_beat_review'))
+  try:
+   plan=annotate_plan(p,root,load_plan(root));build_timeline(p,plan)
+   if implemented:errors=documentary_final_errors(p,root,plan)
+   if not plan['bites']:errors.append('Add at least one sound bite to the documentary plan.')
+   if p.get('documentary_beat_review'):
+    frame_preflight=documentary_frame_preflight(pid,copy.deepcopy(p),root,copy.deepcopy(plan))
+    if frame_preflight['status']=='done':errors.extend(frame_preflight['report']['errors'])
+    elif frame_preflight['status']=='error':errors.append(frame_preflight['error'])
+    else:warnings.append('Frame-accurate picture preflight is still running.')
+   assets={a['id']:a for a in p.get('assets',[])}
+   for b in plan['bites']:
+    a=assets.get(b['asset_id']) or {};reuse=a.get('reuse_review') or {}
+    if reuse.get('decision')!='approved' or not str(reuse.get('details') or '').strip():errors.append(f"Sound bite {b['asset_name']}: record explicit reuse-rights approval with supporting details.")
+    warnings.append(f"Sound bite {b['asset_name']} {b['source_in_s']:.3f}–{b['source_out_s']:.3f}: independently review speaker, context, identity and source provenance before delivery.")
+  except (ValueError,OSError,KeyError) as e:errors.append(str(e))
+  return jsonify({'status':'checking' if frame_preflight and frame_preflight['status']=='checking' else ('blocked' if errors or not implemented else 'ready'),'export_implemented':implemented,'errors':errors,'warnings':warnings,'frame_preflight':frame_preflight,'detail':('Beat documentary export checks; human approvals are attestations, not independent verification.' if implemented else 'Final documentary rendering is not implemented for this storyboard type.')})
+
+@app.get('/api/projects/<pid>/strict-cut-check')
+def strict_cut_check(pid):
+ from strict_cuts import report
+ p=load(pid);return jsonify(report(p,folder(pid)))
+
+# Strict decoding may exceed a proxy's request timeout. Run it once per saved
+# project version in the background; polling never starts a render or edits data.
+STRICT_JOBS={}
+STRICT_JOBS_LOCK=threading.Lock()
+
+@app.get('/api/projects/<pid>/strict-cut-status')
+def strict_cut_status(pid):
+ from strict_cuts import report
+ p=load(pid);version=p.get('updated');key=(pid,version)
+ with STRICT_JOBS_LOCK:
+  job=STRICT_JOBS.get(key)
+  if job is None:
+   job={'state':'checking','version':version,'completed':0,'total':len(p.get('scenes') or [])}
+   STRICT_JOBS[key]=job
+   # Keep only the newest non-running status for this project.
+   for old in list(STRICT_JOBS):
+    if old!=key and old[0]==pid and STRICT_JOBS[old]['state']!='checking':STRICT_JOBS.pop(old,None)
+   def work():
+    try:
+     def progress(completed,total):
+      with STRICT_JOBS_LOCK:job.update(completed=completed,total=total)
+     result=report(p,folder(pid),progress=progress)
+     with STRICT_JOBS_LOCK:job.update(state='done',report=result,completed=len(p.get('scenes') or []))
+    except Exception as exc:
+     app.logger.exception('Strict cut check failed')
+     with STRICT_JOBS_LOCK:job.update(state='error',error=str(exc)[:300] or 'Strict check failed.')
+   threading.Thread(target=work,daemon=True,name='strict-cut-check').start()
+  return jsonify(dict(job))
+
+@app.post('/api/projects/<pid>/strict-cut-status/retry')
+def retry_strict_cut_status(pid):
+ p=load(pid);key=(pid,p.get('updated'))
+ with STRICT_JOBS_LOCK:
+  job=STRICT_JOBS.get(key)
+  if job and job['state']=='error':STRICT_JOBS.pop(key,None)
+ return jsonify({'ok':True})
+
+def start_documentary_final(pid,p,data):
+ from documentary import load_plan,annotate_plan,adjusted_srt
+ from documentary_render_job import DocumentaryRenderJob
+ root=folder(pid)
+ if not p.get('documentary_beat_review'):raise BadRequest('Documentary export currently supports script-driven Beat storyboards only.')
+ if data.get('final') is not True:raise BadRequest('Choose final documentary export.')
+ if data.get('strict_checked_version')!=p.get('updated'):raise BadRequest('Check the current documentary cue shots before rendering.')
+ # A fade is a brightness ramp on existing frames, so it can no longer block an
+ # export. Either choice must still be made explicitly, never assumed.
+ if data.get('omit_fade') is not True and data.get('fade') is not True:
+  raise BadRequest('Choose whether this export includes the scripted fade.')
+ try:
+  plan=annotate_plan(p,root,load_plan(root));errors=documentary_final_errors(p,root,plan)
+  if errors:return jsonify({'errors':errors}),400
+  width,height=output_size(p.get('format','landscape'),p.get('size'))
+  burn_srt=data.get('srt_subtitles') is True;subtitle_ass=None;adjusted=None
+  if burn_srt:
+   from caption_layout import make_single_line_ass
+   original=(root/'inputs'/'captions.srt').read_text(encoding='utf-8-sig')
+   if parse_srt(original)!=(p.get('srt') or {}).get('blocks'):raise ValueError('The original SRT no longer matches the project.')
+   adjusted=adjusted_srt(original,p,plan,data.get('subtitle_splits') or [])
+   subtitle_ass=make_single_line_ass(parse_srt(adjusted),width,height)
+  def current(original,source_plan):
+   with LOCKS[pid]:
+    now=load(pid);now_plan=annotate_plan(now,root,load_plan(root))
+    if now.get('updated')!=original.get('updated') or now_plan['revision']!=source_plan['revision'] or any(b.get('stale_reasons') for b in now_plan['bites']):raise ValueError('The project or sound-bite plan changed; no MP4 was published.')
+  def publish(original,source_plan,candidate,final,record,adjusted_text):
+   with LOCKS[pid]:
+    current(original,source_plan)
+    srt_file=None;record_file=root/'reviews'/(final.stem+'.json')
+    try:
+     if adjusted_text is not None:
+      srt_file=final.with_suffix('.adjusted.srt');srt_file.write_text(adjusted_text,encoding='utf-8');record['adjusted_srt']=srt_file.name
+     write(record_file,record);candidate.replace(final)
+    except Exception:
+     record_file.unlink(missing_ok=True)
+     if srt_file:srt_file.unlink(missing_ok=True)
+     raise
+  from documentary_music import music_path,settings as music_settings
+  music=music_settings(p);use_music=bool(music['enabled'] and music['present'] and music_path(root).is_file())
+  job=DocumentaryRenderJob(root,p,plan,width,height,{'enhance_picture':data.get('enhance_picture') is True,'srt_subtitles':burn_srt,'music':use_music},subtitle_ass,adjusted,current,publish,lambda state:write(root/'render_status.json',state))
+  JOBS[pid]=job;job.start();return jsonify({'render':job.snapshot()}),202
+ except (ValueError,OSError,KeyError,TypeError) as e:raise BadRequest(str(e))
+
 @app.post('/api/projects/<pid>/render')
 def render(pid):
  with LOCKS[pid]:
-  editable(pid);p=load(pid);final=(request.get_json(silent=True) or {}).get('final') is True;report=check(p,final)
+  editable(pid);p=load(pid);data=request.get_json(silent=True) or {};final=data.get('final') is True
+  if p.get('edit_mode','review')=='documentary':return start_documentary_final(pid,p,data)
+  report=check(p,final)
+  from strict_cuts import report as strict_report
+  strict=strict_report(p,folder(pid))
+  if strict['errors']:report['errors'].extend(strict['errors']);report['can_export']=False
+  if strict['required'] and data.get('strict_checked_version')!=p.get('updated'):
+   report['errors'].append('Review and confirm the current per-shot strict cut check before export.');report['can_export']=False
   if report['errors']:return jsonify(report),400
-  manifest(p);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
+  enhance_picture=data.get('enhance_picture') is True
+  manifest(p,strict,enhance_picture);root=folder(pid);name=('final' if final else 'review')+'_'+time.strftime('%Y%m%d_%H%M%S')+'.mp4'
   job=RenderJob(root,on_change=lambda state:write(root/'render_status.json',state),story_path=root/'storyboard.json',catalog_path=root/'catalog.json',output_name=name);JOBS[pid]=job
-  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'export_type':'final' if final else 'review','captions_burned_in':False,'created':time.time()})
-  job.start(captions=False);return jsonify({'render':job.snapshot()}),202
+  burn_script=data.get('script_captions') is True;burn_srt=data.get('srt_subtitles') is True
+  caption_entries=[]
+  if burn_script:
+   for scene in p['scenes']:
+    row=scene.get('plan_row') or {}
+    # Older combined fields are ambiguous editing instructions, not caption text.
+    caption='' if row.get('plain_cue') and 'continuity' not in row else str(row.get('required_caption') or '').strip()
+    if caption and caption.casefold() not in ('none','n/a','na','—','-'):
+     caption_entries.append((scene['frame_in'],scene['frame_out'],caption))
+  caption_file=None
+  if caption_entries:
+   caption_file=root/'reviews'/(Path(name).stem+'_script_captions.srt')
+   caption_file.write_text('\n\n'.join(f'{i}\n{srt_stamp(round(a/30*1000))} --> {srt_stamp(round(b/30*1000))}\n{re.sub(chr(10)+chr(10), chr(10), text)}' for i,(a,b,text) in enumerate(caption_entries,1))+'\n',encoding='utf-8')
+  write(root/'reviews'/(Path(name).stem+'.json'),{'project':copy.deepcopy(p),'validation':report,'strict_cut_report':strict,'export_type':'final' if final else 'review','captions_burned_in':bool(caption_entries),'script_captions_requested':burn_script,'srt_subtitles_burned_in':burn_srt,'picture_enhancement':enhance_picture,'created':time.time()})
+  one_line_file=None
+  if burn_srt:
+   from caption_layout import make_single_line_ass
+   if not (p.get('srt') or {}).get('blocks'):raise BadRequest('Import an SRT before burning subtitles.')
+   width,height=output_size(p.get('format','landscape'),p.get('size'))
+   try:ass=make_single_line_ass(p['srt']['blocks'],width,height)
+   except ValueError as e:raise BadRequest(str(e))
+   one_line_file=root/'reviews'/(Path(name).stem+'_srt_display.ass');one_line_file.write_text(ass,encoding='utf-8')
+  job.start(captions=burn_srt,script_caption_srt=caption_file,narration_caption_file=one_line_file);return jsonify({'render':job.snapshot()}),202
 @app.post('/api/projects/<pid>/cancel')
 def cancel(pid):
  folder(pid)
@@ -533,11 +2195,25 @@ def cancel(pid):
 def asset_file(pid,aid):
  p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
  if not a:raise NotFound('Asset not found.')
- return send_from_directory(folder(pid),a['path'],conditional=True)
+ root=folder(pid)
+ if a.get('kind')=='video' and str(a.get('path','')).lower().endswith(('.mp4','.mov')):
+  source=root/a['path']
+  # A player cannot seek a file whose index is at the end without fetching all of
+  # it; that is what left the monitor black. Serve a cached fast-start copy and
+  # leave the uploaded original untouched.
+  try:
+   if mp4_moov_at_end(source):
+    cached=root/'.cache/faststart'/(a['id']+'.mp4')
+    if not cached.exists() or cached.stat().st_size<1024 or cached.stat().st_mtime<source.stat().st_mtime:
+     cached.parent.mkdir(parents=True,exist_ok=True)
+     if not make_fast_start(source,cached):cached=cached if cached.exists() else None
+    if cached and cached.exists():return send_file(cached,conditional=True)
+  except OSError:pass
+ return send_from_directory(root,a['path'],conditional=True)
 @app.get('/api/projects/<pid>/narration')
 def narration(pid):
  p=load(pid)
- if not p['voiceover']:raise NotFound('No narration imported.')
+ if not p.get('voiceover'):raise NotFound('No narration imported.')
  return send_from_directory(folder(pid),p['voiceover']['path'],conditional=True)
 @app.get('/api/projects/<pid>/exports/<name>')
 def export_file(pid,name):
@@ -547,12 +2223,13 @@ def export_file(pid,name):
 def bundle(pid):
  response=jsonify(load(pid));response.headers['Content-Disposition']='attachment; filename="production_storyboard.json"';return response
 @app.get('/api/projects/<pid>/assets/<aid>/planned-samples/<bid>')
+@project_io_lock
 def planned_samples(pid,aid,bid):
  from conform import samples
  p=load(pid);a=next((a for a in p['assets'] if a['id']==aid),None)
  if not a:raise NotFound('Media file not found.')
  cut=next((r for r in a.get('document_plan',{}).get('cuts',[]) if str(r['beat_id'])==bid),None)
- if not cut or a['kind']!='video':raise NotFound('Planned cut not found.')
+ if not cut or a['kind'] not in ['video','image']:raise NotFound('Planned cut not found.')
  try:path=samples(folder(pid),a,cut)
  except Exception as e:raise BadRequest('Cannot inspect planned cut: '+str(e)[:250])
  return send_from_directory(path.parent,path.name,conditional=True)
@@ -563,16 +2240,262 @@ def download_cut_audit(pid):
  import csv,io
  from flask import Response
  try:result=audit(load(pid))
- except ValueError as e:raise BadRequest('Cannot compare edit plan: '+str(e))
+ except ValueError as e:raise BadRequest('Cannot compare the SRT block map: '+str(e))
  if request.args.get('format')=='json':return jsonify(result)
  output=io.StringIO();fields=list(result['rows'][0]) if result['rows'] else ['scene','status'];writer=csv.DictWriter(output,fieldnames=fields);writer.writeheader();writer.writerows(result['rows'])
  return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="cut-audit.csv"'})
+
+def _shot_plan_prereqs(p):
+ from shot_plan import _analysis
+ if not p.get('srt'):raise BadRequest('Upload the authored SRT first; the plan is built from its blocks.')
+ if not _analysis(folder(p['id'])) and any(a['kind']=='video' for a in p['assets']):raise BadRequest('The sources have not finished decoding yet. Run the build once, then open the plan builder.')
+
+@app.get('/api/projects/<pid>/script-reading')
+@project_io_lock
+def script_reading_report(pid):
+ return jsonify(script_reading(load(pid),include_shots=True))
+
+@app.get('/api/projects/<pid>/shot-index')
+def shot_index_report(pid):
+ from shot_plan import shots
+ p=load(pid)
+ if not any(a['kind']=='video' for a in p['assets']):raise BadRequest('Upload at least one video first.')
+ index=shots(folder(pid),p['assets'])
+ total=sum(len(e['shots']) for e in index)
+ return jsonify({'sources':index,'shot_count':total,'scope':'Detected shot boundaries in decoded files. Nothing here says who or what a shot shows.'})
+
+@app.get('/api/projects/<pid>/feasibility')
+def feasibility_report(pid):
+ from shot_plan import feasibility
+ p=load(pid)
+ blocks=request.args.get('blocks')
+ scope=[int(x) for x in re.findall(r'\d+',blocks)] if blocks else None
+ try:return jsonify(feasibility(p,folder(pid),scope))
+ except ValueError as e:raise BadRequest('Feasibility: '+str(e))
+
+@app.get('/api/projects/<pid>/candidates')
+def candidate_report(pid):
+ from shot_plan import candidates as candidate_list,shots_of_length
+ p=load(pid)
+ limit=min(int(request.args.get('limit',8) or 8),40)
+ try:
+  if request.args.get('length_s') is not None:
+   length=float(request.args['length_s'])
+   if not 0<length<3600:raise ValueError('Picture length must be between 0 and 3600 seconds.')
+   handle=float(request.args.get('handle_s') or 0)
+   if not 0<=handle<1.5:raise ValueError('Transition handle must be under 1.5 seconds.')
+   return jsonify({'length_s':round(length,3),'needed_s':round(length+handle,3),'candidates':shots_of_length(folder(pid),p,length,handle,limit)})
+  return jsonify(candidate_list(p,folder(pid),beat_id=request.args.get('beat'),limit=limit))
+ except ValueError as e:raise BadRequest(str(e))
+
+@app.get('/api/projects/<pid>/coverage-summary')
+def coverage_summary(pid):
+ p=load(pid);assets={a['id']:a for a in p['assets']};video=still=unassigned=0;used=set()
+ for scene in p.get('scenes',[]):
+  seconds=(scene['frame_out']-scene['frame_in'])/30
+  asset=assets.get(scene.get('asset_id'))
+  if not asset:unassigned+=seconds;continue
+  used.add(asset['id'])
+  if is_still(p,asset) or (scene.get('plan_row') or {}).get('native_static_interval'):still+=seconds
+  else:video+=seconds
+ total=video+still+unassigned
+ result={'narration_duration_seconds':(p.get('voiceover') or {}).get('duration'), 'cue_count':len((p.get('srt') or {}).get('blocks',[])), 'source_count':len(used), 'timeline_seconds':round(total,3), 'video_seconds':round(video,3), 'still_seconds':round(still,3), 'unassigned_seconds':round(unassigned,3), 'video_percent':round(100*video/total,2) if total else 0, 'still_percent':round(100*still/total,2) if total else 0, 'unresolved_issues':check(p,True)['errors'], 'note':'Declared native static intervals count as stills; source identity, eligibility and rights require review.'}
+ response=jsonify(result);response.headers['Content-Disposition']='attachment; filename="coverage-summary.json"';return response
+
+@app.get('/api/projects/<pid>/frame-qc')
+@project_io_lock
+def frame_qc_sheet(pid):
+ from frame_qc import build
+ p=load(pid)
+ try:manifest=build(folder(pid),p,per_sheet=request.args.get('per_sheet',20),group=request.args.get('sheet',1))
+ except ValueError as e:raise BadRequest(str(e))
+ if request.args.get('format')=='json':
+  return jsonify({k:v for k,v in manifest.items() if k!='file'}|{'url':f'/api/projects/{pid}/frame-qc/{manifest["file"]}'})
+ return send_from_directory(folder(pid)/'.cache/frame_qc',manifest['file'],conditional=True)
+
+@app.get('/api/projects/<pid>/frame-qc/<name>')
+def frame_qc_file(pid,name):
+ if not re.fullmatch(r'frame_qc_sheet_\d{2,5}_[0-9a-f]{24}\.jpg',name):raise NotFound('Sheet not found.')
+ return send_from_directory(folder(pid)/'.cache/frame_qc',name,conditional=True)
+
+@app.get('/api/local-understanding/capabilities')
+def local_understanding_capabilities():
+ from local_understanding import capabilities
+ return jsonify(capabilities())
+
+def understanding_source(pid,target):
+ p=load(pid);root=folder(pid)
+ if target=='narration':
+  a=p.get('voiceover');kind='audio'
+ else:
+  if not re.fullmatch('[a-f0-9]{16}',target):raise NotFound('Media not found.')
+  a=next((a for a in p['assets'] if a['id']==target and a['kind']=='video'),None);kind='video'
+ if not a:raise NotFound('Media not found.')
+ path=(root/a['path']).resolve()
+ if not path.is_relative_to(root.resolve()) or not path.is_file():raise NotFound('Media file not found.')
+ return root,path,kind,float(a['duration'])
+
+@app.route('/api/projects/<pid>/understanding/<target>',methods=['GET','POST'])
+def local_understanding_report(pid,target):
+ from local_understanding import enqueue,read_result
+ with LOCKS[pid]:
+  root,path,kind,duration=understanding_source(pid,target)
+  if request.method=='POST':enqueue(root,target,path,kind,duration)
+  return jsonify(read_result(root,target,path))
+
+@app.post('/api/projects/<pid>/understanding/<target>/sound-events')
+def reanalyse_sound_events(pid,target):
+ from local_understanding import enqueue_sound_events
+ with LOCKS[pid]:
+  root,path,_,_=understanding_source(pid,target)
+  try: enqueue_sound_events(root,target,path)
+  except ValueError as e: raise BadRequest(str(e))
+  return jsonify({'status':'queued'})
+
+
+@app.post('/api/projects/<pid>/understanding/<target>/visual')
+def reanalyse_visual(pid,target):
+ from local_understanding import enqueue_visual
+ with LOCKS[pid]:
+  root,path,kind,_=understanding_source(pid,target)
+  if kind != 'video': raise BadRequest('Visual analysis requires a video source.')
+  try: enqueue_visual(root,target,path)
+  except ValueError as e: raise BadRequest(str(e))
+  return jsonify({'status':'queued'})
+
+
+def transcript_srt(report, require_complete=False):
+ if report.get('status') in ('stale','not_started','error','interrupted'):raise BadRequest('No current transcript is available for this source.')
+ stage=(report.get('stages') or {}).get('transcript') or {}
+ if require_complete and stage.get('status')!='complete':raise BadRequest('Wait for transcription to finish before using it as the project SRT.')
+ segments=(stage.get('result') or {}).get('segments') or []
+ if not segments:raise BadRequest('No transcript segments are available yet.')
+ lines=[];last=0
+ for i,segment in enumerate(segments,1):
+  try:a=round(float(segment['start_s'])*1000);b=round(float(segment['end_s'])*1000)
+  except (ValueError,TypeError,KeyError,OverflowError):raise BadRequest('Transcript has invalid timestamps; review it in the analysis report.')
+  text=' '.join(str(segment.get('text') or '').split())
+  if a<last or a<0 or b<=a or not text:raise BadRequest('Transcript timestamps overlap or are invalid; review the analysis report before making an SRT.')
+  lines.append('%d\n%s --> %s\n%s'%(i,srt_stamp(a),srt_stamp(b),text));last=b
+ return '\n\n'.join(lines)+'\n', stage.get('status')=='complete'
+
+@app.get('/api/projects/<pid>/understanding/<target>/transcript.srt')
+def local_transcript_srt(pid,target):
+ from flask import Response
+ from local_understanding import read_result
+ with LOCKS[pid]:
+  root,path,_,_=understanding_source(pid,target)
+  text,complete=transcript_srt(read_result(root,target,path))
+  suffix='' if complete else '-partial'
+  return Response(text,mimetype='text/plain; charset=utf-8',headers={'Content-Disposition':'attachment; filename="transcript'+suffix+'.srt"'})
+
+@app.post('/api/projects/<pid>/understanding/narration/apply-srt')
+def apply_narration_transcript(pid):
+ from local_understanding import read_result
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if d.get('confirm_generated') is not True:raise BadRequest('Confirm that this is an unverified machine transcript before applying it.')
+  if (p.get('srt') or p.get('scenes')) and d.get('confirm_replace') is not True:
+   raise BadRequest('Confirm replacement: this replaces the current SRT and clears the storyboard.')
+  root,path,_,_=understanding_source(pid,'narration')
+  text,_=transcript_srt(read_result(root,'narration',path),require_complete=True)
+  blocks=parse_srt(text)
+  # Match normal SRT upload semantics, but only after the user confirms. No timestamps
+  # are stretched to match narration and old block maps remain detectably stale.
+  (root/'inputs/captions.srt').write_text(text,encoding='utf-8')
+  p['srt']={'blocks':blocks,'name':'Machine transcript · review required.srt'};p.pop('srt_removed',None)
+  p['scenes']=[];p.pop('srt_recovery',None)
+  save(p)
+  from automatic import maybe_queue
+  maybe_queue(sys.modules[__name__],p)
+  return jsonify(public(p))
+
+@app.get('/api/projects/<pid>/scenes/<sid>/understanding')
+def scene_understanding_report(pid,sid):
+ from local_understanding import read_result,scene_context
+ with LOCKS[pid]:
+  p=load(pid)
+  scene=next((s for s in p['scenes'] if s['id']==sid),None)
+  if not scene:raise NotFound('Scene not found.')
+  target=scene.get('asset_id')
+  if not target:raise NotFound('This scene has no video source.')
+  root,path,kind,_=understanding_source(pid,target)
+  return jsonify(scene_context(read_result(root,target,path),scene))
+
+@app.get('/api/projects/<pid>/block-map-editor')
+def block_map_editor(pid):
+ from edl import srt_signature
+ from shot_plan import prefill
+ p=load(pid)
+ try: rows=prefill(p,parent_beat_min(1))
+ except ValueError as e:raise BadRequest(str(e))
+ existing=p.get('srt_block_map')
+ if existing:
+  if existing.get('based_on_srt')!=srt_signature(p):
+   raise BadRequest('The SRT changed since this map was imported. Review and re-upload a matching map, or remove it before starting a new one.')
+  rows=existing['beats']
+ return jsonify(rows=rows,srt_signature=srt_signature(p),existing=bool(existing))
+
+@app.get('/api/projects/<pid>/block-map-template')
+def block_map_template(pid):
+ from shot_plan import prefill_csv,guidance
+ from flask import Response
+ p=load(pid)
+ try:
+  if request.args.get('format')=='json':return jsonify(guidance(p,folder(pid),parent_beat_min(1)))
+  text=prefill_csv(p,parent_beat_min(1))
+ except ValueError as e:raise BadRequest(str(e))
+ return Response(text,mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="block-map-template.csv"'})
+
+def parent_beat_min(value):
+ from edl import integer
+ return integer(value,'beat')
+
+@app.get('/api/projects/<pid>/flow-audit')
+@project_io_lock
+def download_flow_audit(pid):
+ from picture_flow import csv_rows,apply_flow
+ import csv,io
+ from flask import Response
+ p=load(pid);report=p.get('picture_flow') or apply_flow(copy.deepcopy(p),folder(pid),snap=False)
+ if request.args.get('format')=='json':return jsonify(report)
+ rows=csv_rows(report);output=io.StringIO();writer=csv.writer(output);writer.writerows(rows)
+ return Response(output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename="flow-audit.csv"'})
 
 def thumbnail_key(scene,asset,path):
  path=Path(path);stat=path.stat();key=hashlib.sha256(json.dumps([asset['id'],asset['path'],stat.st_size,stat.st_mtime_ns,round(scene['in_s']*1000000)]).encode()).hexdigest()[:24]
  return scene['id']+'_'+key+'.jpg'
 
+@app.get('/api/projects/<pid>/assets/<aid>/timeline-thumbnail')
+@project_io_lock
+def documentary_timeline_thumbnail(pid,aid):
+ p=load(pid)
+ if p.get('edit_mode','review')!='documentary':raise NotFound('Documentary timeline thumbnail not found.')
+ asset=next((a for a in p.get('assets',[]) if a['id']==aid and a.get('kind')=='video'),None)
+ if not asset:raise NotFound('Source video not found.')
+ try:
+  at=float(request.args.get('at',''))
+  if not math.isfinite(at) or at<0 or at>=float(asset.get('duration') or 0):raise ValueError()
+ except (ValueError,TypeError):raise BadRequest('Choose a time within the source video.')
+ source=(folder(pid)/asset['path']).resolve();root=folder(pid).resolve()
+ if not source.is_relative_to(root/'sources') or not source.is_file():raise NotFound('Source video is missing.')
+ at=round(at,2);stat=source.stat();key=hashlib.sha256(json.dumps([aid,asset.get('revision'),stat.st_size,stat.st_mtime_ns,at]).encode()).hexdigest()[:24]
+ cache=root/'.cache'/'documentary-thumbnails';cache.mkdir(parents=True,exist_ok=True);out=cache/(key+'.jpg')
+ if not out.exists():
+  from conform import capture
+  with THUMBNAIL_SLOTS:
+   if not out.exists():
+    cap=capture(source)
+    try:cap.set(cv2.CAP_PROP_POS_MSEC,at*1000);ok,img=cap.read()
+    finally:cap.release()
+    if not ok:raise NotFound('The source frame could not be decoded.')
+    temp=out.with_name(out.stem+'.'+uid()+'.jpg')
+    try:cv2.imwrite(str(temp),cv2.resize(img,(200,112)));temp.replace(out)
+    finally:temp.unlink(missing_ok=True)
+ return send_from_directory(cache,out.name,conditional=True)
+
 @app.get('/api/projects/<pid>/scenes/<sid>/thumbnail')
+@project_io_lock
 def scene_thumbnail(pid,sid):
  p=load(pid);s=next((s for s in p['scenes'] if s['id']==sid),None)
  if not s:raise NotFound('Scene not found.')
