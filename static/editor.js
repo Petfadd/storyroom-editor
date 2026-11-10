@@ -296,13 +296,13 @@ async function loadPlanning(id){
 function docVolumeHTML(){
   if(!P || P.edit_mode!=='documentary' || !P.documentary_beat_review) return '';
   const v = docTrackVolume;
-  const mix = (label, key, value, hint, extra='') => `<div class="doc-volume-row"><label for="doc-vol-${key}">${label}</label><input id="doc-vol-${key}" type="range" min="0" max="150" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><input id="doc-vol-${key}-n" type="number" min="0" max="150" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><span>%</span><button type="button" class="doc-vol-reset" title="Back to 100%" onclick="saveDocVolume('${key}',100)">↺</button></div><p class="small">${hint}</p>${extra}`;
-  const musicHeld = !(docMusic && docMusic.file_present);
-  return `<div class="doc-volume-control"><label>Audio levels</label>
-  ${mix('Narration', 'narration', v.narration, 'The uploaded voiceover. 100% is the level it was recorded and measured at.')}
-  ${mix('Clip audio', 'clip', v.clip, 'The speech inside a selected sound bite. It is matched to the narration first, then this level is applied.')}
-  ${mix('Music', 'music', v.music, musicHeld ? 'Add background music in Setup before this level does anything.' : 'The bed under the film. It still dips or stops under the narration and is cut under every sound bite.')}
-  <p class="small">Preview reflects narration, clip and music balance. The saved levels are applied when the film is exported.</p></div>`;
+  // Labels only. Each fader says what it controls and nothing else.
+  const mix = (label, key, value, max) => `<div class="doc-volume-row"><label for="doc-vol-${key}">${label}</label><input id="doc-vol-${key}" type="range" min="0" max="${max}" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><input id="doc-vol-${key}-n" type="number" min="0" max="${max}" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><span>%</span></div>`;
+  const musicOff = !(docMusic && docMusic.file_present);
+  return `<div class="doc-volume-control"><label>Audio</label>
+  ${mix('Narration', 'narration', v.narration, 150)}
+  ${mix('Clip audio', 'clip', v.clip, 150)}
+  ${mix('Music', 'music', v.music, 100)}${musicOff?'<p class="small">No music added.</p>':''}</div>`;
 }
 
 // The review preview is one already-mixed file: narration and the selected sound

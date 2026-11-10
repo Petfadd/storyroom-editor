@@ -590,10 +590,17 @@ function docSpeechMode(t){
 }
 // Keep the music bed locked to the narration clock and follow the saved level.
 function docSyncMusic(t,playing){
- const d=window.docTimelineData,url=d?.music_url;
+ // The timeline payload carries no music field, so this used to read an undefined
+ // `music_url` and bail out on the line below: the bed was created, then silently
+ // paused forever. The URL comes from the music settings instead, which already
+ // report whether a file is present and enabled.
+ // `docMusic.url` is versioned by the file's size and length, so replacing the
+ // bed yields a different URL and the browser cannot replay the old one.
+ const url=(docMusic&&docMusic.enabled&&docMusic.file_present)?(docMusic.url||`/api/projects/${P?.id}/documentary-music/file`):'';
  const node=docMusicNode;
  if(!url){if(node&&!node.paused)node.pause();return}
  if(!node||node.getAttribute('src')!==url){
+  docMusicSrc=url;
   const el=docMusicElement();el.src=url;
   try{el.currentTime=Math.max(0,t||0)}catch{}
   return;
@@ -604,9 +611,15 @@ function docSyncMusic(t,playing){
  node.volume=Math.max(0,Math.min(1,base*keep));
  if(!playing){if(!node.paused)node.pause();return}
  // A live layer may drift; nudge it back without restarting the picture.
+ // The bed loops, so its own position wraps while the film clock does not.
+ // Compare where the loop actually is with where it should be, rather than
+ // against the unwrapped time, which could never match past the first pass.
  const want=Math.max(0,t||0);
- if(node.readyState>=1&&Math.abs((node.currentTime%Math.max(1,node.duration||1e9))-want)>0.35){
-  try{node.currentTime=want}catch{}
+ const length=node.duration||0;
+ const here=length>0?node.currentTime%length:node.currentTime;
+ const there=length>0?want%length:want;
+ if(node.readyState>=1&&Math.abs(here-there)>0.35){
+  try{node.currentTime=there}catch{}
  }
  if(node.paused)node.play().catch(()=>{});
 }

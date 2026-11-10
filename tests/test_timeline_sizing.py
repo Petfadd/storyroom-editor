@@ -747,3 +747,79 @@ class AudioLevelsTest(unittest.TestCase):
         music = body.index("'Music'")
         self.assertLess(narration, clip)
         self.assertLess(clip, music)
+
+
+class BackgroundMusicTest(unittest.TestCase):
+    """The bed has to reach the browser, and be replaced when the file changes."""
+
+    def setUp(self):
+        self.timeline = Path('static/documentary_timeline.js').read_text()
+        self.studio = Path('static/studio.js').read_text()
+        self.app = Path('app.py').read_text()
+
+    def test_music_url_does_not_come_from_the_timeline_payload(self):
+        # It used to read `d.music_url`, which the server never sent, so the layer
+        # attached nothing and paused on the first line of every sync.
+        start = self.timeline.index('function docSyncMusic(')
+        # The function reports a bad URL on its own first line, so the window has
+        # to reach past the early return.
+        body = self.timeline[start:start + 2400]
+        # Match executable code, not the comment that explains the old bug.
+        self.assertNotIn('?.music_url', body)
+        self.assertNotIn("d.music_url", body)
+        self.assertIn('docMusic.url', body,
+                      'the bed URL comes from the music settings')
+
+    def test_looping_bed_follows_the_wrapped_clock(self):
+        start = self.timeline.index('function docSyncMusic(')
+        body = self.timeline[start:start + 2000]
+        self.assertIn('want%length', body,
+                      'a looping bed must be compared on the wrapped clock')
+
+    def test_music_file_is_not_cached_immutable(self):
+        # It is served from one fixed path and replaced in place, so an immutable
+        # cache kept the previous file playing for a year after a replacement.
+        start = self.app.index('def cache(response):')
+        body = self.app[start:start + 1400]
+        self.assertIn('music', body)
+        self.assertIn('max-age=604800', body)
+        self.assertIn('and not music', body)
+
+    def test_music_url_carries_a_version(self):
+        start = self.app.index('def _music_state(')
+        body = self.app[start:start + 900]
+        self.assertIn('?v=', body,
+                      'a replaced bed must be a different URL to bypass caches')
+
+    def test_upload_and_read_share_one_reply_shape(self):
+        start = self.app.index('def _music_state(')
+        tail = self.app[start:]
+        upload = tail.index('def upload_documentary_music')
+        self.assertIn('_music_state(p,root)', tail[upload:upload + 900],
+                      'the upload reply must report name and url, not just settings')
+        for key in ("state['name']", "state['size']", "state['duration_s']"):
+            self.assertIn(key, tail[:upload])
+
+    def test_music_card_names_the_saved_file(self):
+        self.assertIn("docMusicCard.name", self.studio)
+
+    def test_no_explanatory_sentences_on_the_music_card(self):
+        start = self.studio.index('Background music or SFX')
+        body = self.studio[start:start + 1000]
+        self.assertNotIn('A sound bite always carries the only audio', body)
+        self.assertNotIn('the same way narration pauses', body)
+
+
+class AudioFaderLabelsOnlyTest(unittest.TestCase):
+    def test_volume_panel_carries_no_sentences(self):
+        editor = Path('static/editor.js').read_text()
+        start = editor.index('function docVolumeHTML')
+        end = editor.index('function previewDocVolume')
+        body = editor[start:end]
+        for sentence in ('matched to the narration first',
+                         'The bed under the film',
+                         'still dips or stops',
+                         'Preview reflects narration'):
+            self.assertNotIn(sentence, body)
+        for label in ('Narration', 'Clip audio', 'Music'):
+            self.assertIn(label, body)

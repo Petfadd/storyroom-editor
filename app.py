@@ -487,10 +487,18 @@ def cache(response):
  # source media (the URL carries the asset revision) and the narration mix (a
  # fresh uuid per render). A 50MB clip served no-cache re-downloaded on each
  # seek, which is what left the monitor hanging on a black frame.
- replayable=(request.path.endswith('/file')
+ # The music bed is served from one fixed path and is *replaced* rather than
+ # re-written in place, so it must never be cached as immutable: a replacement
+ # would otherwise keep playing the previous file for a year.
+ music=bool(re.fullmatch(r'/api/projects/[^/]+/documentary-music/file',request.path))
+ replayable=(request.path.endswith('/file') and not music
              or re.fullmatch(r'/api/projects/[^/]+/documentary-audio/documentary_audio_[a-f0-9]{32}\.(wav|m4a)',request.path))
  if replayable and request.args.get('download')!='1' and response.status_code in (200,206):
   response.headers['Cache-Control']='private, max-age=31536000, immutable'
+ elif music and response.status_code in (200,206):
+  # Still cacheable, but keyed by the file's own identity so a new upload is a
+  # different URL and reaches the browser immediately.
+  response.headers['Cache-Control']='private, max-age=604800'
  else:
   response.headers['Cache-Control']='no-store'
  return response
@@ -1679,20 +1687,33 @@ def documentary_audio_file(pid,name):
   if p.get('edit_mode','review')!='documentary' or job.get('status')!='done' or job.get('audio_processing_version')!=documentary_audio.AUDIO_PROCESSING_VERSION or job.get('output')!=name or not current or job.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites']):raise NotFound('Documentary audio is not current.')
   return send_from_directory(root/'renders',name,conditional=True,as_attachment=request.args.get('download')=='1')
 
+def _music_state(p,root):
+ """One reply shape for upload, patch and read, so the panel cannot be told half a story."""
+ from documentary_music import settings,music_path
+ state=settings(p)
+ music=p.get('documentary_music') or {}
+ # Name and length are what prove a file actually landed. Without them a
+ # successful upload and a silent no-op look identical in the panel.
+ state['name']=music.get('name') or ''
+ state['size']=int(music.get('size') or 0)
+ state['duration_s']=float(music.get('duration_s') or 0)
+ state['file_present']=music_path(root).is_file()
+ # The version comes from the file's own size and mtime, so replacing the bed
+ # changes the URL and no browser can serve the previous one from cache.
+ version=f"{state['size']}-{state['duration_s']:.3f}"
+ state['url']=f'/api/projects/{p["id"]}/documentary-music/file?v={version}' if state['file_present'] else ''
+ levels=p.get('documentary_audio_levels') or {}
+ state['narration_percent']=levels.get('narration_percent',100)
+ state['clip_percent']=levels.get('clip_percent',100)
+ return state
+
 @app.get('/api/projects/<pid>/documentary-music')
 def documentary_music_state(pid):
- from documentary_music import settings,music_path
  root=folder(pid)
  with LOCKS[pid]:
   p=load(pid)
   if p.get('edit_mode','review')!='documentary':raise BadRequest('Background music is available only in a documentary project.')
-  state=settings(p)
-  state['file_present']=music_path(root).is_file()
-  state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
-  levels=p.get('documentary_audio_levels') or {}
-  state['narration_percent']=levels.get('narration_percent',100)
-  state['clip_percent']=levels.get('clip_percent',100)
- return jsonify(state)
+  return jsonify(_music_state(p,root))
 
 @app.post('/api/projects/<pid>/documentary-music')
 def upload_documentary_music(pid):
@@ -1708,7 +1729,7 @@ def upload_documentary_music(pid):
   music=dict(p.get('documentary_music') or {})
   music.update(record);music.setdefault('enabled',True);music.setdefault('volume_percent',35);music.setdefault('narration_level','duck')
   p['documentary_music']=music;save(p)
- return jsonify(settings(p))
+  return jsonify(_music_state(p,root))
 
 @app.patch('/api/projects/<pid>/documentary-music')
 def update_documentary_music(pid):
