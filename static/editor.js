@@ -548,9 +548,13 @@ const MONITOR_SHAPES={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5
 // The shape switch lives beside the monitor, where you can see what it does. It
 // writes the same project setting as Setup's Aspect ratio control, so the two can
 // never disagree. Only an explicit click changes a production.
-const ASPECT_ORDER=['landscape','portrait','square','vertical_4_5'];
+// Only the two shapes this workflow actually delivers: a 16:9 film for YouTube and
+// a 9:16 reel for TikTok/Reels. Square and 4:5 were never used and only made the
+// choice longer. The engine still knows those shapes for existing projects; they are
+// simply no longer offered here.
+const ASPECT_ORDER=['landscape','portrait'];
 const ASPECT_LABEL={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'2.39:1'};
-const ASPECT_NAME={landscape:'Landscape',portrait:'Portrait',square:'Square',vertical_4_5:'Vertical'};
+const ASPECT_NAME={landscape:'Landscape',portrait:'Portrait'};
 function syncAspectChip(){const chip=$('#aspect-toggle');if(!chip)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';chip.textContent=ASPECT_LABEL[P?.format]||shape;chip.hidden=!P;chip.title='Frame shape · '+shape+'. Click to choose.'}
 // A menu, not a cycle: clicking used to jump to the next shape, so reading the
 // current one and choosing one were the same action and an accidental click moved

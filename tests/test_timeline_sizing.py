@@ -1081,11 +1081,30 @@ class VerticalReframeTest(unittest.TestCase):
         rule = rule[:rule.index('}')]
         self.assertIn('position:fixed', rule)
 
-    def test_the_menu_lists_every_choice_and_marks_the_current_one(self):
+    def test_the_menu_offers_only_the_two_delivered_shapes(self):
+        # 16:9 for YouTube, 9:16 for TikTok/Reels. Square and 4:5 were never used
+        # and only made the choice longer.
         editor = Path('static/editor.js').read_text()
-        self.assertIn("['landscape','portrait','square','vertical_4_5']", editor)
+        self.assertIn("const ASPECT_ORDER=['landscape','portrait'];", editor)
         self.assertIn('aria-selected=', editor)
         self.assertIn("'✓'", editor)
+
+    def test_the_new_production_dialog_offers_the_same_two_shapes(self):
+        html = Path('templates/index.html').read_text()
+        form = html[html.index('id="new-form"'):]
+        form = form[:form.index('</form>')]
+        self.assertIn('value="landscape"', form)
+        self.assertIn('value="portrait"', form)
+        for gone in ('value="square"', 'value="vertical_4_5"', 'value="cinema"'):
+            self.assertNotIn(gone, form)
+
+    def test_existing_projects_keep_their_shape(self):
+        # The engine still knows every shape, so a project already set to 1:1 or 4:5
+        # still renders correctly. Only the chooser is shorter.
+        app_src = Path('app.py').read_text()
+        self.assertIn("ASPECTS={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}", app_src)
+        editor = Path('static/editor.js').read_text()
+        self.assertIn("square:'1:1'", editor, 'the label lookup still knows the old shapes')
 
     def test_only_one_shape_control_changes_a_project(self):
         # Setup shows the shape; it must not offer a second way to change it.
