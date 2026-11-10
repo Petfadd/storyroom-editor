@@ -1,0 +1,2 @@
+# Optional CPU-only diarization. Install separately; PyTorch is large.
+pyannote.audio>=4,<5

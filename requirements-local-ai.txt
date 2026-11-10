@@ -1,0 +1,5 @@
+# Optional, local CPU analysis. Models are installed separately; no hosted inference.
+faster-whisper>=1.1,<2
+scenedetect>=0.6.4,<0.7
+librosa>=0.10.2,<0.12
+onnxruntime>=1.18,<2

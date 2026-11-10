@@ -1,0 +1,6 @@
+# Runtime data: uploads, renders, caches and per-case projects stay local
+projects/
+.venv/
+__pycache__/
+*.pyc
+.cache/

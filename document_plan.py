@@ -1,6 +1,6 @@
 """Read explicit Markdown source/beat tables; never equate a plan with visual proof."""
-import json,re,hashlib,copy
-from production import document,asset_matches,reserve_id,matching_assets
+import json,re,copy
+from production import document,asset_matches,matching_assets
 
 def clean(s):return re.sub(r'[*`]', '',str(s)).strip()
 def tables(text):
@@ -14,13 +14,101 @@ def tables(text):
    i+=1
   if len(rows)>1:yield [dict(zip(rows[0],row)) for row in rows[1:] if len(row)==len(rows[0])]
 
+def _clock_ms(text):
+ """HH:MM:SS.mmm, HH:MM:SS,mmm or MM:SS.mmm -> milliseconds, else None."""
+ m=re.fullmatch(r'(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,](\d{1,3}))?',str(text).strip())
+ if not m:return None
+ a,b,c,frac=m.groups()
+ hours,minutes,seconds=(0,int(a),int(b)) if c is None else (int(a),int(b),int(c))
+ if minutes>59 or seconds>59:return None
+ return (hours*3600+minutes*60+seconds)*1000+int(((frac or '0')+'000')[:3])
+
+def _clock_span(cell):
+ """'IN → OUT' -> (in_ms, out_ms) when both sides read as clocks."""
+ parts=[p.strip() for p in re.split(r'\s*(?:→|->|-->|–|—)\s*',str(cell)) if p.strip()]
+ vals=[_clock_ms(p) for p in parts]
+ vals=[v for v in vals if v is not None]
+ return (vals[0],vals[1]) if len(vals)>=2 and vals[0]<vals[1] else None
+
+def raw_tables(text):
+ lines=text.splitlines();i=0
+ while i<len(lines):
+  if not lines[i].lstrip().startswith('|'):i+=1;continue
+  rows=[];header=None
+  while i<len(lines) and lines[i].lstrip().startswith('|'):
+   line=lines[i].strip()
+   if not re.fullmatch(r'[|\s:–-]+',line):
+    cells=[clean(c) for c in re.split(r'(?<!\\)\|',line.strip('|'))]
+    header=cells if header is None else header
+    if len(cells)==len(header):rows.append(cells)
+   i+=1
+  if rows:
+   body=rows[1:] if len(rows)>1 and rows[0]==header and not re.fullmatch(r'\d{1,4}',rows[0][0]) else rows
+   if body:yield header,body
+
+def srt_outline(text):
+ """Recover a narration SRT that exists only as a Markdown block table.
+
+ Columns are identified by content, never by header wording: a block-number column,
+ a document clock (IN -> OUT) column, and the longest remaining column as the wording.
+ Returns [(number,in_ms,out_ms,wording)] or [] when no such table is present. The
+ recovery is structural: no wording, order or timing is altered or invented.
+ """
+ for header,rows in raw_tables(text):
+  width=len(header);columns=[[row[i] for row in rows] for i in range(width)]
+  number_i=next((i for i,col in enumerate(columns) if col and all(re.fullmatch(r'\d{1,4}',c) for c in col)),None)
+  if number_i is None or len(rows)<2:continue
+  clock_i=next((i for i,col in enumerate(columns) if i!=number_i and all(_clock_span(c) for c in col)),None)
+  if clock_i is None:continue
+  others=[(sum(len(c) for c in columns[i]),i) for i in range(width) if i not in (number_i,clock_i)]
+  if not others:continue
+  wording_i=max(others)[1];out=[]
+  for row in rows:
+   span=_clock_span(row[clock_i]);wording=' '.join(row[wording_i].split())
+   if not re.fullmatch(r'\d{1,4}',row[number_i]) or not span or not wording:out=[];break
+   out.append((int(row[number_i]),span[0],span[1],wording))
+  if len(out)>=2 and all(a[0]<b[0] for a,b in zip(out,out[1:])):return out
+ return []
+
+def srt_outline_blocks(text):
+ """Validate a recovered outline as SRT blocks; returns (blocks,problems,notes).
+
+ ``notes`` lists repairs that were mechanical and recorded: the clocks are the
+ authored truth, so rounding of a few milliseconds is snapped rather than
+ treated as a broken table. Anything larger stays a problem.
+ """
+ rows=srt_outline(text)
+ if not rows:return [],[],[]
+ problems=[];notes=[];last=0
+ if [r[0] for r in rows]!=list(range(1,len(rows)+1)):problems.append('Block numbers in the table are not 1 through '+str(len(rows))+' in order.')
+ snapped=[]
+ for number,start,end,wording in rows:
+  if start!=last:
+   # Sub-frame rounding between a script clock and its SRT is common and harmless.
+   if abs(start-last)<=34:
+    notes.append(f'Block {number} began {abs(start-last)} ms out of step with the block before it; snapped to '
+                 f'{last} ms so the outline has no hole. Wording and order were not changed.')
+    start=last
+   else:problems.append('Block '+str(number)+' starts at '+str(start)+' ms while the previous block ends at '+str(last)+' ms; recovered timing must be contiguous.')
+  if end<=start:problems.append('Block '+str(number)+' has a non-positive interval.')
+  snapped.append((number,start,end,wording));last=end
+ if problems:return [],problems,notes
+ return [{'number':n,'start_ms':a,'end_ms':b,'text':t} for n,a,b,t in snapped],problems,notes
+
 def script_beats(p):
+ from plain_script import is_plain_script,parse_plain_script
+ if is_plain_script(document(p)):return parse_plain_script(document(p),(p.get('srt') or {}).get('blocks',[]))
+ from cue_script import is_cue_script,parse_cue_script
+ if is_cue_script(document(p)):return parse_cue_script(document(p),(p.get('srt') or {}).get('blocks',[]))
+ from detailed_script import parse_detailed
+ detailed=parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[]))
+ if detailed:return detailed
  from edl import parse
  for table in tables(document(p)):
   if 'Timeline in → out' not in table[0] or 'Src IN → OUT' not in table[0]:continue
   rows=[]
   for row in table:
-   files=re.findall(r'\b(?:v|r)\d+\.(?:mp4|mov)\b',row['Source → file'],re.I)
+   files=re.findall(r'\b(?:s|v|r)\d+\.(?:mp4|mov)\b',row['Source → file'],re.I)
    times=[s.strip() for s in row['Timeline in → out'].split('→')];source=[s.strip() for s in row['Src IN → OUT'].split('→')]
    if len(files)!=1 or len(times)!=2 or len(source)!=2:raise ValueError('A Markdown beat has an ambiguous file or IN/OUT range.')
    treatment=row.get('Treatment · transition','');parts=treatment.rsplit(' · ',1);transition=parts[-1]
@@ -46,7 +134,7 @@ native 30 fps interval is neither stretched nor frozen.
   for i,row in enumerate(table,1):
    timeline=[x.strip() for x in str(row.get('Timeline IN → OUT','')).split('→')]
    source=[x.strip() for x in str(row.get('Source IN/OUT (planned)','')).split('→')]
-   file=re.search(r'\b(?:v|r)\d+\.(?:mp4|mov)\b',str(row.get('Media','')),re.I)
+   file=re.search(r'\b(?:s|v|r)\d+\.(?:mp4|mov)\b',str(row.get('Media','')),re.I)
    if len(timeline)!=2 or len(source)!=2 or not file:raise ValueError('Beat '+str(i)+' has an ambiguous media file or IN/OUT range.')
    start=timecode_ms(timeline[0],'Beat '+str(i)+' timeline IN')
    end=timecode_ms(timeline[1],'Beat '+str(i)+' timeline OUT')
@@ -93,29 +181,34 @@ def source_register(p):
  return result
 
 def base_rows_for(p):
- if p.get('edit_decision_list'):
-  from edl import parse
-  rows=copy.deepcopy(p['edit_decision_list']['beats'])
-  for row in rows:
-   old=row.get('import_blockers',[])
-   if row.get('transition') and any('unsupported by the current 4-frame renderer' in str(n) for n in old):
-    row['import_blockers']=[n for n in old if 'unsupported by the current 4-frame renderer' not in str(n)]
-    for key in ['transition_out','transition_handle_ms','transition_handle_frames']:row.pop(key,None)
-  rows=parse(json.dumps(rows).encode(),'.json')
-  p['edit_decision_list']['beats']=rows
-  p['edit_decision_list']['import_notes']=list(dict.fromkeys(n for row in rows for n in row.get('import_notes',[])))
-  p['edit_decision_list']['import_blockers']=[{'beat_id':row['beat_id'],'note':note} for row in rows for note in row.get('import_blockers',[])]
-  return rows,'optional_edl'
- rows=script_beats(p)
- return rows,'production_script_table' if rows else ''
+ return_rows=script_beats(p)
+ return return_rows,('detailed_production_script' if return_rows and return_rows[0].get('strict_production') else 'production_script_table') if return_rows else ''
+
+def require_one_shot_per_cue(rows, blocks):
+ """Do not silently merge or split authored instructions to fit cue boundaries."""
+ if len(rows)!=len(blocks):
+  raise ValueError('The production script must contain exactly one shot per SRT cue. Review the script; existing instructions were not changed.')
+ for row, cue in zip(rows, blocks):
+  if row.get('srt_blocks') != [int(cue['number'])] or (row.get('timeline_in_ms'),row.get('timeline_out_ms')) != (cue['start_ms'],cue['end_ms']):
+   raise ValueError('Each shot must match exactly one SRT cue and its complete timeline IN/OUT. Review the script; existing instructions were not changed.')
 
 def rows_for(p):
- rows,mode=base_rows_for(p)
+ if p.get('srt_block_map'):
+  from detailed_script import parse_detailed
+  from cue_script import is_cue_script
+  from plain_script import is_plain_script
+  if is_plain_script(document(p)) or is_cue_script(document(p)) or parse_detailed(document(p),(p.get('srt') or {}).get('blocks',[])):raise ValueError('A detailed production script and SRT block map are both present. Remove the block map before building; the script must control its own shots.')
+ if p.get('srt_block_map'):
+  rows,mode=[],'srt_block_map'
+ else:
+  rows,mode=base_rows_for(p)
  mapping=p.get('srt_block_map')
- if not mapping:return rows,mode
+ if not mapping:
+  if rows and not all(r.get('plain_cue') for r in rows):require_one_shot_per_cue(rows,(p.get('srt') or {}).get('blocks',[]))
+  return rows,mode
  from edl import srt_signature
  if mapping.get('based_on_srt') and mapping['based_on_srt']!=srt_signature(p):raise ValueError('The SRT changed since this block map was uploaded. Review and re-upload the matching map.')
- parents={str(int(r['beat_id'])):r for r in rows if str(r.get('beat_id','')).isdigit()};out=[]
+ parents={str(int(r.get('beat_id') or r.get('plan_row_id'))):r for r in rows if str(r.get('beat_id') or r.get('plan_row_id','')).isdigit()};out=[]
  mapped=mapping['beats']
  for i,raw in enumerate(mapped):
   row=copy.deepcopy(raw);parent=parents.get(str(int(row['parent_beat_id'])));last=i+1==len(mapped) or mapped[i+1]['parent_beat_id']!=row['parent_beat_id']
@@ -132,29 +225,30 @@ def rows_for(p):
     for key in ['youtube_url','source_id']:row.pop(key,None)
     row.setdefault('import_notes',[]).append('Mapped file differs from parent beat; parent source URL/ID were not copied.')
   out.append(row)
+ require_one_shot_per_cue(out,(p.get('srt') or {}).get('blocks',[]))
  return out,'srt_block_map'
 
 def synchronize(p):
  try:rows,mode=rows_for(p);register=source_register(p);error=''
  except ValueError as e:rows=[];register=[];mode='';error=str(e)
- files={a['id']:a for a in p['assets']};matched=0
+ matched=0
  for a in p['assets']:
-  planned=[r for r in rows if any(m['id']==a['id'] for m in matching_assets(p,str(r.get('source_file') or '')))]
+  planned=[r for r in rows if any(m['id']==a['id'] for m in matching_assets(dict(p,source_bindings={}) if r.get('strict_production') else p,str(r.get('source_file') or '')))]
   records=[r for r in register if any(m['id']==a['id'] for m in matching_assets(p,r['source_file']))]
   links=list(dict.fromkeys([str(r.get('youtube_url') or '') for r in planned+records if r.get('youtube_url')]))
   labels=list(dict.fromkeys(str(r.get('source_id') or '') for r in planned+records if r.get('source_id')))
   a['document_plan']={'cuts':[{'beat_id':r['beat_id'],'timeline_in_ms':r['timeline_in_ms'],'timeline_out_ms':r['timeline_out_ms'],'source_in_ms':r['source_in_ms'],'source_out_ms':r['source_out_ms'],'visible_content':r.get('visible_content',''),'visual_status':r.get('visual_status',''),'review':r.get('coverage_review',''),'picture_treatment':r.get('picture_treatment','')} for r in planned], 'source_ids':labels,'youtube_urls':links,'register':records,'visual_verification':'not_established_by_documents'}
   if (not a.get('source','').strip() or (a.get('approval_record') and a.get('source','').startswith('User-provided file: '))) and len(links)==1:a['source']=links[0]
   if planned:matched+=1
- missing=[r['source_file'] for r in rows if r.get('source_file') and not matching_assets(p,r['source_file'])]
+ missing=[r['source_file'] for r in rows if r.get('source_file') and not matching_assets(dict(p,source_bindings={}) if r.get('strict_production') else p,r['source_file'])]
  p['document_plan_summary']={'mode':mode,'beats':len(rows),'registered_sources':len(register),'matched_media':matched,'missing_files':list(dict.fromkeys(missing)),'error':error,'provisional':bool(re.search(r'could not watch|could not view|every source.*provisional|nominal allocation',document(p),re.I)),'note':'Document-declared content and provisional times are not visual verification. Inspect planned-cut samples before approving.'}
  return p
 
 def match_report(p):
- try:rows,_=rows_for(p)
+ try:rows,mode=rows_for(p)
  except ValueError:return []
  names=list(dict.fromkeys(r['source_file'] for r in rows if r.get('source_file')));result=[]
  for name in names:
-  exact=[a for a in p['assets'] if asset_matches(a,name)];effective=matching_assets(p,name);binding=(p.get('source_bindings') or {}).get(name.strip().casefold())
+  exact=[a for a in p['assets'] if asset_matches(a,name)];effective=matching_assets(dict(p,source_bindings={}) if mode=='detailed_production_script' else p,name);binding=None if mode=='detailed_production_script' else (p.get('source_bindings') or {}).get(name.strip().casefold())
   result.append({'source_file':name,'original_name_match_count':len(exact),'effective_match_count':len(effective),'selected_asset_id':binding or (effective[0]['id'] if len(effective)==1 else None),'explicit':bool(binding),'status':'selected' if binding and len(effective)==1 else 'matched' if len(effective)==1 else 'missing' if not effective else 'ambiguous','candidate_ids':[a['id'] for a in exact],'beats':sum(r.get('source_file')==name for r in rows)})
  return result

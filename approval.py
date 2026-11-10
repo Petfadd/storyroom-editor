@@ -6,7 +6,8 @@ AUTO_POLICY_VERSION=1
 AUTO_BASIS='Automatic media-use approval requested by the user. This is uploader-authorized reuse approval, not independent copyright clearance, face recognition, or editorial scene approval.'
 def approve_asset(p,a,method='bulk_user_attestation'):
  if not str(a.get('source','')).strip():
-  links=list(dict.fromkeys(str(r.get('youtube_url') or '').strip() for r in (p.get('edit_decision_list') or {}).get('beats',[]) if asset_matches(a,str(r.get('source_file') or '')) and str(r.get('youtube_url') or '').strip()))
+  from document_plan import source_register
+  links=list(dict.fromkeys(str(r.get('youtube_url') or '').strip() for r in source_register(p) if asset_matches(a,str(r.get('source_file') or '')) and str(r.get('youtube_url') or '').strip()))
   a['source']=links[0] if len(links)==1 else 'User-provided file: '+str(a.get('original_name') or a['name'])+'; original publisher not recorded.'
  if a.get('rights','unreviewed')=='unreviewed':a['rights']='reviewed_other'
  a['verified']=True

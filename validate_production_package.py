@@ -18,7 +18,7 @@ def probe_duration(path):
     try:
         info = studio.probe(path)
         return float(info.get('duration') or 0), info.get('has_video', False)
-    except Exception as exc:
+    except Exception:
         return 0.0, False
 
 
@@ -72,8 +72,8 @@ def validate(script_path, srt_path, source_arg):
         rows, mode = rows_for(p)
     except Exception as exc:
         return {'ready': False, 'errors': ['Parser rejected the production script: ' + str(exc)], 'warnings': []}
-    if mode not in ['production_script_table', 'optional_edl', 'srt_block_map']:
-        errors.append('No recognized Markdown beat table or EDL was found. Check the exact header row and the Unicode arrow →.')
+    if mode not in ['production_script_table', 'srt_block_map']:
+        errors.append('No recognized Markdown beat table was found. Check the exact header row and the Unicode arrow →.')
     if not rows:
         errors.append('The beat table produced zero rows; a new project would build zero scenes.')
         return {'ready': False, 'errors': errors, 'warnings': warnings, 'mode': mode}
