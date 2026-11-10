@@ -90,7 +90,18 @@ def save_upload(root, stream, filename):
     final = music_path(root)
     final.parent.mkdir(parents=True, exist_ok=True)
     keep = target_dir / ('background_music' + suffix)
+    # One bed per project, always. A new upload replaces the previous track
+    # outright, including when the extension changes, so no older file can be
+    # picked up by the extension fallback in `music_path`.
     temp.replace(keep)
+    # Sweep after the replacement, and never touch the file just written: the
+    # staging name also lives in this folder while the upload is in flight.
+    for stale in target_dir.glob('background_music.*'):
+        if stale.name not in (keep.name, 'background_music.name'):
+            stale.unlink(missing_ok=True)
+    for leftover in target_dir.glob('music-*'):
+        if leftover != keep:
+            leftover.unlink(missing_ok=True)
     if final != keep and final.exists():
         final.unlink()
     (target_dir / 'background_music.name').write_text(keep.name, encoding='utf-8')

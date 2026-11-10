@@ -803,6 +803,22 @@ class BackgroundMusicTest(unittest.TestCase):
     def test_music_card_names_the_saved_file(self):
         self.assertIn("docMusicCard.name", self.studio)
 
+    def test_a_new_upload_leaves_one_bed_behind(self):
+        # A second upload must replace the first outright, including across file
+        # extensions: the extension fallback in `music_path` will happily pick up
+        # an old `background_music.wav` when the new bed arrived as `.mp3`.
+        music = Path('documentary_music.py').read_text()
+        start = music.index('def save_upload(')
+        body = music[start:music.index('\n\ndef ', start)]
+        self.assertIn("temp.replace(keep)", body)
+        self.assertIn("glob('background_music.*')", body)
+        # The sweep has to run after the replacement, or it deletes the upload.
+        self.assertLess(body.index('temp.replace(keep)'), body.index("glob('background_music.*')"),
+                        'stale beds are swept only once the new one is in place')
+        self.assertIn("keep.name", body, 'the sweep must spare the file just written')
+        self.assertIn("'background_music.name'", body,
+                      'the sweep must spare the sidecar that points at the new bed')
+
     def test_no_explanatory_sentences_on_the_music_card(self):
         start = self.studio.index('Background music or SFX')
         body = self.studio[start:start + 1000]

@@ -466,8 +466,9 @@ function docRenderMusicTrack(){
  // A bed that is stopped under the narration and cut under every bite has no
  // music left. Say so instead of drawing an empty strip that looks broken.
  const nothing=spans.length===0;
- const why=docMusic.narration_level==='mute'?'Music stops under the narration and is cut under every sound bite'
-   :cut?'Music cut under every sound bite':'Music plays under the narration';
+ // A second line here repeated the same sentence under every file name. The
+ // gaps drawn in the strip already show where the bed stops.
+ const why=cut?'cut under bites':'';
  const zoom=timelineZoom;
  // Pieces share the strip: each one is positioned at its own time, so the gaps
  // under the bites are visible and the bites stay draggable underneath.
@@ -481,7 +482,7 @@ function docRenderMusicTrack(){
    const label=width<110?'':`<div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong></div>`;
    return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} resumes · ${docTime(span.start)}–${docTime(span.end)}">${label}</div>`;
   }
-  return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong><span>${docMusic.enabled?why:'Background music is off'}</span></div></div>`;
+  return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong>${docMusic.enabled?(why?`<span>${why}</span>`:''):'<span>off</span>'}</div></div>`;
  };
  clip.style.left='0px';clip.style.width=Math.max(3,duration*zoom-1)+'px';
  // The strip itself is only the scaled background; the pieces carry the audio.
@@ -540,13 +541,28 @@ window.docPickMusic=async function(){
   // Read the body defensively: a non-JSON reply (a proxy error page, a dropped
   // upload) must not be reported as an unreadable server.
   let data={};try{data=await response.json()}catch{data={}}
-  if(!response.ok)throw Error(data.error||`Music could not be saved (${response.status}).`);docMusic=data;toast('Background music saved. Prepare the timeline preview to hear the ducked mix.');await window.docLoadMusic?await window.docLoadMusic():0;window.reloadDocTimeline()}catch(e){toast(e.message)}};
+  if(!response.ok)throw Error(data.error||`Music could not be saved (${response.status}).`);
+  // The upload replaces whatever was saved. Refresh every place that shows the
+  // file, or a previous name keeps sitting in Setup after the swap.
+  docMusic=data;
+  window.docMusicCard=data;
+  toast(`${data.name||'Music'} saved — it replaces the previous track.`);
+  await window.docLoadMusic?await window.docLoadMusic():0;
+  if($('#manage-dialog')?.open)renderManagement();
+  window.reloadDocTimeline()}catch(e){toast(e.message)}};
  input.click();
 };
 window.docToggleMusic=async function(){
  if(!P)return;
  if(!docMusic.file_present){await window.docPickMusic();return}
- try{docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{enabled:!docMusic.enabled});docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:docTrackVolume.music;docApplyPreviewVolumes();docRenderMusicTrack()}catch(e){toast(e.message)}
+ try{
+  docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{enabled:!docMusic.enabled});
+  docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:docTrackVolume.music;
+  // Setup shows the same on/off state; leave it behind and it contradicts the strip.
+  window.docMusicCard=docMusic;
+  docApplyPreviewVolumes();docRenderMusicTrack();
+  if($('#manage-dialog')?.open)renderManagement();
+ }catch(e){toast(e.message)}
 };
 // Music is a separate, live layer. The delivered mix carries narration and the
 // chosen bites; music is played alongside it so level changes take effect at
