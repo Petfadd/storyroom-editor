@@ -1094,6 +1094,35 @@ class VerticalReframeTest(unittest.TestCase):
         self.assertEqual(studio.count('async function setFormat'), 1)
 
 
+class SquarePixelTest(unittest.TestCase):
+    """A delivered file must have square pixels.
+
+    The zoom is a scale followed by a crop back to the frame size. That scale
+    carried the source's pixel aspect ratio through, so a 1080x1920 film was
+    written with SAR 4079:4077 -- a display shape of 4079:7248 rather than exactly
+    9:16. Players that honour the sample aspect ratio show it slightly stretched.
+    """
+
+    def test_the_renderer_resets_the_pixel_ratio_after_the_zoom(self):
+        src = Path('documentary_final_renderer.py').read_text()
+        line = [l for l in src.splitlines() if 'crop={width}:{height}' in l and 'filters +=' in l]
+        self.assertEqual(len(line), 1, 'the zoom filter should be applied once')
+        self.assertIn('setsar=1', line[0],
+                      'the zoom must leave square pixels behind')
+
+    def test_the_preview_resets_it_too(self):
+        src = Path('documentary_preview.py').read_text()
+        line = [l for l in src.splitlines() if 'filters' not in l and 'filt+=' in l and 'crop={width}' in l]
+        self.assertTrue(line)
+        self.assertIn('setsar=1', line[0])
+
+    def test_the_zoom_runs_before_the_ratio_reset(self):
+        # Order matters: resetting before the scale would be undone by it.
+        src = Path('documentary_final_renderer.py').read_text()
+        line = [l for l in src.splitlines() if 'crop={width}:{height}' in l and 'filters +=' in l][0]
+        self.assertLess(line.index('scale='), line.index('setsar=1'))
+
+
 class NoExplanatoryProseTest(unittest.TestCase):
     """The inspector and Setup carry labels and results, not advisory sentences."""
 

@@ -143,7 +143,13 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
                        f"setsar=1")
             if scale != 100:
                 sw = round(width * scale / 200) * 2; sh = round(height * scale / 200) * 2
-                filters += f',scale={sw}:{sh},crop={width}:{height}'
+                # The zoom is applied as a scale followed by a crop back to the frame
+                # size. That scale carries the source's pixel aspect ratio through and
+                # leaves a non-square one behind -- a 1080x1920 film came out with
+                # SAR 4079:4077, so its real display shape was not exactly 9:16. Reset
+                # the ratio after the crop, or the delivered file plays slightly
+                # stretched and some players report the wrong aspect.
+                filters += f',scale={sw}:{sh},crop={width}:{height},setsar=1'
             if enhance_picture:
                 filters += ',hqdn3d=1:1:0:0,unsharp=5:5:0.35:5:5:0'
             filters += ',format=yuv420p'

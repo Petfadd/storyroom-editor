@@ -75,7 +75,9 @@ def build(root,project,plan,dest,allow_tail=False,progress=lambda *x:None,width=
             fit=(f'increase,crop={width}:{height}' if narrow
                  else f'decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black')
             filt=f'fps=30,scale={width}:{height}:force_original_aspect_ratio={fit},setsar=1'
-            if scale!=100:filt+=f',scale={round(width*scale/100/2)*2}:{round(height*scale/100/2)*2},crop={width}:{height}'
+            # The zoom's scale would otherwise leave a non-square pixel ratio behind;
+            # reset it so the preview matches the export exactly.
+            if scale!=100:filt+=f',scale={round(width*scale/100/2)*2}:{round(height*scale/100/2)*2},crop={width}:{height},setsar=1'
             filt+=',format=yuv420p'
             _run([ff,'-hide_banner','-loglevel','error','-y','-ss',f'{part["start"]:.6f}','-i',str(src),'-an','-vf',filt,'-frames:v',str(part['frames']),'-c:v','libx264','-preset','ultrafast','-crf','23','-threads','2',str(clip)])
             with av.open(str(clip)) as media:
