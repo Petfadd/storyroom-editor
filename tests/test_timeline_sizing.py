@@ -551,3 +551,55 @@ class PreRollWindowTest(unittest.TestCase):
         body = js[start:start + 1200]
         self.assertIn('docPremoteNext(t)', body)
         self.assertIn('docNextAt(t)', body)
+
+
+class JoinedTimelineTimestampTest(unittest.TestCase):
+    """The final join must lay frames out on one exact grid.
+
+    Clips cut from a 59.94 fps source do not encode to exactly the number of
+    frames the plan asked for, so a plain `-c copy` concat inherits a sub-frame
+    deficit at every such cut. Left alone that slides every later timestamp and
+    the export is rejected by its own timestamp audit.
+    """
+
+    def setUp(self):
+        import documentary_final_renderer
+        self.source = Path(documentary_final_renderer.__file__).read_text()
+
+    def test_concat_rebuilds_pts_from_the_frame_index(self):
+        start = self.source.index("joined = work / 'joined.mp4'")
+        body = self.source[start:start + 1400]
+        self.assertIn('setts=pts=N*{step}:dts=N*{step}', body,
+                      'the join must rebuild timestamps from the frame index')
+        self.assertIn('-c', body)
+        self.assertIn("'copy'", body,
+                      'rebuilding timestamps must not force a re-encode')
+
+    def test_timescale_is_the_rate_numerator(self):
+        # One frame must be exactly `step` ticks, which only holds when the
+        # timescale is the rate's numerator.
+        self.assertIn('timescale = fps.numerator', self.source)
+        self.assertIn('step = fps.denominator', self.source)
+
+    def test_join_frame_grid_is_exact(self):
+        from fractions import Fraction
+        fps = Fraction(30000, 1001)
+        timescale, step = fps.numerator, fps.denominator
+        self.assertEqual(Fraction(step, timescale), 1 / fps)
+        for n in (1, 1007, 9544, 22319, 26186):
+            self.assertEqual(Fraction(n * step, timescale), Fraction(n, 1) / fps)
+
+    def test_mixed_source_rates_share_one_timescale(self):
+        # A 59.94 fps source must still be pinned to the output grid.
+        self.assertIn("'-video_track_timescale', str(fps.numerator)", self.source)
+
+
+class InspectVideoRateSourceTest(unittest.TestCase):
+    """`average_rate` is frames over duration, not the layout rate."""
+
+    def test_inspect_video_prefers_base_rate(self):
+        source = Path('strict_cuts.py').read_text()
+        start = source.index('def inspect_video(')
+        body = source[start:start + 2000]
+        self.assertIn('stream.base_rate or stream.average_rate', body,
+                      'timestamp spacing must be checked against the declared rate')

@@ -108,9 +108,14 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
             if enhance_picture:
                 filters += ',hqdn3d=1:1:0:0,unsharp=5:5:0.35:5:5:0'
             filters += ',format=yuv420p'
+            # `-video_track_timescale` pins the container time base. Without it a clip
+            # cut from a 59.94 fps source is written at 1/60000 while the rest sit at
+            # 1/30000, and the `-c copy` concat below cannot stitch mixed time bases:
+            # it silently leaves hundreds of seconds of black where those clips belong.
             _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source), '-an',
                   '-vf', filters, '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast',
-                  '-crf', '20', '-threads', '2', '-frames:v', str(span['source_frame_count']), str(clip)])
+                  '-crf', '20', '-threads', '2', '-frames:v', str(span['source_frame_count']),
+                  '-video_track_timescale', str(fps.numerator), str(clip)])
             count, actual_rate = _video_info(clip)
             if count != span['source_frame_count'] or actual_rate != fps:
                 raise ValueError(f"{span['labels'][0]}: encoded picture frame count or frame rate changed.")
@@ -118,7 +123,20 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
         listing = work / 'clips.txt'
         listing.write_text(''.join("file '" + str(p).replace("'", "'\\''") + "'\n" for p in clips), encoding='utf-8')
         joined = work / 'joined.mp4'
-        _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', str(listing), '-c', 'copy', str(joined)])
+        # Timestamps are rewritten from the frame index instead of trusted. Clips
+        # cut from a 59.94 fps source do not land on exactly `source_frame_count`
+        # output frames, so the join inherits a sub-frame deficit at every such cut
+        # and every timestamp after it slides. Concatenating pulls frames out of
+        # order for the same reason. Rebuilding each PTS as N * numerator over a
+        # 30000 timescale is exact for the whole timeline, and `-c copy` means not
+        # one pixel is encoded again.
+        # A 1/numerator timescale makes one frame exactly `denominator` ticks long,
+        # so N frames is N * denominator with no rounding anywhere.
+        timescale = fps.numerator
+        step = fps.denominator
+        _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', str(listing),
+              '-c', 'copy', '-bsf:v', f'setts=pts=N*{step}:dts=N*{step}',
+              '-video_track_timescale', str(timescale), str(joined)])
         count, actual_rate = _video_info(joined)
         if count != total_frames or actual_rate != fps:
             raise ValueError('Concatenated picture has unexpected frame count or frame rate.')

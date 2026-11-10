@@ -39,7 +39,12 @@ def inspect_video(path, required_frames):
         try:
             with av.open(str(path)) as container:
                 stream=container.streams.video[0]
-                rate=stream.average_rate
+                # `average_rate` is frames divided by duration, so it drifts a few
+                # thousandths of a frame per second away from the rate the frames
+                # were actually laid out at. Checking PTS spacing against it makes
+                # a perfectly regular file look discontinuous. `base_rate` is the
+                # rate the stream declares, which is the one the timeline follows.
+                rate=stream.base_rate or stream.average_rate
                 if not rate or rate<=0 or rate>120:raise ValueError('source frame rate is unavailable or unsupported')
                 rate=Fraction(rate)
                 first=None;count=0
