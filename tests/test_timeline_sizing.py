@@ -976,6 +976,21 @@ class VerticalReframeTest(unittest.TestCase):
         self.assertIn("classList.toggle('is-vertical'", editor)
         self.assertIn('.editor-grid.is-vertical{', Path('static/editor.css').read_text())
 
+    def test_a_vertical_project_never_declares_grid_rows(self):
+        # The timeline is a SIBLING of .editor-grid, so the grid is a single row of
+        # panels. Declaring `grid-template-rows` on it invented a second row, which
+        # squeezed every panel into the top half and left an empty band underneath.
+        css = Path('static/editor.css').read_text()
+        for line in css.splitlines():
+            if 'is-vertical' in line and 'grid-template-rows' in line:
+                self.fail('is-vertical must not declare grid-template-rows: ' + line.strip())
+        html = Path('templates/index.html').read_text()
+        # Guard the premise: the timeline must stay OUTSIDE the grid. If it ever
+        # moves inside, this whole rule has to be reconsidered.
+        main_end = html.index('</main>')
+        self.assertLess(main_end, html.index('class="timeline-panel"'),
+                        'the timeline is inside the grid; grid rows would then be valid')
+
     def test_landscape_keeps_the_default_frame(self):
         # Switching back must restore the wide frame exactly, not a changed one.
         css = Path('static/editor.css').read_text()

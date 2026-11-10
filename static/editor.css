@@ -338,8 +338,16 @@
 /* A vertical film is reviewed in a taller panel. The monitor keeps the picture and
    the timeline keeps its own share; nothing else about the layout changes, so
    switching back to 16:9 restores the default proportions exactly. */
-.editor-grid.is-vertical{grid-template-rows:minmax(0,1.45fr) minmax(0,1fr)}
-.editor-grid.is-vertical .timeline-panel{flex:1 1 0;min-height:0}
+/* A vertical project uses exactly the layout a landscape one uses. The panels sit
+   in ONE grid row and the timeline is a SIBLING of the grid, not a row inside it,
+   so `grid-template-rows` here invents a second row and squeezes every panel into
+   the top half with an empty band underneath. The only thing that changes shape is
+   the frame inside the monitor. */
+/* Only the two siblings' SHARE of the height changes: the grid takes 58% instead of
+   50%, which makes a 9:16 frame usefully larger (144px -> 173px wide on a 680px
+   window) while the timeline keeps its own room. No grid rows are declared, because
+   the timeline is not inside the grid. Removing the class restores 50/50 exactly. */
+.editor-grid.is-vertical{flex:1.4 1 0}
 .monitor.is-fullscreen{border-radius:0;margin:0;background:#000}
 
 /* Transport row. */
