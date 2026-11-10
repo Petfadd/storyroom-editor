@@ -1,7 +1,8 @@
-"""No setting may put music under a sound bite.
+"""The bed plays under everything: it is never stopped and never dipped.
 
-A bite carries the only audio in its span. Dipping the bed under narration is a
-choice; playing it under a bite is not, so there is no mode that does it.
+A sound bite used to silence the music for its whole span, and the narration
+dipped it to 0.355. Both are gone: the score runs unbroken at the one volume the
+user set, in the preview and in the export, so the two cannot disagree.
 """
 import re
 import subprocess
@@ -39,46 +40,67 @@ class NoMusicUnderABiteTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def segments(self):
-        # narration 0-4, bite 4-8, narration 8-12 on the finished clock.
-        return [{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 4.0},
-                {'kind': 'sound_bite', 'timeline_in_s': 4.0, 'timeline_out_s': 8.0},
-                {'kind': 'narration', 'timeline_in_s': 8.0, 'timeline_out_s': 12.0}]
+        # picture 0-2, narration 2-5, bite 5-9, picture 9-12 on the finished
+        # clock. The picture spans carry no speech at all, so they are the
+        # reference level: anything quieter than them is a duck or a cut.
+        return [{'kind': 'picture', 'timeline_in_s': 0.0, 'timeline_out_s': 2.0},
+                {'kind': 'narration', 'timeline_in_s': 2.0, 'timeline_out_s': 5.0},
+                {'kind': 'sound_bite', 'timeline_in_s': 5.0, 'timeline_out_s': 9.0},
+                {'kind': 'picture', 'timeline_in_s': 9.0, 'timeline_out_s': 12.0}]
 
-    def test_a_ducked_narration_still_leaves_the_bite_silent(self):
+    def spans(self, bed):
+        """Measured level of each kind of span, in dB."""
+        return {'picture': mean_db(self.ff, bed, 0.3, 1.7),
+                'narration': mean_db(self.ff, bed, 2.3, 4.7),
+                'bite': mean_db(self.ff, bed, 5.3, 8.7),
+                'picture_end': mean_db(self.ff, bed, 9.3, 11.7)}
+
+    def test_the_bite_plays_at_the_same_level_as_silent_picture(self):
         bed = self.root / 'bed.wav'
         result = music.build_bed(self.project, self.music, bed, 12.0, self.segments(),
                                  level_percent=60, duck=True, narration_level='duck')
         self.assertEqual(result['narration_level'], 'duck')
-        # The bed stays audible under the narration...
-        self.assertGreater(mean_db(self.ff, bed, 0.5, 3.5), -60)
-        self.assertGreater(mean_db(self.ff, bed, 8.5, 11.5), -60)
-        # ...and is cut for the whole bite, including its first and last frames.
-        self.assertLess(mean_db(self.ff, bed, 4.05, 7.95), -80)
+        self.assertEqual(result['mute_windows'], [])
+        levels = self.spans(bed)
+        # The bite carries the bed at the level of speech-free picture: a dip or
+        # a cut anywhere here is the bug this test exists to catch.
+        self.assertAlmostEqual(levels['bite'], levels['picture'], delta=1.0,
+                               msg=f"bite {levels['bite']} dB vs picture {levels['picture']} dB")
+        self.assertAlmostEqual(levels['narration'], levels['picture'], delta=1.0,
+                               msg=f"narration {levels['narration']} dB vs picture {levels['picture']} dB")
 
-    def test_there_is_no_setting_that_plays_music_under_a_bite(self):
-        # The old saved setting and the old API argument must not resurrect it.
-        for saved in ({'speech_mode': 'duck'}, {'duck_under_speech': False}, {'narration_level': 'duck'}):
-            project = {'voiceover': {'duration': 12.0},
-                       'documentary_music': {'enabled': True, 'volume_percent': 60, **saved}}
-            windows = music.speech_windows(self.segments(), 12.0, padding_s=0)
-            gain = music._speech_gain(windows, 12.0, 0.355)
-            inside = [r for a, b, r in gain if a < 6.0 < b]
-            self.assertEqual(inside, [0.0], f'{saved} left music under the bite')
+    def test_the_bed_level_is_flat_from_end_to_end(self):
+        bed = self.root / 'flat.wav'
+        music.build_bed(self.project, self.music, bed, 12.0, self.segments(), level_percent=60)
+        levels = self.spans(bed)
+        reference = levels['picture']
+        for name, value in levels.items():
+            self.assertAlmostEqual(value, reference, delta=1.0,
+                                   msg=f'{name} is {value} dB against {reference} dB of picture')
 
-    def test_the_settings_report_no_duck_under_bites_option(self):
+    def test_a_saved_duck_or_mute_opens_as_a_continuous_bed(self):
+        # Both old settings must open, and neither may bring the duck or the cut
+        # back: the export reads the project, so a stale save would reintroduce
+        # exactly what the user asked to remove.
+        for saved in ({'speech_mode': 'duck'}, {'duck_under_speech': False},
+                      {'narration_level': 'mute'}, {'speech_mode': 'mute'}):
+            with self.subTest(saved):
+                project = {'voiceover': {'duration': 12.0},
+                           'documentary_music': {'enabled': True, 'volume_percent': 60, **saved}}
+                bed = self.root / 'old.wav'
+                result = music.build_bed(project, self.music, bed, 12.0, self.segments())
+                self.assertEqual(result['narration_level'], 'full')
+                self.assertFalse(result['ducked_under_speech'])
+                levels = self.spans(bed)
+                self.assertAlmostEqual(levels['bite'], levels['picture'], delta=1.0,
+                                       msg=f'{saved} dipped or cut the bite')
+
+    def test_the_settings_report_a_continuous_bed(self):
         state = music.settings(self.project)
         self.assertNotIn('duck_under_speech', state)
-        self.assertTrue(state['bite_cut'])
-        self.assertEqual(state['narration_level'], 'duck')
-
-    def test_a_saved_duck_under_speech_keeps_only_the_narration_choice(self):
-        # An old project saved with duck_under_speech must still open, with the
-        # bite rule enforced and its narration preference preserved.
-        project = {'documentary_music': {'enabled': True, 'duck_under_speech': False,
-                                         'speech_mode': 'mute'}}
-        state = music.settings(project)
-        self.assertEqual(state['narration_level'], 'mute')
-        self.assertNotIn('duck_under_speech', state)
+        self.assertFalse(state['bite_cut'])
+        self.assertEqual(state['narration_level'], 'full')
+        self.assertEqual(state['speech_mode'], 'full')
 
 
 if __name__ == '__main__':

@@ -417,30 +417,15 @@ window.docLoadMusic=async function(){
  if(Number.isFinite(docMusic.narration_percent))docTrackVolume.narration=docMusic.narration_percent;
  if(Number.isFinite(docMusic.clip_percent))docTrackVolume.clip=docMusic.clip_percent;
  docRenderMusicTrack();window.docUpdateMuteControls?.()};
-// A sound bite carries the only audio in its span, so the bed is cut there. The
-// strip must show that: one piece per span where music actually plays, and a
-// real gap under every bite. A single unbroken bar claimed music was running
-// through the bites the audio engine already silences.
+// The bed is continuous, so the strip is one unbroken bar for the whole film.
+// It used to draw a gap under every sound bite and under the narration, which
+// promised a cut the audio engine no longer makes.
 function docMusicCuts(duration){
- const total=Math.max(0,duration||0);
- const segments=window.docTimelineData?.segments||[];
- // A bite is always cut. The narration is cut only when the project chose to
- // stop the bed there as well, which leaves ordinary picture as the only place
- // music can be heard.
- const kinds=docMusic.narration_level==='mute'?['sound_bite','narration']:['sound_bite'];
- return segments.filter(s=>kinds.includes(s.kind))
-  .map(s=>[Math.max(0,s.timeline_in_s),Math.min(total,s.timeline_out_s)]).filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0]);
+ return [];
 }
 function docMusicSpans(duration){
  const total=Math.max(0,duration||0);
- if(!total)return [];
- const spans=[];let cursor=0;
- for(const [a,b] of docMusicCuts(total)){
-  if(a>cursor+.001)spans.push({start:cursor,end:a});
-  cursor=Math.max(cursor,b);
- }
- if(cursor<total-.001)spans.push({start:cursor,end:total});
- return spans;
+ return total?[{start:0,end:total}]:[];
 }
 window.docMusicSpans=docMusicSpans;
 function docRenderMusicTrack(){
@@ -462,37 +447,16 @@ function docRenderMusicTrack(){
   return;
  }
  const spans=duration>0?docMusicSpans(duration):[{start:0,end:0}];
- const cut=spans.length!==1||(spans[0]&&(spans[0].start>.001||spans[0].end<duration-.001));
- // A bed that is stopped under the narration and cut under every bite has no
- // music left. Say so instead of drawing an empty strip that looks broken.
- const nothing=spans.length===0;
- // A second line here repeated the same sentence under every file name. The
- // gaps drawn in the strip already show where the bed stops.
- const why=cut?'cut under bites':'';
  const zoom=timelineZoom;
- // Pieces share the strip: each one is positioned at its own time, so the gaps
- // under the bites are visible and the bites stay draggable underneath.
- const piece=(span,i)=>{
-  const left=span.start*zoom,width=Math.max(2,(span.end-span.start)*zoom-1);
-  const first=i===0;
-  // After a bite the music comes back, so name it again: a lone glyph looked
-  // like a broken clip rather than the same bed resuming. A short piece keeps
-  // the name in its tooltip rather than clipping it into a smear.
-  if(!first){
-   const label=width<110?'':`<div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong></div>`;
-   return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} resumes · ${docTime(span.start)}–${docTime(span.end)}">${label}</div>`;
-  }
-  return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong>${docMusic.enabled?(why?`<span>${why}</span>`:''):'<span>off</span>'}</div></div>`;
- };
+ // One piece for the whole film: the bed is never cut, so there is no gap to
+ // draw and no second label to repeat the name at every resume point.
  clip.style.left='0px';clip.style.width=Math.max(3,duration*zoom-1)+'px';
- // The strip itself is only the scaled background; the pieces carry the audio.
+ // The strip itself is only the scaled background; the piece carries the audio.
  clip.style.background='transparent';clip.style.borderColor='transparent';
  clip.className='audio-clip doc-music doc-music-strip';
  clip.onclick=()=>docPickMusic();
- const cuts=spans.slice(1).map(s=>`<span class="doc-music-cut" style="left:${s.start*zoom}px" aria-hidden="true"></span>`).join('');
- clip.innerHTML=nothing
-  ?`<div class="doc-music-piece" style="left:0;width:${Math.max(3,duration*zoom-1)}px" title="No music is heard with this setting"><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')} · silent</strong><span>${why} · click to change</span></div></div>`
-  :spans.map(piece).join('')+cuts;
+ const span=spans[0]||{start:0,end:duration};
+ clip.innerHTML=`<div class="doc-music-piece" style="left:0;width:${Math.max(3,duration*zoom-1)}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong>${docMusic.enabled?'':'<span>off</span>'}</div></div>`;
  requestAnimationFrame(()=>{
   document.querySelectorAll('#music-track .doc-music-wave').forEach(drawDocMusicWaveform);
   window.docPaintPlayhead?.();
@@ -586,22 +550,10 @@ function docMusicElement(){
 // Music sits under the narration and is cut under every chosen footage sound
 // bite. Both decisions are read from the edit clock, so they follow the picture
 // without a rebuild.
-const DOC_DUCK_LEVEL=0.355;
-// 'stop' means the bed is silenced; that is what a sound bite always gets.
-// Under continuous narration the bed either dips or, if the project chose it,
-// stops.
-function docSpeechMode(t){
- const d=window.docTimelineData;
- // The schedule is the frame-accurate clock in beat playback and the segments
- // are the planning clock. Either one saying "sound bite" silences the bed, so a
- // mismatch between the two can never leave music playing over bite speech.
- const scheduled=d.schedule?docDirectAt(t)?.kind:'';
- const planned=docSegmentAt(t)?.kind||'';
- const kinds=[scheduled,planned];
- // A bite is never dipped here: the engine has no setting that keeps music
- // under one, and the preview must not invent one either.
- if(kinds.includes('sound_bite'))return 'stop';
- if(kinds.includes('narration'))return docMusic.narration_level==='mute'?'stop':'duck';
+// The bed runs at the volume the user set, for the whole film. It is not ducked
+// under the narration and not cut under a sound bite, because the export does
+// the same and the preview must match the file.
+function docSpeechMode(){
  return 'full';
 }
 // Keep the music bed locked to the narration clock and follow the saved level.
@@ -622,9 +574,7 @@ function docSyncMusic(t,playing){
   return;
  }
  const base=docMusic.enabled?(Number(docTrackVolume.music)||0)/100:0;
- const mode=docSpeechMode(t);
- const keep=mode==='stop'?0:(mode==='duck'?DOC_DUCK_LEVEL:1);
- node.volume=Math.max(0,Math.min(1,base*keep));
+ node.volume=Math.max(0,Math.min(1,base));
  if(!playing){if(!node.paused)node.pause();return}
  // A live layer may drift; nudge it back without restarting the picture.
  // The bed loops, so its own position wraps while the film clock does not.
@@ -655,14 +605,6 @@ window.docApplyPreviewVolumes=function(){
  const t=window.docTimelineData?.direct?(narrNode.currentTime||0):(masterNode.currentTime||0);
  docSyncMusic(t,editorPlaying);
 };
-// The only music choice left is what the bed does under the narration. A sound
-// bite is always cut, so there is no control that could put music under one.
-window.docToggleNarrationLevel=async function(){if(!P)return;try{
- const mode=docMusic.narration_level==='duck'?'mute':'duck';
- docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{narration_level:mode});
- window.docApplyPreviewVolumes();docRenderMusicTrack();renderManagement?.();
- toast(mode==='mute'?'Music now stops under the narration as well as under every sound bite.':'Music now dips under the narration and is cut under every sound bite.');
-}catch(e){toast(e.message)}};
 
 async function loadDocBiteWaveforms(){
  // One decode of the source audio feeds every bite waveform; nothing is uploaded.

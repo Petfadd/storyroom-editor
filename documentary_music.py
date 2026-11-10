@@ -111,110 +111,34 @@ def save_upload(root, stream, filename):
 
 def settings(project):
     music = (project.get('documentary_music') or {})
-    # A sound bite is always silent, so there is no duck-under-bites setting any
-    # more. `narration_level` is the only choice left: 'mute' stops the bed under
-    # the narration, 'duck' dips it. `speech_mode` and `duck_under_speech` are
-    # still reported because saved projects and older clients read them.
-    # Dipping under the narration is the default, because the bed should be
-    # audible under continuous speech. Stopping the bed under the narration as
-    # well is the opt-in, and a project that already chose it keeps it: older
-    # saves wrote the same choice as `speech_mode`. A bite is cut either way.
+    # The bed is continuous: it never stops and never dips, under the narration
+    # or under a sound bite. `narration_level` and `speech_mode` are still
+    # reported, as 'full', because saved projects and older clients read them.
     saved = music.get('narration_level') or music.get('speech_mode')
-    narration = 'mute' if saved == 'mute' else 'duck'
+    narration = 'full' if saved in (None, '', 'full', 'duck', 'mute') else 'full'
     return {'enabled': bool(music.get('enabled')), 'volume_percent': int(music.get('volume_percent') or 35),
             'narration_level': narration, 'speech_mode': narration,
-            'bite_cut': True,
+            'bite_cut': False,
             'present': bool(music.get('name'))}
 
 
-def _windows(kinds, segments, duration_s, padding_s):
-    windows = []
-    for segment in segments:
-        if segment.get('kind') not in kinds:
-            continue
-        start = float(segment['timeline_in_s'])
-        end = float(segment['timeline_out_s'])
-        windows.append((max(0.0, start - padding_s), min(duration_s, end + padding_s)))
-    windows.sort()
-    merged = []
-    for start, end in windows:
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return merged
-
-
-def speed_windows(segments, duration_s, padding_s=0.12):
-    """Windows that already carry narration or footage speech, on the final clock."""
-    return _windows(('narration', 'sound_bite'), segments, duration_s, padding_s)
-
-
-def speech_windows(segments, duration_s, padding_s=0.12):
-    """Narration and chosen footage speech, kept apart.
-
-    A footage sound bite carries the only audio in its span, so the bed is
-    silent there and no setting can change that. The narration is continuous,
-    so the bed only follows the narration setting: dip, or stop.
-    """
-    return {'narration': _windows(('narration',), segments, duration_s, padding_s),
-            'bite': _windows(('sound_bite',), segments, duration_s, padding_s)}
-
-
-def _speech_gain(windows, duration_s, narration_ratio=0.355):
-    """Piecewise constant gain over the whole timeline, step at each boundary.
-
-    A sound bite is always silent: the bite gain is fixed at 0.0 and is not a
-    parameter, so no saved setting can put music under a bite. Narration either
-    dips to `narration_ratio` or, when that is 0.0, stops as well.
-    """
-    points = {0.0, float(duration_s)}
-    for group in windows.values():
-        for start, end in group:
-            if 0.0 < start < duration_s:
-                points.add(start)
-            if 0.0 < end < duration_s:
-                points.add(end)
-    edges = sorted(points)
-    parts = []
-    def overlaps(group):
-        # Every boundary is an edge, so any overlap covers this whole slice.
-        return any(min(b, e) - max(a, s) > 1e-9 for s, e in group)
-    for a, b in zip(edges, edges[1:]):
-        if overlaps(windows['bite']):
-            ratio = 0.0
-        elif overlaps(windows['narration']):
-            ratio = narration_ratio
-        else:
-            ratio = 1.0
-        if abs(ratio - 1.0) > 1e-6:
-            parts.append((a, b, ratio))
-    # Joining neighbours with the same gain keeps the filter expression short.
-    merged = []
-    for a, b, ratio in parts:
-        if merged and merged[-1][2] == ratio and abs(merged[-1][1] - a) < 1e-9:
-            merged[-1] = (merged[-1][0], b, ratio)
-        else:
-            merged.append((a, b, ratio))
-    return merged
-
-
 def target_lufs(level_percent):
-    """Map the volume percentage to a bed loudness under narration.
+    """Map the volume percentage to the bed's own loudness.
 
     100% is an assertive -24 LUFS bed, 35% sits around -32 LUFS, and the floor is
-    -42 LUFS. Ducking then takes it a further 9 dB under any speech.
+    -42 LUFS. This is the level the bed plays at for the whole film.
     """
     percent = max(1, min(100, int(level_percent)))
     return round(max(-42.0, min(-18.0, -42.0 + percent * 0.18)), 2)
 
 
-def build_bed(project, music_file, destination, duration_s, segments, level_percent=None, duck=True, work_dir=None, narration_level=None):
+def build_bed(project, music_file, destination, duration_s, segments, level_percent=None, duck=False, work_dir=None, narration_level=None):
     """Loop and level the music, then cut it to an exact-length WAV bed.
 
-    A sound bite is always silent; that is not a setting. `narration_level` only
-    decides what happens under the narration: 'mute' stops the bed there as well,
-    'duck' dips it.
+    The bed is continuous: it is neither dipped under the narration nor cut under
+    a sound bite, so the score runs unbroken from the first frame to the last.
+    `segments` and `narration_level` are still accepted because saved projects
+    and older callers pass them; they no longer change the gain.
     """
     music_file = Path(music_file).resolve()
     destination = Path(destination).resolve()
@@ -225,16 +149,11 @@ def build_bed(project, music_file, destination, duration_s, segments, level_perc
         raise ValueError('Music volume must be a whole percentage from 1 to 100.')
     if duration_s <= 0:
         raise ValueError('The documentary has no duration for music.')
-    # No argument means "use the project's saved choice", not a hardcoded mode:
-    # otherwise the export would ignore the setting the user just reviewed.
     narration_level = narration_level if narration_level in ('mute', 'duck') else settings(project)['narration_level']
     ff = imageio_ffmpeg.get_ffmpeg_exe()
     work = Path(work_dir) if work_dir else destination.parent
     work.mkdir(parents=True, exist_ok=True)
     looped = work / ('music-loop-' + uuid.uuid4().hex + '.wav')
-    # A bite is silent whatever the narration setting is: the bite's own speech
-    # is never competing with music.
-    windows = speech_windows(segments, duration_s) if duck else {'narration': [], 'bite': []}
     try:
         # `aloop` loops in the filter graph and `atrim` cuts an exact length;
         # `-stream_loop` with `-t` can end several frames short of the target.
@@ -248,16 +167,6 @@ def build_bed(project, music_file, destination, duration_s, segments, level_perc
         want = target_lufs(level_percent)
         gain_db = max(-30.0, min(30.0, want - measured))
         filters = [f'volume={gain_db:.3f}dB']
-        if windows['narration'] or windows['bite']:
-            # Bites are set to zero by `_speech_gain`. The narration either dips to
-            # 0.355 or stops. The step is instant, so the bed is already down when
-            # a bite's speech starts.
-            narration_ratio = 0.355 if narration_level == 'duck' else 0.0
-            parts = _speech_gain({'narration': windows['narration'], 'bite': windows['bite']},
-                                 duration_s, narration_ratio)
-            expr = ''.join(f'between(t,{a:.3f},{b:.3f})*({r:.4f}-1)+' for a, b, r in parts)
-            if expr:
-                filters.append("volume=volume='" + expr + "1':eval=frame")
         filters.append(f'atrim=0:{duration_s:.3f}')
         filters.append('alimiter=limit=0.891251:level=0:latency=1')
         filters.append('aresample=48000')
@@ -274,9 +183,9 @@ def build_bed(project, music_file, destination, duration_s, segments, level_perc
         raise ValueError('The music bed length does not match the timeline.')
     return {'duration_s': length, 'level_percent': level_percent, 'nominal_lufs': target_lufs(level_percent),
             'measured_source_lufs': round(measured, 2), 'gain_db': round(gain_db, 2),
-            'ducked_under_speech': bool(windows['narration'] or windows['bite']),
+            'ducked_under_speech': False,
             'narration_level': narration_level,
             'speech_mode': narration_level,
-            'narration_windows': [{'start_s': round(a, 3), 'end_s': round(b, 3)} for a, b in windows['narration']],
-            'mute_windows': [{'start_s': round(a, 3), 'end_s': round(b, 3)} for a, b in windows['bite']],
+            'narration_windows': [],
+            'mute_windows': [],
             'music_version': MUSIC_VERSION}

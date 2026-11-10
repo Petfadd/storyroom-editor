@@ -826,6 +826,55 @@ class BackgroundMusicTest(unittest.TestCase):
         self.assertNotIn('the same way narration pauses', body)
 
 
+class NoExplanatoryProseTest(unittest.TestCase):
+    """The inspector and Setup carry labels and results, not advisory sentences."""
+
+    def setUp(self):
+        self.editor = Path('static/editor.js').read_text()
+        self.studio = Path('static/studio.js').read_text()
+
+    def test_the_scale_control_has_no_description(self):
+        self.assertNotIn('Applies only to highlighted slots', self.editor)
+        self.assertNotIn('Above 100% crops the edges', self.editor)
+
+    def test_the_slot_inspector_has_no_editor_note_row(self):
+        # It restated the plan's match_reason, which is just "Documentary beat N":
+        # the same label is already shown above it.
+        self.assertNotIn('Editor note · continuity', self.editor)
+
+    def test_the_audio_card_has_no_explanation(self):
+        self.assertNotIn('Narration at its original level, footage speech matched to it', self.editor)
+        self.assertNotIn('Music is currently off, so the export has narration and bites only.', self.editor)
+
+    def test_no_advisory_sentences_in_the_inspector(self):
+        for sentence in ('This view does not automatically verify content',
+                         'A fade ramps brightness on existing frames',
+                         'Gentle cleanup and sharpening',
+                         'Everything that affects the exported file lives here.',
+                         'Checks cover source ranges, approvals, rights attestations'):
+            self.assertNotIn(sentence, self.editor, sentence)
+
+    def test_no_advisory_sentences_in_setup(self):
+        for sentence in ('A frame is shown as decoded from your own upload.',
+                         'A shot is a detected change of picture in your own upload.',
+                         'Approve all ready beats does not inspect or verify identity',
+                         'Checks cover media assignment, user verification',
+                         'Larger output dimensions do not recover missing detail',
+                         'Record your own decision for this specific file and intended use.',
+                         'The timeline will appear here when the background job finishes.'):
+            self.assertNotIn(sentence, self.studio, sentence)
+
+    def test_the_storyboard_no_longer_fills_the_note_box_with_a_sentence(self):
+        for source in (self.editor, Path('documentary_storyboard.py').read_text()):
+            self.assertNotIn('review image, context, source and reuse rights', source)
+        self.assertIn("'notes':''", Path('documentary_storyboard.py').read_text())
+
+    def test_removals_left_no_empty_paragraph(self):
+        for source in (self.editor, self.studio):
+            self.assertNotIn('<p class="small"></p>', source)
+            self.assertNotIn('<p class="small"> </p>', source)
+
+
 class AudioFaderLabelsOnlyTest(unittest.TestCase):
     def test_volume_panel_carries_no_sentences(self):
         editor = Path('static/editor.js').read_text()

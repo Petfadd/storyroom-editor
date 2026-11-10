@@ -25,6 +25,13 @@ def mean_db(ff, path, a, b):
 
 
 class SavedNarrationChoiceTest(unittest.TestCase):
+    """A saved duck or mute choice must not come back to life.
+
+    The bed used to follow the project's narration setting, so a project saved
+    before the change kept dipping or stopping after it. Both are now ignored,
+    and the export reads the project the same way the preview does.
+    """
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -34,9 +41,12 @@ class SavedNarrationChoiceTest(unittest.TestCase):
         subprocess.run([self.ff, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi',
                         '-i', 'sine=frequency=300:duration=10', '-ac', '2', '-ar', '48000',
                         str(self.file)], check=True)
-        self.segments = [{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 4.0},
+        # A speech-free picture span at each end is the reference level.
+        self.segments = [{'kind': 'picture', 'timeline_in_s': 0.0, 'timeline_out_s': 1.0},
+                         {'kind': 'narration', 'timeline_in_s': 1.0, 'timeline_out_s': 4.0},
                          {'kind': 'sound_bite', 'timeline_in_s': 4.0, 'timeline_out_s': 7.0},
-                         {'kind': 'narration', 'timeline_in_s': 7.0, 'timeline_out_s': 10.0}]
+                         {'kind': 'narration', 'timeline_in_s': 7.0, 'timeline_out_s': 9.0},
+                         {'kind': 'picture', 'timeline_in_s': 9.0, 'timeline_out_s': 10.0}]
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -46,26 +56,35 @@ class SavedNarrationChoiceTest(unittest.TestCase):
         music.build_bed(project, self.file, out, 10.0, self.segments, level_percent=70, duck=True)
         return out
 
-    def test_a_project_that_dips_under_narration_keeps_its_music_audible(self):
+    def test_a_project_saved_as_ducking_plays_the_bed_through_the_bite(self):
         project = {'documentary_music': {'enabled': True, 'volume_percent': 70,
                                          'narration_level': 'duck'}}
         bed = self.bed(project, 'duck.wav')
-        self.assertGreater(mean_db(self.ff, bed, 0.5, 3.5), -60)
-        self.assertGreater(mean_db(self.ff, bed, 7.5, 9.5), -60)
-        self.assertLess(mean_db(self.ff, bed, 4.05, 6.95), -80)
+        reference = mean_db(self.ff, bed, 0.1, 0.9)
+        for name, (a, b) in {'narration': (1.3, 3.7), 'bite': (4.3, 6.7),
+                             'after': (7.3, 8.7)}.items():
+            value = mean_db(self.ff, bed, a, b)
+            self.assertGreater(value, -60, f'{name} lost the music')
+            self.assertAlmostEqual(value, reference, delta=1.0,
+                                   msg=f'{name} is {value} dB against {reference} dB')
 
-    def test_a_project_that_stops_under_narration_stays_silent(self):
+    def test_a_project_saved_as_stopping_under_narration_still_plays(self):
         project = {'documentary_music': {'enabled': True, 'volume_percent': 70,
                                          'narration_level': 'mute'}}
         bed = self.bed(project, 'mute.wav')
-        self.assertLess(mean_db(self.ff, bed, 0.5, 3.5), -80)
-        self.assertLess(mean_db(self.ff, bed, 7.5, 9.5), -80)
+        reference = mean_db(self.ff, bed, 0.1, 0.9)
+        for name, (a, b) in {'narration': (1.3, 3.7), 'bite': (4.3, 6.7),
+                             'after': (7.3, 8.7)}.items():
+            value = mean_db(self.ff, bed, a, b)
+            self.assertGreater(value, -60, f'{name} lost the music')
+            self.assertAlmostEqual(value, reference, delta=1.0,
+                                   msg=f'{name} is {value} dB against {reference} dB')
 
-    def test_no_argument_reads_the_project_instead_of_a_fixed_default(self):
+    def test_the_bed_is_built_the_same_way_whether_or_not_a_mode_is_passed(self):
         from inspect import signature
-        parameter = signature(music.build_bed).parameters['narration_level']
-        self.assertIsNone(parameter.default,
-                          'build_bed must read the saved choice when no mode is passed')
+        # `duck` must default to off: a caller that passes nothing still gets the
+        # continuous bed, rather than the old ducked one.
+        self.assertIs(signature(music.build_bed).parameters['duck'].default, False)
 
 
 if __name__ == '__main__':

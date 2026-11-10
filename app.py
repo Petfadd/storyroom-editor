@@ -1743,16 +1743,16 @@ def update_documentary_music(pid):
   if 'enabled' in data:
    if not isinstance(data['enabled'],bool):raise BadRequest('Music on/off must be true or false.')
    music['enabled']=data['enabled']
-  # A sound bite always carries the only audio, so there is no setting that puts
-  # music under one. Only the narration behaviour is a choice.
-  if 'duck_under_speech' in data:
-   raise BadRequest('Music is always cut under a sound bite. Use narration_level to choose what happens under the narration.')
-  if 'narration_level' in data:
-   if data['narration_level'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
-   music['narration_level']=data['narration_level']
-  if 'speech_mode' in data:
-   if data['speech_mode'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
-   music['narration_level']=data['speech_mode']
+  # The bed is continuous: it plays under the narration and under every sound
+  # bite, at the one volume the user set. Saved requests that still ask for a
+  # duck or a mute are accepted and stored as 'full', so an old client cannot
+  # reintroduce either behaviour.
+  if 'duck_under_speech' in data and data['duck_under_speech'] is not False:
+   raise BadRequest('The background music plays continuously; it is not ducked or cut.')
+  for key in ('narration_level','speech_mode'):
+   if key in data:
+    if data[key] not in ('full','mute','duck'):raise BadRequest('Music plays continuously, under narration and sound bites alike.')
+    music['narration_level']='full'
   music.pop('duck_under_speech',None)
   if 'volume_percent' in data:
    value=data['volume_percent']

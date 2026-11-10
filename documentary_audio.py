@@ -118,7 +118,8 @@ def build_audio(root, project, plan, destination, progress=lambda *a:None, stric
             from documentary_music import build_bed, music_path
             bed=work/'music-bed.wav'
             music_result=build_bed(project,music_path(root),bed,timeline['duration_s'],timeline['segments'])
-            # Narration and bites stay at their reviewed level; only the bed is ducked.
+            # Narration and bites stay at their reviewed level, and the bed runs
+            # unbroken underneath them: it is not ducked or cut anywhere.
             _run_command([ff,'-hide_banner','-loglevel','error','-y','-i',str(speech),'-i',str(bed),'-filter_complex','[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891251:level=0:latency=1','-ar','48000','-c:a','pcm_s16le',str(out)])
         else:
             shutil.copyfile(speech,out)

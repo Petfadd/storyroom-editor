@@ -1,8 +1,8 @@
-"""The timeline music strip must show the cut, not one unbroken bar.
+"""The music strip is one unbroken bar, because the bed is never cut.
 
-The audio engine cuts the bed for the whole of every sound bite. The strip used
-to draw a single bar from 0 to the end of the timeline, so the user saw music
-running under a bite the export silences.
+The strip used to draw a gap under every sound bite and the engine silenced the
+music there. Both are gone: the bed runs unbroken, so the strip shows one bar for
+the whole film and must not promise a gap that no longer exists.
 """
 import json
 import subprocess
@@ -29,7 +29,7 @@ let docMusic={json.dumps(music)};
 
 
 class MusicTrackShowsTheCutTest(unittest.TestCase):
-    def test_the_real_timeline_leaves_a_gap_under_every_bite(self):
+    def test_the_real_timeline_is_one_span(self):
         segments = [
             {'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 19.366},
             {'kind': 'sound_bite', 'timeline_in_s': 19.366, 'timeline_out_s': 36.866},
@@ -38,60 +38,48 @@ class MusicTrackShowsTheCutTest(unittest.TestCase):
         ]
         script = """
 const spans=docMusicSpans(95.9);
-assert.deepStrictEqual(spans.map(s=>[+s.start.toFixed(3),+s.end.toFixed(3)]),[[0,19.366],[36.866,53.4]]);
-// Every second is either music or a bite, never both. The two bites are 17.5s
-// and 42.5s, so 62.2s of the 95.9s timeline carries music.
-const music=spans.reduce((a,s)=>a+(s.end-s.start),0);
-assert.ok(Math.abs(music+17.5+42.5-95.9)<1e-6, 'music '+music);
+assert.strictEqual(spans.length,1,'the bed is never cut, so there is one span');
+assert.deepStrictEqual([+spans[0].start.toFixed(3),+spans[0].end.toFixed(3)],[0,95.9]);
+// No cut is reported anywhere, whatever the saved narration mode says.
+assert.deepStrictEqual(docMusicCuts(95.9),[]);
 console.log('ok');
 """
-        result = run(segments, 95.9, {'duck_under_speech': True, 'speech_mode': 'mute'}, script)
+        result = run(segments, 95.9, {'speech_mode': 'mute'}, script)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_a_bite_at_either_end_still_leaves_no_empty_bar(self):
-        cases = {
-            'bite_at_start': ([{'kind': 'sound_bite', 'timeline_in_s': 0.0, 'timeline_out_s': 5.0},
-                               {'kind': 'narration', 'timeline_in_s': 5.0, 'timeline_out_s': 10.0}],
-                              [[5.0, 10.0]]),
-            'bite_at_end': ([{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 5.0},
-                             {'kind': 'sound_bite', 'timeline_in_s': 5.0, 'timeline_out_s': 10.0}],
-                            [[0.0, 5.0]]),
-            'back_to_back_bites': ([{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 3.0},
-                                    {'kind': 'sound_bite', 'timeline_in_s': 3.0, 'timeline_out_s': 6.0},
-                                    {'kind': 'sound_bite', 'timeline_in_s': 6.0, 'timeline_out_s': 9.0},
-                                    {'kind': 'narration', 'timeline_in_s': 9.0, 'timeline_out_s': 12.0}],
-                                   [[0.0, 3.0], [9.0, 12.0]]),
-        }
-        for name, (segments, expected) in cases.items():
-            with self.subTest(name):
-                script = f"""
-const spans=docMusicSpans({segments[-1]['timeline_out_s']});
-assert.deepStrictEqual(spans.map(s=>[+s.start.toFixed(3),+s.end.toFixed(3)]),{json.dumps(expected)});
+    def test_old_saved_modes_do_not_draw_a_gap(self):
+        segments = [{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 4.0},
+                    {'kind': 'sound_bite', 'timeline_in_s': 4.0, 'timeline_out_s': 8.0},
+                    {'kind': 'narration', 'timeline_in_s': 8.0, 'timeline_out_s': 12.0}]
+        for saved in ({'speech_mode': 'mute'}, {'narration_level': 'mute'},
+                      {'speech_mode': 'duck'}, {'duck_under_speech': False}, {}):
+            with self.subTest(saved):
+                script = """
+const spans=docMusicSpans(12);
+assert.strictEqual(spans.length,1);
+assert.strictEqual(spans[0].start,0);
+assert.strictEqual(spans[0].end,12);
 console.log('ok');
 """
-                result = run(segments, segments[-1]['timeline_out_s'],
-                             {'duck_under_speech': True, 'speech_mode': 'mute'}, script)
+                result = run(segments, 12.0, saved, script)
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_only_a_ducked_bite_leaves_the_bar_unbroken(self):
-        # This is the one state that keeps music under a bite, so the drawing has
-        # to be able to show it; the engine no longer offers it as a setting.
-        segments = [{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 4.0},
-                    {'kind': 'sound_bite', 'timeline_in_s': 4.0, 'timeline_out_s': 8.0}]
-        script = """
-assert.strictEqual(docMusicSpans(8).length,1);
-console.log('ok');
-"""
-        result = run(segments, 8.0, {'duck_under_speech': True, 'speech_mode': 'duck'}, script)
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_the_preview_never_silences_or_dips_the_bed(self):
+        source = Path('static/documentary_timeline.js').read_text()
+        start = source.index('function docSpeechMode(')
+        body = source[start:start + 400]
+        self.assertIn("return 'full';", body)
+        # The duck constant and the stop branch must not survive anywhere.
+        self.assertNotIn('DOC_DUCK_LEVEL', source)
+        self.assertNotIn("docMusic.narration_level==='mute'", source)
+        self.assertNotIn("docMusic.narration_level==='duck'", source)
 
-    def test_the_strip_carries_the_reviewed_spans_and_a_cut_marker(self):
+    def test_the_strip_carries_no_cut_marker_or_silent_state(self):
         source = Path('static/documentary_timeline.js').read_text()
         self.assertIn('doc-music-piece', source)
-        self.assertIn('doc-music-cut', source)
-        # Stopping the bed under the narration too leaves no music at all, and
-        # the strip must say that rather than draw an empty bar.
-        self.assertIn('docMusicCuts', source)
+        self.assertNotIn('doc-music-cut', source)
+        self.assertNotIn('· silent', source)
+        self.assertNotIn('cut under bites', source)
         # The old copy claimed a global "stops under speech" mode.
         self.assertNotIn('Stops under speech · click to change music', source)
 
