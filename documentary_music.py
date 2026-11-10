@@ -6,7 +6,7 @@ sound bite. The narration, the sound-bite audio and the original SRT are never
 altered.
 """
 from pathlib import Path
-import re, subprocess, uuid
+import re, subprocess, tempfile, uuid
 
 import av
 import imageio_ffmpeg
@@ -49,6 +49,42 @@ def probe_duration(path):
         if media.duration is not None:
             return float(media.duration / av.time_base)
     raise ValueError('The music length could not be read.')
+
+
+def measure_loudness_lufs(path):
+    """Estimate the bed's own loudness once, so the preview can match the export.
+
+    The exporter normalises the bed to a target loudness; the browser can only
+    scale the raw file, so it needs this number. Measuring the whole file is
+    accurate but takes ~40 s for a long track, and a single sample is wrong by
+    several dB on music that changes between sections (this project's bed swings
+    13 LU). Six short samples averaged, in loudness terms, is within ~1 dB and
+    takes about a second.
+    """
+    try:
+        from documentary_audio import measure_loudness
+        import math
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        duration = probe_duration(path)
+        spots = [0.1, 0.25, 0.4, 0.55, 0.7, 0.85] if duration > 45 else [0.5]
+        energies = []
+        for frac in spots:
+            sample = Path(tempfile.gettempdir()) / ('music-loud-' + uuid.uuid4().hex + '.wav')
+            try:
+                _run([ff, '-hide_banner', '-loglevel', 'error', '-y',
+                      '-ss', f'{max(0.0, duration * frac - 15):.3f}', '-i', str(path),
+                      '-t', f'{min(30.0, max(1.0, duration * 0.4)):.3f}',
+                      '-vn', '-ac', '2', '-ar', '48000', str(sample)])
+                energies.append(measure_loudness(ff, sample)['integrated_lufs'])
+            finally:
+                sample.unlink(missing_ok=True)
+        if not energies:
+            return None
+        # Loudness is logarithmic: average in linear power, not in LUFS.
+        power = sum(10 ** (v / 10) for v in energies) / len(energies)
+        return 10 * math.log10(power)
+    except Exception:
+        return None
 
 
 def save_upload(root, stream, filename):
@@ -106,8 +142,12 @@ def save_upload(root, stream, filename):
     if final != keep and final.exists():
         final.unlink()
     (target_dir / 'background_music.name').write_text(keep.name, encoding='utf-8')
+    # Measured once, here, because the browser cannot: the preview has to lift a
+    # quiet bed by the same amount the export does, or the two levels disagree.
+    loudness = measure_loudness_lufs(keep)
     return {'name': Path(filename).name, 'size': size, 'duration_s': round(duration, 3),
-            'path': str(keep.relative_to(Path(root))), 'version': MUSIC_VERSION}
+            'path': str(keep.relative_to(Path(root))), 'version': MUSIC_VERSION,
+            'loudness_lufs': round(loudness, 2) if loudness is not None else None}
 
 
 def settings(project):

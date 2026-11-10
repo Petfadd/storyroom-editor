@@ -555,6 +555,19 @@ function docMusicElement(){
 function docSpeechMode(){
  return 'full';
 }
+// The bed's own loudness is measured once on upload, so the preview can apply
+// the same gain the exporter applies: a quiet track is lifted, a loud one is
+// pulled down, and 35% means the same thing in the preview and in the file.
+function docMusicGain(){
+ if(!docMusic||!docMusic.enabled)return 0;
+ const pct=Math.max(0,Math.min(100,Number(docTrackVolume.music)||0));
+ const measured=Number(docMusic.loudness_lufs);
+ if(!Number.isFinite(measured)||measured<=-70)return pct/100;
+ // Same curve as `target_lufs` in documentary_music.py: the percentage already
+ // picks the bed loudness, so it must not be applied a second time as a volume.
+ const target=Math.max(-42,Math.min(-18,-42+pct*0.18));
+ return Math.min(1,Math.pow(10,(target-measured)/20));
+}
 // Keep the music bed locked to the narration clock and follow the saved level.
 function docSyncMusic(t,playing){
  // The timeline payload carries no music field, so this used to read an undefined
@@ -572,8 +585,10 @@ function docSyncMusic(t,playing){
   try{el.currentTime=Math.max(0,t||0)}catch{}
   return;
  }
- const base=docMusic.enabled?(Number(docTrackVolume.music)||0)/100:0;
- node.volume=Math.max(0,Math.min(1,base));
+ // The export normalises the bed to a target loudness; the browser can only
+ // scale the raw file. Without this the preview played several dB quieter than
+ // the file it was previewing, which is why the bed seemed not to be there.
+ node.volume=Math.max(0,Math.min(1,docMusicGain()));
  if(!playing){if(!node.paused)node.pause();return}
  // A live layer may drift; nudge it back without restarting the picture.
  // The bed loops, so its own position wraps while the film clock does not.

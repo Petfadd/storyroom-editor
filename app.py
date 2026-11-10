@@ -1698,6 +1698,9 @@ def _music_state(p,root):
  state['size']=int(music.get('size') or 0)
  state['duration_s']=float(music.get('duration_s') or 0)
  state['file_present']=music_path(root).is_file()
+ # The preview scales the raw file; without the measured loudness it cannot know
+ # how much gain the exporter would apply, so the two played at different levels.
+ state['loudness_lufs']=music.get('loudness_lufs')
  # The version comes from the file's own size and mtime, so replacing the bed
  # changes the URL and no browser can serve the previous one from cache.
  version=f"{state['size']}-{state['duration_s']:.3f}"

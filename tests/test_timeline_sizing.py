@@ -787,7 +787,8 @@ class BackgroundMusicTest(unittest.TestCase):
 
     def test_music_url_carries_a_version(self):
         start = self.app.index('def _music_state(')
-        body = self.app[start:start + 900]
+        # Wide enough to clear the per-field comments above the URL assignment.
+        body = self.app[start:start + 1600]
         self.assertIn('?v=', body,
                       'a replaced bed must be a different URL to bypass caches')
 
@@ -824,6 +825,58 @@ class BackgroundMusicTest(unittest.TestCase):
         body = self.studio[start:start + 1000]
         self.assertNotIn('A sound bite always carries the only audio', body)
         self.assertNotIn('the same way narration pauses', body)
+
+
+class PreviewMatchesExportLevelTest(unittest.TestCase):
+    """The preview must play the bed at the level the export will render.
+
+    The exporter normalises the bed to `target_lufs`; the browser can only scale
+    the raw file. While the preview used the raw percentage it played several dB
+    quieter than the file, and on a quiet track the music was inaudible under the
+    narration -- which reads as "the music is not there".
+    """
+
+    def test_the_upload_measures_the_bed_loudness(self):
+        music = Path('documentary_music.py').read_text()
+        self.assertIn('def measure_loudness_lufs(', music)
+        start = music.index('def save_upload(')
+        body = music[start:music.index('\n\ndef ', start)]
+        self.assertIn('measure_loudness_lufs(keep)', body,
+                      'the saved bed must carry its measured loudness')
+        self.assertIn("'loudness_lufs'", body)
+
+    def test_a_long_track_is_sampled_not_scanned(self):
+        # A full scan of a 29-minute bed took ~40 s; uploads must not wait for it.
+        music = Path('documentary_music.py').read_text()
+        start = music.index('def measure_loudness_lufs(')
+        body = music[start:music.index('def save_upload(', start)]
+        self.assertIn('spots', body, 'a long track is measured in sections')
+        self.assertIn('10 **', body, 'loudness is averaged in power, not in LUFS')
+
+    def test_the_api_reports_the_loudness(self):
+        app = Path('app.py').read_text()
+        start = app.index('def _music_state(')
+        body = app[start:start + 1200]
+        self.assertIn("state['loudness_lufs']", body)
+
+    def test_the_preview_applies_the_export_gain(self):
+        js = Path('static/documentary_timeline.js').read_text()
+        self.assertIn('function docMusicGain()', js)
+        start = js.index('function docMusicGain(')
+        body = js[start:js.index('\n}\n', start)]
+        # The same curve as target_lufs, applied once.
+        self.assertIn('-42', body)
+        self.assertIn('0.18', body)
+        self.assertIn('Math.pow(10', body)
+        self.assertNotIn('pct/100*Math.pow', body,
+                         'the percentage already picks the level; applying it twice '
+                         'made the preview quieter than the export')
+
+    def test_playback_uses_the_gain_helper(self):
+        js = Path('static/documentary_timeline.js').read_text()
+        start = js.index('function docSyncMusic(')
+        body = js[start:start + 2600]
+        self.assertIn('docMusicGain()', body)
 
 
 class NoExplanatoryProseTest(unittest.TestCase):
