@@ -185,6 +185,23 @@
 .render-page progress{width:100%;height:6px}
 .render-page .actionbar{display:flex;gap:10px;justify-content:flex-end;padding:12px 0 4px}
 .render-page .reference-video{width:100%;max-height:320px;margin-top:8px}
+/* A download control ON the player. The browser's own overflow menu cannot be
+   extended by any page, so the affordance lives over the video instead, in the
+   top-right corner and clear of the browser's bottom controls. */
+.player-shell{position:relative;display:block;margin-top:8px}
+.player-shell .reference-video{margin-top:0}
+.player-download{position:absolute;top:9px;right:9px;z-index:3;
+  display:inline-flex;align-items:center;gap:5px;text-decoration:none;
+  background:#0f1318e6;color:#eaf2fb;border:1px solid #ffffff3d;border-radius:6px;
+  padding:7px 11px;font-size:11px;font-weight:750;letter-spacing:.2px;
+  backdrop-filter:blur(6px);box-shadow:0 6px 20px #0007;transition:.15s}
+.player-download:hover{background:#ee455f;border-color:#ee455f;color:#fff}
+.player-download:focus-visible{outline:2px solid #fff;outline-offset:2px}
+/* On a narrow player the label would cover the picture; the arrow carries it. */
+@media(max-width:520px){
+  .player-download{padding:6px;font-size:0}
+  .player-download::before{content:"↓";font-size:14px}
+}
 .render-page .small{display:block;margin:6px 0;line-height:1.5;color:#93a3b8}
 .doc-cue-shot .audio-waveform.speech-wave{position:absolute;inset:auto 0 0 0;height:16px;opacity:.55}
 
@@ -315,10 +332,46 @@
    broadcast monitor does. Everything that draws into the frame is positioned
    absolutely, so the frame does not need to clamp its children's size. */
 .monitor video,.monitor img{object-fit:contain}
-.monitor[data-aspect="4:3"]{aspect-ratio:4/3}
-.monitor[data-aspect="1:1"]{aspect-ratio:1/1}
-.monitor[data-aspect="21:9"]{aspect-ratio:21/9}
-.monitor[data-fit="cover"] video,.monitor[data-fit="cover"] img{object-fit:cover}
+/* The frame is its own box inside the dark stage. In 16:9 it fills the stage as it
+   always has; a vertical film becomes a tall card in the middle of the stage, so
+   the interface reads vertical while editing a vertical film. The card is bounded
+   by BOTH the height above the transport and a share of the width, so it can never
+   overflow its panel. */
+.monitor-frame{position:relative;flex:0 1 auto;min-height:0;min-width:0;
+  height:100%;aspect-ratio:16/9;max-width:100%;overflow:hidden;border-radius:8px}
+.monitor[data-aspect="4:3"] .monitor-frame{aspect-ratio:4/3}
+.monitor[data-aspect="1:1"] .monitor-frame{aspect-ratio:1/1}
+.monitor[data-aspect="21:9"] .monitor-frame{aspect-ratio:21/9}
+.monitor[data-aspect="239:100"] .monitor-frame{aspect-ratio:239/100}
+/* A vertical film: a tall card centred in the dark stage, the same framing rule the
+   renderer uses. The one thing this must never do is let the frame size itself from
+   its contents: everything drawn into the frame is absolutely positioned, so its
+   contents measure zero and `height:auto` collapsed the whole monitor to a dot. The
+   height therefore stays definite (100% of the stage) and `aspect-ratio` derives the
+   width from it. `flex:none` keeps a flex basis from interfering with that width. */
+.monitor[data-aspect="9:16"] .monitor-frame,
+.monitor[data-aspect="4:5"] .monitor-frame{
+  flex:none;height:100%;width:auto;max-width:100%}
+.monitor[data-aspect="9:16"] .monitor-frame{aspect-ratio:9/16}
+.monitor[data-aspect="4:5"] .monitor-frame{aspect-ratio:4/5}
+.monitor[data-fit="cover"] .monitor-frame video,.monitor[data-fit="cover"] .monitor-frame img{object-fit:cover}
+.monitor.is-fullscreen .monitor-frame{border-radius:0}
+/* Nothing drawn into the frame may spill past it, so the picture is always a clean
+   rectangle whatever shape it is. */
+.monitor-frame{container-type:size}
+/* A vertical film is reviewed in a taller panel. The monitor keeps the picture and
+   the timeline keeps its own share; nothing else about the layout changes, so
+   switching back to 16:9 restores the default proportions exactly. */
+/* A vertical project uses exactly the layout a landscape one uses. The panels sit
+   in ONE grid row and the timeline is a SIBLING of the grid, not a row inside it,
+   so `grid-template-rows` here invents a second row and squeezes every panel into
+   the top half with an empty band underneath. The only thing that changes shape is
+   the frame inside the monitor. */
+/* Only the two siblings' SHARE of the height changes: the grid takes 58% instead of
+   50%, which makes a 9:16 frame usefully larger (144px -> 173px wide on a 680px
+   window) while the timeline keeps its own room. No grid rows are declared, because
+   the timeline is not inside the grid. Removing the class restores 50/50 exactly. */
+.editor-grid.is-vertical{flex:1.4 1 0}
 .monitor.is-fullscreen{border-radius:0;margin:0;background:#000}
 
 /* Transport row. */
@@ -338,6 +391,22 @@
 .transport-chip{border:1px solid #4c4c4c;background:transparent;color:#c8c8c8;
   border-radius:3px;padding:2px 7px;font-size:11px;font-weight:700;cursor:pointer;min-width:0}
 .transport-chip:hover{border-color:#7a7a7a;color:#fff}
+.transport-chip[aria-expanded="true"]{border-color:#7a7a7a;color:#fff;background:#383838}
+/* Floats above the whole editor, outside the transport: the transport clips its own
+   overflow, so a menu placed inside it would be cut off. */
+.aspect-menu{position:fixed;z-index:400;min-width:186px;padding:5px;
+  background:#1b1f26;border:1px solid #3b4655;border-radius:7px;
+  box-shadow:0 16px 44px #000a;display:flex;flex-direction:column;gap:1px}
+.aspect-menu[hidden]{display:none}
+.aspect-menu button{display:grid;grid-template-columns:52px 1fr 16px;align-items:center;gap:8px;
+  border:0;background:transparent;color:#dbe3ee;font:inherit;font-size:11px;
+  padding:7px 8px;border-radius:5px;cursor:pointer;text-align:left;width:100%}
+.aspect-menu button:hover{background:#2b333f}
+.aspect-menu button.current{background:#2b333f;color:#fff;font-weight:700}
+.aspect-size{font-weight:800;letter-spacing:.4px;color:#fff}
+.aspect-name{color:#93a1b4}
+.aspect-menu button.current .aspect-name{color:#c3cfdd}
+.aspect-tick{color:var(--green);text-align:right}
 .transport-icon{border:0;background:transparent;color:#bdbdbd;font-size:14px;line-height:1;
   padding:3px 4px;border-radius:3px;cursor:pointer}
 .transport-icon:hover{background:#383838;color:#fff}
@@ -367,3 +436,16 @@
   .caption-toggle{display:none}
   .timecode{font-size:9px}
 }
+
+/* Audio levels sit directly under Scale and reuse its proportions, so the three
+   faders read as one block with the picture control above them. */
+.doc-volume-control{padding:8px 0;border-bottom:1px solid #2b333e}
+.doc-volume-control>label{display:block;margin-bottom:4px}
+.doc-volume-row{display:flex;align-items:center;gap:6px;margin-top:4px}
+.doc-volume-row>label{flex:0 0 66px;font-size:10px;color:#9fb0c2}
+.inspector-scroll .doc-volume-row input[type=range]{flex:1;min-width:30px;accent-color:#ee455f;padding:0}
+.inspector-scroll .doc-volume-row input[type=number]{width:48px;text-align:right}
+.doc-volume-row>span{font-size:10px;color:#9fb0c2}
+.doc-vol-reset{margin:0;padding:2px 5px;background:#1b222d;color:#cad5df;border:1px solid #364251;border-radius:4px;cursor:pointer;font-size:10px;line-height:1}
+.doc-vol-reset:hover{background:#232c39}
+.doc-volume-control>p.small{margin:2px 0 6px}

@@ -55,7 +55,7 @@ def _run(args):
     if r.returncode:raise ValueError('Review preview preparation failed: '+r.stderr[-700:])
 
 
-def build(root,project,plan,dest,allow_tail=False,progress=lambda *x:None):
+def build(root,project,plan,dest,allow_tail=False,progress=lambda *x:None,width=640,height=360):
     root=Path(root).resolve();dest=Path(dest);plan=annotate_plan(project,root,copy.deepcopy(plan));parts,tail,timeline=picture_plan(project,plan,allow_tail)
     if not plan['bites']:raise ValueError('Add a sound bite before preparing this documentary preview.')
     assets={a['id']:a for a in project['assets']};ff=imageio_ffmpeg.get_ffmpeg_exe();dest.parent.mkdir(parents=True,exist_ok=True)
@@ -69,8 +69,15 @@ def build(root,project,plan,dest,allow_tail=False,progress=lambda *x:None):
             if not src.is_relative_to(root/'sources') or not src.is_file():raise ValueError('A required video source is missing.')
             clip=work/f'{i:04d}.mp4';scale=part.get('scale',100)
             if not 100<=scale<=200:raise ValueError('The picture scale must be between 100 and 200 percent.')
-            filt='fps=30,scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:black,setsar=1'
-            if scale!=100:filt+=f',scale={round(640*scale/100/2)*2}:{round(360*scale/100/2)*2},crop=640:360'
+            # Same framing rule as the final renderer: a narrow frame is filled and
+            # cropped from the centre, a wide frame keeps all of the picture.
+            narrow=width/height < 16/9
+            fit=(f'increase,crop={width}:{height}' if narrow
+                 else f'decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black')
+            filt=f'fps=30,scale={width}:{height}:force_original_aspect_ratio={fit},setsar=1'
+            # The zoom's scale would otherwise leave a non-square pixel ratio behind;
+            # reset it so the preview matches the export exactly.
+            if scale!=100:filt+=f',scale={round(width*scale/100/2)*2}:{round(height*scale/100/2)*2},crop={width}:{height},setsar=1'
             filt+=',format=yuv420p'
             _run([ff,'-hide_banner','-loglevel','error','-y','-ss',f'{part["start"]:.6f}','-i',str(src),'-an','-vf',filt,'-frames:v',str(part['frames']),'-c:v','libx264','-preset','ultrafast','-crf','23','-threads','2',str(clip)])
             with av.open(str(clip)) as media:
@@ -88,8 +95,20 @@ def build(root,project,plan,dest,allow_tail=False,progress=lambda *x:None):
     progress(len(parts),len(parts));return {'duration_s':duration,'picture_tail_s':max(0,tail),'audio_processing_version':AUDIO_PROCESSING_VERSION,'narration_lufs':audio_result['narration_lufs'],'sound_bite_levels':audio_result['sound_bite_levels']}
 
 
+def preview_size(project):
+    """Pixel size for the review preview: keeps the project's shape at review scale.
+
+    A 9:16 film reviewed through a 16:9 preview hides every framing error until the
+    export, so the preview is rendered at the project's aspect and only the long side
+    is reduced. Portrait 1080x1920 becomes 360x640.
+    """
+    width=640
+    aw,ah={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}.get(project.get('format') or 'landscape',(16,9))
+    return width,max(2,int(round(width*ah/aw/2)*2))
+
+
 def start(root,project,plan,allow_tail,is_current):
-    root=Path(root);pid=project['id']
+    root=Path(root);pid=project['id'];width,height=preview_size(project)
     with GUARD:
         if JOBS.get(pid,{}).get('status') in ('queued','running'):raise ValueError('A documentary preview is already being prepared.')
         job={'status':'queued','completed':0,'total':0,'detail':'Preparing documentary timeline preview.'};JOBS[pid]=job
@@ -99,9 +118,9 @@ def start(root,project,plan,allow_tail,is_current):
             with GUARD:job['status']='running'
             def report(n,total):
                 with GUARD:job.update(completed=n,total=total,detail=f'Preparing picture {min(n+1,total)} of {total}.')
-            result=build(root,project,plan,output,allow_tail,report)
+            result=build(root,project,plan,output,allow_tail,report,width=width,height=height)
             if not is_current(project,plan):raise ValueError('Project or sound-bite plan changed during preparation. Prepare again.')
-            record={'output':output.name,'project_version':project.get('updated'),'plan_revision':plan['revision'],**result}
+            record={'output':output.name,'project_version':project.get('updated'),'plan_revision':plan['revision'],'width':width,'height':height,**result}
             with GUARD:
                 dest=root/'reviews'/'documentary_review_preview.json';dest.parent.mkdir(parents=True,exist_ok=True);temp=dest.with_name(dest.name+'.'+uuid.uuid4().hex+'.tmp')
                 try:temp.write_text(json.dumps(record,indent=2),encoding='utf-8');temp.replace(dest)

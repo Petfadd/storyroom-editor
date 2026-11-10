@@ -189,7 +189,10 @@ function docDrawNarrationWaveforms(){
 let docDirectEvent=null,docDirectBusy=false,docDirectToken=0;
 let docNextEvent=null,docNextToken=0,docPictureAt=null;
 let liveNode=masterNode,standbyNodeEl=null;
-const DOC_PREROLL_S=1.5;   // begin preparing the next picture this early
+// Prepare the next picture well before the cut. A source clip is tens of MB and
+// must be fetched and seeked on the standby element; at 1.5s the incoming
+// picture arrived after the cut, leaving the monitor blank while audio ran on.
+const DOC_PREROLL_S=8;
 const DOC_DRIFT_S=0.08;    // picture/clock drift tolerated before correcting
 function docStandby(){return standbyNodeEl||(standbyNodeEl=($('#program-source-next')||nextSourceNode))}
 function docDirectAt(t){return window.docTimelineData?.schedule?.find(e=>t*1000>=e.timeline_in_ms&&t*1000<e.timeline_out_ms)}
@@ -289,7 +292,10 @@ function docSegmentAt(t){const d=window.docTimelineData;return d?.segments.find(
 function docBaseAt(t){const seg=docSegmentAt(t);if(!seg)return 0;return seg.kind==='sound_bite'?seg.narration_resume_s:Math.min(seg.source_out_s,seg.source_in_s+Math.max(0,t-seg.timeline_in_s))}
 function docSelectAt(i,t,event){if(!leave())return;pauseEditor();if(event&&(event.ctrlKey||event.metaKey)){const id=scenes()[i].id;if(selectedSlotIds.has(id))selectedSlotIds.delete(id);else selectedSlotIds.add(id)}else selectedSlotIds=new Set([scenes()[i].id]);sceneIndex=i;docSeekTimeline(t,false);renderInspector();markSelected();syncPictureScale()}
 function docSelectScene(i,event){const s=scenes()[i],span=s&&docNarrationSpans(s.frame_in/30,s.frame_out/30)[0];if(span)docSelectAt(i,span.start,event)}
-function docSeekTimeline(t,select=true){const d=window.docTimelineData;if(!d?.duration)return;if(select&&!leave())return;const was=editorPlaying;pauseEditor();t=Math.max(0,Math.min(d.duration-.001,t));if(d.status==='ready'){try{if(d.direct){docResetStandby();liveNode=masterNode;narrNode.currentTime=Math.min(t,narrNode.duration||t);docSyncMusic(t,false);masterNode.pause();docStandby().pause();docStandby().classList.remove('is-active');docDirectSwitch(t,false,true)}else masterNode.currentTime=t}catch{}}if(select){const base=docBaseAt(t),i=scenes().findIndex(s=>base>=s.frame_in/30&&base<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;renderInspector();markSelected()}}docUpdatePosition();if(was)docPlayTimeline()}
+function docSeekTimeline(t,select=true){const d=window.docTimelineData;if(!d?.duration)return;if(select&&!leave())return;const was=editorPlaying;pauseEditor();t=Math.max(0,Math.min(d.duration-.001,t));
+ // While a drag is in flight, only move the picture and the playhead. The
+ // inspector and the scene selection settle once the pointer is released.
+ const scrubbing=!!playheadDrag;if(d.status==='ready'){try{if(d.direct){docResetStandby();liveNode=masterNode;narrNode.currentTime=Math.min(t,narrNode.duration||t);docSyncMusic(t,false);masterNode.pause();docStandby().pause();docStandby().classList.remove('is-active');docDirectSwitch(t,false,true)}else masterNode.currentTime=t}catch{}}if(select&&!scrubbing){const base=docBaseAt(t),i=scenes().findIndex(s=>base>=s.frame_in/30&&base<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;renderInspector();markSelected()}}docUpdatePosition();if(was&&!scrubbing)docPlayTimeline()}
 async function docPlayTimeline(){const token=++docPlayGeneration,d=window.docTimelineData;if(d?.status!=='ready'||!d.url){toast('Prepare the documentary timeline preview first.');return}try{const state=await api(`/api/projects/${d.id}/`+(d.direct?'documentary-audio':'documentary-review-preview'));if(token!==docPlayGeneration||window.docTimelineData!==d)return;if((d.direct?state.status!=='done':state.status!=='ready')||state.url!==d.url){toast('The timeline changed. Prepare the preview again.');reloadDocTimeline();return}}catch(e){toast('Cannot verify the timeline preview: '+e.message);return}if(dirty){toast('Save or discard scene edits before playing.');return}if(d.direct){if(narrNode.currentTime>=d.duration-.05)narrNode.currentTime=0;editorPlaying=true;updatePlaybackButton();docDirectEvent=null;docPictureAt=null;docResetStandby();masterNode.muted=true;narrNode.muted=editorMuted;try{await narrNode.play()}catch(e){pauseEditor();toast('Playback could not start: '+e.message);return}/* the picture follows the clock */docDirectSwitch(narrNode.currentTime,true,true);if(editorPlaying){docPremoteNext(narrNode.currentTime||0);docSyncMusic(narrNode.currentTime||0,true)}return}if(masterNode.currentTime>=d.duration-.01)masterNode.currentTime=0;editorPlaying=true;updatePlaybackButton();try{masterNode.muted=editorMuted;await masterNode.play()}catch(e){pauseEditor();toast('Timeline playback could not start: '+e.message)}}
 // The Scale slider crops or enlarges the picture in the monitor. It must survive
 // the per-frame position repaint, which used to reset the layer to scale(1).
@@ -401,35 +407,25 @@ function docStartBiteDrag(event){
 
 setInterval(async()=>{const d=window.docTimelineData;if(!d||d.status!=='ready'||P?.id!==d.id)return;try{const state=await api(`/api/projects/${d.id}/`+(d.direct?'documentary-audio':'documentary-review-preview'));if(window.docTimelineData===d&&((d.direct?state.status!=='done':state.status!=='ready')||state.url!==d.url)){pauseEditor();reloadDocTimeline()}}catch{if(window.docTimelineData===d){d.verifyFailures=(d.verifyFailures||0)+1;if(d.verifyFailures>=3){pauseEditor();d.status='error';d.detail='Could not verify the timeline preview; playback stopped.';renderProject()}}}},5000);
 
-/* Background music: optional bed, ducked under narration and footage speech. */
+/* Background music: optional bed, played continuously for the whole film. */
 window.docLoadMusic=async function(){
  if(P?.edit_mode!=='documentary'){docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false};docRenderMusicTrack();return}
  try{docMusic=await api(`/api/projects/${P.id}/documentary-music`)}catch{docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false}}
- docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:35;docRenderMusicTrack();window.docUpdateMuteControls?.()};
-// A sound bite carries the only audio in its span, so the bed is cut there. The
-// strip must show that: one piece per span where music actually plays, and a
-// real gap under every bite. A single unbroken bar claimed music was running
-// through the bites the audio engine already silences.
+ // The saved speech levels ride along with the music settings so one request
+ // fills every fader in the inspector.
+ docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:35;
+ if(Number.isFinite(docMusic.narration_percent))docTrackVolume.narration=docMusic.narration_percent;
+ if(Number.isFinite(docMusic.clip_percent))docTrackVolume.clip=docMusic.clip_percent;
+ docRenderMusicTrack();window.docUpdateMuteControls?.()};
+// The bed is continuous, so the strip is one unbroken bar for the whole film.
+// It used to draw a gap under every sound bite and under the narration, which
+// promised a cut the audio engine no longer makes.
 function docMusicCuts(duration){
- const total=Math.max(0,duration||0);
- const segments=window.docTimelineData?.segments||[];
- // A bite is always cut. The narration is cut only when the project chose to
- // stop the bed there as well, which leaves ordinary picture as the only place
- // music can be heard.
- const kinds=docMusic.narration_level==='mute'?['sound_bite','narration']:['sound_bite'];
- return segments.filter(s=>kinds.includes(s.kind))
-  .map(s=>[Math.max(0,s.timeline_in_s),Math.min(total,s.timeline_out_s)]).filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0]);
+ return [];
 }
 function docMusicSpans(duration){
  const total=Math.max(0,duration||0);
- if(!total)return [];
- const spans=[];let cursor=0;
- for(const [a,b] of docMusicCuts(total)){
-  if(a>cursor+.001)spans.push({start:cursor,end:a});
-  cursor=Math.max(cursor,b);
- }
- if(cursor<total-.001)spans.push({start:cursor,end:total});
- return spans;
+ return total?[{start:0,end:total}]:[];
 }
 window.docMusicSpans=docMusicSpans;
 function docRenderMusicTrack(){
@@ -451,36 +447,16 @@ function docRenderMusicTrack(){
   return;
  }
  const spans=duration>0?docMusicSpans(duration):[{start:0,end:0}];
- const cut=spans.length!==1||(spans[0]&&(spans[0].start>.001||spans[0].end<duration-.001));
- // A bed that is stopped under the narration and cut under every bite has no
- // music left. Say so instead of drawing an empty strip that looks broken.
- const nothing=spans.length===0;
- const why=docMusic.narration_level==='mute'?'Music stops under the narration and is cut under every sound bite'
-   :cut?'Music cut under every sound bite':'Music plays under the narration';
  const zoom=timelineZoom;
- // Pieces share the strip: each one is positioned at its own time, so the gaps
- // under the bites are visible and the bites stay draggable underneath.
- const piece=(span,i)=>{
-  const left=span.start*zoom,width=Math.max(2,(span.end-span.start)*zoom-1);
-  const first=i===0;
-  // After a bite the music comes back, so name it again: a lone glyph looked
-  // like a broken clip rather than the same bed resuming. A short piece keeps
-  // the name in its tooltip rather than clipping it into a smear.
-  if(!first){
-   const label=width<110?'':`<div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong></div>`;
-   return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} resumes · ${docTime(span.start)}–${docTime(span.end)}">${label}</div>`;
-  }
-  return `<div class="doc-music-piece" style="left:${left}px;width:${width}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong><span>${docMusic.enabled?why:'Background music is off'}</span></div></div>`;
- };
+ // One piece for the whole film: the bed is never cut, so there is no gap to
+ // draw and no second label to repeat the name at every resume point.
  clip.style.left='0px';clip.style.width=Math.max(3,duration*zoom-1)+'px';
- // The strip itself is only the scaled background; the pieces carry the audio.
+ // The strip itself is only the scaled background; the piece carries the audio.
  clip.style.background='transparent';clip.style.borderColor='transparent';
  clip.className='audio-clip doc-music doc-music-strip';
  clip.onclick=()=>docPickMusic();
- const cuts=spans.slice(1).map(s=>`<span class="doc-music-cut" style="left:${s.start*zoom}px" aria-hidden="true"></span>`).join('');
- clip.innerHTML=nothing
-  ?`<div class="doc-music-piece" style="left:0;width:${Math.max(3,duration*zoom-1)}px" title="No music is heard with this setting"><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')} · silent</strong><span>${why} · click to change</span></div></div>`
-  :spans.map(piece).join('')+cuts;
+ const span=spans[0]||{start:0,end:duration};
+ clip.innerHTML=`<div class="doc-music-piece" style="left:0;width:${Math.max(3,duration*zoom-1)}px" title="${E(docMusic.name||'Background music')} · ${docTime(span.start)}–${docTime(span.end)}"><canvas class="audio-waveform doc-music-wave" aria-hidden="true"></canvas><div class="audio-label"><strong>♪ ${E(docMusic.name||'Background music')}${docMusic.enabled?'':' · off'}</strong>${docMusic.enabled?'':'<span>off</span>'}</div></div>`;
  requestAnimationFrame(()=>{
   document.querySelectorAll('#music-track .doc-music-wave').forEach(drawDocMusicWaveform);
   window.docPaintPlayhead?.();
@@ -525,13 +501,32 @@ window.docPickMusic=async function(){
  const input=document.createElement('input');input.type='file';input.accept='audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus';
  input.onchange=async()=>{const file=input.files?.[0];if(!file||!P)return;
   const form=new FormData();form.append('music',file);
-  try{const response=await fetch(`/api/projects/${P.id}/documentary-music`,{method:'POST',body:form});const data=await response.json();if(!response.ok)throw Error(data.error||'Music could not be saved.');docMusic=data;toast('Background music saved. Prepare the timeline preview to hear the ducked mix.');await window.docLoadMusic?await window.docLoadMusic():0;window.reloadDocTimeline()}catch(e){toast(e.message)}};
+  try{const response=await fetch(`/api/projects/${P.id}/documentary-music`,{method:'POST',body:form});
+  // Read the body defensively: a non-JSON reply (a proxy error page, a dropped
+  // upload) must not be reported as an unreadable server.
+  let data={};try{data=await response.json()}catch{data={}}
+  if(!response.ok)throw Error(data.error||`Music could not be saved (${response.status}).`);
+  // The upload replaces whatever was saved. Refresh every place that shows the
+  // file, or a previous name keeps sitting in Setup after the swap.
+  docMusic=data;
+  window.docMusicCard=data;
+  toast(`${data.name||'Music'} saved — it replaces the previous track.`);
+  await window.docLoadMusic?await window.docLoadMusic():0;
+  if($('#manage-dialog')?.open)renderManagement();
+  window.reloadDocTimeline()}catch(e){toast(e.message)}};
  input.click();
 };
 window.docToggleMusic=async function(){
  if(!P)return;
  if(!docMusic.file_present){await window.docPickMusic();return}
- try{docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{enabled:!docMusic.enabled});docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:docTrackVolume.music;docApplyPreviewVolumes();docRenderMusicTrack()}catch(e){toast(e.message)}
+ try{
+  docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{enabled:!docMusic.enabled});
+  docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:docTrackVolume.music;
+  // Setup shows the same on/off state; leave it behind and it contradicts the strip.
+  window.docMusicCard=docMusic;
+  docApplyPreviewVolumes();docRenderMusicTrack();
+  if($('#manage-dialog')?.open)renderManagement();
+ }catch(e){toast(e.message)}
 };
 // Music is a separate, live layer. The delivered mix carries narration and the
 // chosen bites; music is played alongside it so level changes take effect at
@@ -552,46 +547,59 @@ function docMusicElement(){
  }
  return docMusicNode;
 }
-// Music sits under the narration and is cut under every chosen footage sound
-// bite. Both decisions are read from the edit clock, so they follow the picture
-// without a rebuild.
-const DOC_DUCK_LEVEL=0.355;
-// 'stop' means the bed is silenced; that is what a sound bite always gets.
-// Under continuous narration the bed either dips or, if the project chose it,
-// stops.
-function docSpeechMode(t){
- const d=window.docTimelineData;
- // The schedule is the frame-accurate clock in beat playback and the segments
- // are the planning clock. Either one saying "sound bite" silences the bed, so a
- // mismatch between the two can never leave music playing over bite speech.
- const scheduled=d.schedule?docDirectAt(t)?.kind:'';
- const planned=docSegmentAt(t)?.kind||'';
- const kinds=[scheduled,planned];
- // A bite is never dipped here: the engine has no setting that keeps music
- // under one, and the preview must not invent one either.
- if(kinds.includes('sound_bite'))return 'stop';
- if(kinds.includes('narration'))return docMusic.narration_level==='mute'?'stop':'duck';
+// The bed plays at one level for the whole film: nothing duck or cut it. The
+// mode is read from the edit clock so the preview keeps following the picture.
+// The bed runs at the volume the user set, for the whole film. It is not ducked
+// under the narration and not cut under a sound bite, because the export does
+// the same and the preview must match the file.
+function docSpeechMode(){
  return 'full';
+}
+// The bed's own loudness is measured once on upload, so the preview can apply
+// the same gain the exporter applies: a quiet track is lifted, a loud one is
+// pulled down, and 35% means the same thing in the preview and in the file.
+function docMusicGain(){
+ if(!docMusic||!docMusic.enabled)return 0;
+ const pct=Math.max(0,Math.min(100,Number(docTrackVolume.music)||0));
+ const measured=Number(docMusic.loudness_lufs);
+ if(!Number.isFinite(measured)||measured<=-70)return pct/100;
+ // Same curve as `target_lufs` in documentary_music.py: the percentage already
+ // picks the bed loudness, so it must not be applied a second time as a volume.
+ const target=Math.max(-42,Math.min(-18,-42+pct*0.18));
+ return Math.min(1,Math.pow(10,(target-measured)/20));
 }
 // Keep the music bed locked to the narration clock and follow the saved level.
 function docSyncMusic(t,playing){
- const d=window.docTimelineData,url=d?.music_url;
+ // The timeline payload carries no music field, so this used to read an undefined
+ // `music_url` and bail out on the line below: the bed was created, then silently
+ // paused forever. The URL comes from the music settings instead, which already
+ // report whether a file is present and enabled.
+ // `docMusic.url` is versioned by the file's size and length, so replacing the
+ // bed yields a different URL and the browser cannot replay the old one.
+ const url=(docMusic&&docMusic.enabled&&docMusic.file_present)?(docMusic.url||`/api/projects/${P?.id}/documentary-music/file`):'';
  const node=docMusicNode;
  if(!url){if(node&&!node.paused)node.pause();return}
  if(!node||node.getAttribute('src')!==url){
+  docMusicSrc=url;
   const el=docMusicElement();el.src=url;
   try{el.currentTime=Math.max(0,t||0)}catch{}
   return;
  }
- const base=docMusic.enabled?(Number(docTrackVolume.music)||0)/100:0;
- const mode=docSpeechMode(t);
- const keep=mode==='stop'?0:(mode==='duck'?DOC_DUCK_LEVEL:1);
- node.volume=Math.max(0,Math.min(1,base*keep));
+ // The export normalises the bed to a target loudness; the browser can only
+ // scale the raw file. Without this the preview played several dB quieter than
+ // the file it was previewing, which is why the bed seemed not to be there.
+ node.volume=Math.max(0,Math.min(1,docMusicGain()));
  if(!playing){if(!node.paused)node.pause();return}
  // A live layer may drift; nudge it back without restarting the picture.
+ // The bed loops, so its own position wraps while the film clock does not.
+ // Compare where the loop actually is with where it should be, rather than
+ // against the unwrapped time, which could never match past the first pass.
  const want=Math.max(0,t||0);
- if(node.readyState>=1&&Math.abs((node.currentTime%Math.max(1,node.duration||1e9))-want)>0.35){
-  try{node.currentTime=want}catch{}
+ const length=node.duration||0;
+ const here=length>0?node.currentTime%length:node.currentTime;
+ const there=length>0?want%length:want;
+ if(node.readyState>=1&&Math.abs(here-there)>0.35){
+  try{node.currentTime=there}catch{}
  }
  if(node.paused)node.play().catch(()=>{});
 }
@@ -599,21 +607,18 @@ function docSyncMusic(t,playing){
 window.docApplyPreviewVolumes=function(){
  // Preview-only switching. The export always uses the saved narration, bite and
  // ducked music levels; nothing here changes the rendered file.
- if(window.docTimelineData?.direct)narrNode.volume=1;
- else masterNode.volume=1;
+ //
+ // Narration and the selected sound bites arrive as a single mixed stream, so one
+ // fader cannot move one without the other. The quieter of the two saved levels is
+ // what that stream can honestly represent; raising either alone would lift both.
+ const speechLevel=Math.min(100,Math.min(docTrackVolume.narration??100,docTrackVolume.clip??100))/100;
+ if(window.docTimelineData?.direct)narrNode.volume=speechLevel;
+ else masterNode.volume=speechLevel;
  masterNode.muted=window.docTimelineData?.direct?true:editorMuted;
  sourceNode.volume=0;
  const t=window.docTimelineData?.direct?(narrNode.currentTime||0):(masterNode.currentTime||0);
  docSyncMusic(t,editorPlaying);
 };
-// The only music choice left is what the bed does under the narration. A sound
-// bite is always cut, so there is no control that could put music under one.
-window.docToggleNarrationLevel=async function(){if(!P)return;try{
- const mode=docMusic.narration_level==='duck'?'mute':'duck';
- docMusic=await api(`/api/projects/${P.id}/documentary-music`,'PATCH',{narration_level:mode});
- window.docApplyPreviewVolumes();docRenderMusicTrack();renderManagement?.();
- toast(mode==='mute'?'Music now stops under the narration as well as under every sound bite.':'Music now dips under the narration and is cut under every sound bite.');
-}catch(e){toast(e.message)}};
 
 async function loadDocBiteWaveforms(){
  // One decode of the source audio feeds every bite waveform; nothing is uploaded.

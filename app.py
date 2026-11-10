@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import defaultdict
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, send_file, render_template, Response
-from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge
+from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge, HTTPException
 from types import SimpleNamespace
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import cv2, imageio_ffmpeg
@@ -487,10 +487,18 @@ def cache(response):
  # source media (the URL carries the asset revision) and the narration mix (a
  # fresh uuid per render). A 50MB clip served no-cache re-downloaded on each
  # seek, which is what left the monitor hanging on a black frame.
- replayable=(request.path.endswith('/file')
+ # The music bed is served from one fixed path and is *replaced* rather than
+ # re-written in place, so it must never be cached as immutable: a replacement
+ # would otherwise keep playing the previous file for a year.
+ music=bool(re.fullmatch(r'/api/projects/[^/]+/documentary-music/file',request.path))
+ replayable=(request.path.endswith('/file') and not music
              or re.fullmatch(r'/api/projects/[^/]+/documentary-audio/documentary_audio_[a-f0-9]{32}\.(wav|m4a)',request.path))
  if replayable and request.args.get('download')!='1' and response.status_code in (200,206):
   response.headers['Cache-Control']='private, max-age=31536000, immutable'
+ elif music and response.status_code in (200,206):
+  # Still cacheable, but keyed by the file's own identity so a new upload is a
+  # different URL and reaches the browser immediately.
+  response.headers['Cache-Control']='private, max-age=604800'
  else:
   response.headers['Cache-Control']='no-store'
  return response
@@ -1679,17 +1687,36 @@ def documentary_audio_file(pid,name):
   if p.get('edit_mode','review')!='documentary' or job.get('status')!='done' or job.get('audio_processing_version')!=documentary_audio.AUDIO_PROCESSING_VERSION or job.get('output')!=name or not current or job.get('plan_revision')!=plan['revision'] or any(b.get('stale_reasons') for b in annotate_plan(p,root,plan)['bites']):raise NotFound('Documentary audio is not current.')
   return send_from_directory(root/'renders',name,conditional=True,as_attachment=request.args.get('download')=='1')
 
+def _music_state(p,root):
+ """One reply shape for upload, patch and read, so the panel cannot be told half a story."""
+ from documentary_music import settings,music_path
+ state=settings(p)
+ music=p.get('documentary_music') or {}
+ # Name and length are what prove a file actually landed. Without them a
+ # successful upload and a silent no-op look identical in the panel.
+ state['name']=music.get('name') or ''
+ state['size']=int(music.get('size') or 0)
+ state['duration_s']=float(music.get('duration_s') or 0)
+ state['file_present']=music_path(root).is_file()
+ # The preview scales the raw file; without the measured loudness it cannot know
+ # how much gain the exporter would apply, so the two played at different levels.
+ state['loudness_lufs']=music.get('loudness_lufs')
+ # The version comes from the file's own size and mtime, so replacing the bed
+ # changes the URL and no browser can serve the previous one from cache.
+ version=f"{state['size']}-{state['duration_s']:.3f}"
+ state['url']=f'/api/projects/{p["id"]}/documentary-music/file?v={version}' if state['file_present'] else ''
+ levels=p.get('documentary_audio_levels') or {}
+ state['narration_percent']=levels.get('narration_percent',100)
+ state['clip_percent']=levels.get('clip_percent',100)
+ return state
+
 @app.get('/api/projects/<pid>/documentary-music')
 def documentary_music_state(pid):
- from documentary_music import settings,music_path
  root=folder(pid)
  with LOCKS[pid]:
   p=load(pid)
   if p.get('edit_mode','review')!='documentary':raise BadRequest('Background music is available only in a documentary project.')
-  state=settings(p)
-  state['file_present']=music_path(root).is_file()
-  state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
- return jsonify(state)
+  return jsonify(_music_state(p,root))
 
 @app.post('/api/projects/<pid>/documentary-music')
 def upload_documentary_music(pid):
@@ -1705,7 +1732,7 @@ def upload_documentary_music(pid):
   music=dict(p.get('documentary_music') or {})
   music.update(record);music.setdefault('enabled',True);music.setdefault('volume_percent',35);music.setdefault('narration_level','duck')
   p['documentary_music']=music;save(p)
- return jsonify(settings(p))
+  return jsonify(_music_state(p,root))
 
 @app.patch('/api/projects/<pid>/documentary-music')
 def update_documentary_music(pid):
@@ -1719,16 +1746,16 @@ def update_documentary_music(pid):
   if 'enabled' in data:
    if not isinstance(data['enabled'],bool):raise BadRequest('Music on/off must be true or false.')
    music['enabled']=data['enabled']
-  # A sound bite always carries the only audio, so there is no setting that puts
-  # music under one. Only the narration behaviour is a choice.
-  if 'duck_under_speech' in data:
-   raise BadRequest('Music is always cut under a sound bite. Use narration_level to choose what happens under the narration.')
-  if 'narration_level' in data:
-   if data['narration_level'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
-   music['narration_level']=data['narration_level']
-  if 'speech_mode' in data:
-   if data['speech_mode'] not in ('mute','duck'):raise BadRequest('Music under the narration must stop or dip.')
-   music['narration_level']=data['speech_mode']
+  # The bed is continuous: it plays under the narration and under every sound
+  # bite, at the one volume the user set. Saved requests that still ask for a
+  # duck or a mute are accepted and stored as 'full', so an old client cannot
+  # reintroduce either behaviour.
+  if 'duck_under_speech' in data and data['duck_under_speech'] is not False:
+   raise BadRequest('The background music plays continuously; it is not ducked or cut.')
+  for key in ('narration_level','speech_mode'):
+   if key in data:
+    if data[key] not in ('full','mute','duck'):raise BadRequest('Music plays continuously, under narration and sound bites alike.')
+    music['narration_level']='full'
   music.pop('duck_under_speech',None)
   if 'volume_percent' in data:
    value=data['volume_percent']
@@ -1743,6 +1770,38 @@ def update_documentary_music(pid):
   if not music_path(root).is_file():music['enabled']=False
   p['documentary_music']=music;save(p)
   state=settings(p);state['file_present']=music_path(root).is_file();state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
+ return jsonify(state)
+
+@app.patch('/api/projects/<pid>/documentary-audio-levels')
+def update_documentary_audio_levels(pid):
+ """Save the narration, clip-audio and music balance that the export will apply."""
+ from documentary_music import settings as music_settings
+ data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Audio levels are available only in a documentary project.')
+  levels=dict(p.get('documentary_audio_levels') or {})
+  # Percentages, not decibels: a reviewer can reason about 80% without knowing
+  # what a dB step sounds like. 150% is the ceiling for the two speech levels so a
+  # quiet source can be lifted; music keeps its own 1-100 range because the bed is
+  # already expressed that way everywhere else.
+  for key,ceiling in (('narration_percent',150),('clip_percent',150)):
+   if key not in data:continue
+   value=data[key]
+   if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Audio levels must be whole percentages.')
+   if not 0<=value<=ceiling:raise BadRequest(f'Audio level must be between 0 and {ceiling} percent.')
+   levels[key]=value
+  music=dict(p.get('documentary_music') or {})
+  if 'volume_percent' in data:
+   value=data['volume_percent']
+   if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Music level must be a whole percentage.')
+   if not 1<=value<=100:raise BadRequest('Music level must be between 1 and 100 percent. Use the music switch to turn the bed off.')
+   music['volume_percent']=value;p['documentary_music']=music
+  levels.setdefault('narration_percent',100);levels.setdefault('clip_percent',100)
+  p['documentary_audio_levels']=levels;save(p)
+  state=music_settings(p);state['file_present']=bool((p.get('documentary_music') or {}).get('name'))
+  state['volume_percent']=(p.get('documentary_music') or {}).get('volume_percent',state.get('volume_percent',35))
+  state['narration_percent']=levels['narration_percent'];state['clip_percent']=levels['clip_percent']
  return jsonify(state)
 
 @app.get('/api/projects/<pid>/documentary-music/file')
@@ -1839,6 +1898,11 @@ def documentary_review_preview_state(pid):
   name=record['output']
   if not re.fullmatch(r'documentary_review_[a-f0-9]{32}\.mp4',name) or not (root/'renders'/name).is_file():return {'status':'unavailable'}
   plan=load_plan(root)
+  # A preview made for a different frame shape is not a preview of this film. Records
+  # written before the shape was recorded are judged on the values they carry.
+  import documentary_preview
+  shape=documentary_preview.preview_size(p)
+  if record.get('width') is not None and (record.get('width'),record.get('height'))!=shape:return {'status':'stale'}
   if record.get('audio_processing_version')!=AUDIO_PROCESSING_VERSION or record.get('project_version')!=p.get('updated') or record.get('plan_revision')!=plan['revision'] or any(x.get('stale_reasons') for x in annotate_plan(p,root,plan)['bites']):return {'status':'stale'}
   return {'status':'ready','url':f'/api/projects/{pid}/documentary-review-preview/{name}','detail':'Low-resolution review preview; selected sound-bite levels matched to narration. Not a final export.','narration_lufs':record.get('narration_lufs'),'sound_bite_levels':record.get('sound_bite_levels',[])}
  except (OSError,ValueError,KeyError,TypeError):return {'status':'unavailable'}
@@ -2516,8 +2580,21 @@ def scene_thumbnail(pid,sid):
  return send_from_directory(cache,out.name,conditional=True)
 @app.errorhandler(400)
 @app.errorhandler(404)
+@app.errorhandler(405)
 @app.errorhandler(413)
+@app.errorhandler(415)
+@app.errorhandler(422)
+@app.errorhandler(429)
 def friendly(e):return jsonify({'error':str(e.description)}),e.code
+
+
+@app.errorhandler(HTTPException)
+def any_http_error(e):
+ # Every remaining HTTP error must still be JSON. A bare 405 (wrong method) or a
+ # proxy-generated error arrives as HTML, and the client only reads JSON -- the
+ # reader then reports "the server response could not be read" instead of the
+ # real reason, which is how a wrong method surfaced as an unreachable server.
+ return jsonify({'error':str(e.description or e.name)}), e.code
 @app.errorhandler(500)
 def internal(e):return jsonify({'error':'The operation could not finish. Your saved project remains on disk. Check server diagnostics.'}),500
 if __name__=='__main__':app.run(host=os.environ.get('STORYROOM_HOST','0.0.0.0'),port=int(os.environ.get('PORT','8003')),threaded=True,debug=False)

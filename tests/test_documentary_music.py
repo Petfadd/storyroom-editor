@@ -32,19 +32,21 @@ class MusicBedTest(unittest.TestCase):
                              {'kind': 'sound_bite', 'timeline_in_s': 2.0, 'timeline_out_s': 3.0},
                              {'kind': 'narration', 'timeline_in_s': 3.0, 'timeline_out_s': 4.0}]}
 
-    def test_duck_windows_cover_all_speech(self):
-        windows = music.speed_windows(self.timeline()['segments'], 4.0, padding_s=0)
-        self.assertEqual(windows, [(0.0, 4.0)])
+    def test_the_bed_has_no_speech_windows(self):
+        # The duck/cut helpers are gone, so no speech span can change the gain.
+        for name in ('speed_windows', 'speech_windows', '_speech_gain'):
+            self.assertFalse(hasattr(music, name), f'{name} would reintroduce a cut')
 
-    def test_bed_is_exact_length_and_ducked(self):
+    def test_bed_is_exact_length_and_unbroken(self):
         out = self.root / 'bed.wav'
         result = music.build_bed(self.project, self.saved, out, 4.0, self.timeline()['segments'], level_percent=30, duck=True)
         self.assertAlmostEqual(result['duration_s'], 4.0, delta=0.05)
-        self.assertTrue(result['ducked_under_speech'])
+        self.assertFalse(result['ducked_under_speech'])
+        self.assertEqual(result['narration_windows'], [])
         with av.open(str(out)) as media:
             self.assertAlmostEqual(float(media.duration / av.time_base), 4.0, delta=0.05)
 
-    def test_unducked_bed_has_no_windows(self):
+    def test_a_plain_bed_has_no_windows(self):
         out = self.root / 'plain.wav'
         result = music.build_bed(self.project, self.saved, out, 4.0, self.timeline()['segments'], level_percent=20, duck=False)
         self.assertFalse(result['ducked_under_speech'])
@@ -56,42 +58,35 @@ class MusicBedTest(unittest.TestCase):
             music.build_bed(self.project, self.root / 'inputs' / 'nope.mp3', self.root / 'x.wav', 4.0,
                             self.timeline()['segments'], level_percent=20)
 
-    def test_settings_defaults_are_conservative(self):
-        # A bite is always silent, so 'bite_cut' is not a setting. Only the
-        # narration behaviour is a choice, and its default keeps the bed audible.
+    def test_settings_defaults_describe_a_continuous_bed(self):
+        # Nothing is ducked or cut now, so the only settings left are on/off and
+        # the one volume.
         self.assertEqual(music.settings(self.project), {'enabled': False, 'volume_percent': 35,
-                                                        'narration_level': 'duck', 'speech_mode': 'duck',
-                                                        'bite_cut': True, 'present': False})
+                                                        'narration_level': 'full', 'speech_mode': 'full',
+                                                        'bite_cut': False, 'present': False})
 
-    def test_music_stops_under_a_bite_but_only_dips_under_narration(self):
-        # Continuous narration must never silence the bed for the whole runtime;
-        # only a footage sound bite does that, and no setting can change it.
+    def test_the_bed_is_not_dipped_or_cut_by_any_saved_mode(self):
+        # A sound bite and the narration both used to change the gain. Neither
+        # does now: the rendered bed comes back with no windows at all.
         segments = [{'kind': 'narration', 'timeline_in_s': 0.0, 'timeline_out_s': 2.0},
                     {'kind': 'sound_bite', 'timeline_in_s': 2.0, 'timeline_out_s': 3.0},
                     {'kind': 'narration', 'timeline_in_s': 3.0, 'timeline_out_s': 6.0}]
-        windows = music.speech_windows(segments, 6.0, padding_s=0)
-        # Narration either side of the bite is ducked, never stopped; the bite is
-        # the only window that silences the bed.
-        self.assertEqual(windows['narration'], [(0.0, 2.0), (3.0, 6.0)])
-        self.assertEqual(windows['bite'], [(2.0, 3.0)])
-        # Stopping under the narration silences the bed for the whole runtime, and
-        # the neighbouring zero-gain slices merge into one cut.
-        stopped = music._speech_gain(windows, 6.0, 0.0)
-        self.assertEqual([(round(a, 3), round(b, 3), r) for a, b, r in stopped], [(0.0, 6.0, 0.0)])
-        # The narration may dip instead of stopping, but the bite is still cut:
-        # its gain is fixed at zero and is not a parameter.
-        ducked = music._speech_gain(windows, 6.0, 0.355)
-        self.assertEqual([r for _, _, r in ducked], [0.355, 0.0, 0.355])
-        self.assertEqual({a for a, b, r in ducked if r == 0.0}, {2.0})
+        for mode in ('duck', 'mute', 'full'):
+            with self.subTest(mode):
+                result = music.build_bed(self.project, self.saved, self.root / f'{mode}.wav',
+                                         6.0, segments, level_percent=30, duck=True,
+                                         narration_level=mode)
+                self.assertEqual(result['narration_windows'], [])
+                self.assertEqual(result['mute_windows'], [])
+                self.assertFalse(result['ducked_under_speech'])
 
-    def test_mute_mode_silences_the_bite_in_the_rendered_bed(self):
+    def test_mute_mode_does_not_silence_the_bed(self):
         out = self.root / 'stopped.wav'
         result = music.build_bed(self.project, self.saved, out, 4.0, self.timeline()['segments'],
                                  level_percent=30, duck=True, narration_level='mute')
+        # The saved mode is still reported for older clients, but it changes nothing.
         self.assertEqual(result['narration_level'], 'mute')
-        # One footage sound bite in this timeline, so exactly one stopped window.
-        self.assertEqual(len(result['mute_windows']), 1)
-        self.assertAlmostEqual(result['mute_windows'][0]['start_s'], 2.0, delta=0.15)
+        self.assertEqual(result['mute_windows'], [])
         self.assertAlmostEqual(result['duration_s'], 4.0, delta=0.05)
 
 
@@ -132,7 +127,7 @@ class MusicMixIntegrationTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_documentary_audio_includes_a_ducked_music_bed(self):
+    def test_documentary_audio_includes_a_continuous_music_bed(self):
         from documentary import annotate_plan
         import documentary_audio
         plan = annotate_plan(self.project, str(self.root), json.loads(json.dumps(self.plan)))
@@ -140,7 +135,9 @@ class MusicMixIntegrationTest(unittest.TestCase):
         result = documentary_audio.build_audio(self.root, self.project, plan,
                                                self.root / 'renders' / 'mixed.wav', music=True)
         self.assertAlmostEqual(result['duration_s'], 6.0, delta=0.05)
-        self.assertTrue(result['music']['ducked_under_speech'])
+        # The bed joins the mix unbroken: nothing ducks it or cuts it.
+        self.assertFalse(result['music']['ducked_under_speech'])
+        self.assertEqual(result['music']['mute_windows'], [])
         self.assertEqual(result['music']['level_percent'], 40)
         plain = documentary_audio.build_audio(self.root, self.project, plan,
                                               self.root / 'renders' / 'plain.wav', music=False)

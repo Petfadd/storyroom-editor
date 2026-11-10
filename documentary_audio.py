@@ -32,8 +32,28 @@ def measure_loudness(ff, path):
     return {'integrated_lufs':integrated,'true_peak_db':peak}
 
 
+def audio_levels(project):
+    """The saved narration and clip levels, as percentages of their reviewed level.
+
+    Absent keys mean 100%: a project that has never opened the faders must render
+    exactly as it did before the control existed.
+    """
+    saved = project.get('documentary_audio_levels') or {}
+    def read(key):
+        value = saved.get(key, 100)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 100
+        return max(0, min(150, value))
+    return {'narration_percent': read('narration_percent'), 'clip_percent': read('clip_percent')}
+
+
 def build_audio(root, project, plan, destination, progress=lambda *a:None, strict_handoffs=False, music=False, compact_preview=False):
     root=Path(root).resolve();destination=Path(destination).resolve();timeline=build_timeline(project,annotate_plan(project,root,copy.deepcopy(plan)))
+    # Both levels are applied as one gain on the assembled speech, for the same
+    # reason the preview applies the quieter of the two: narration and bites are
+    # concatenated into a single stream, so a per-segment gain would have to be
+    # baked into each part and could no longer be undone without a re-decode.
+    levels_config = audio_levels(project)
     if not any(s['kind']=='sound_bite' for s in timeline['segments']):raise ValueError('Add at least one sound bite before preparing documentary audio.')
     assets={a['id']:a for a in project.get('assets',[])};voice=project.get('voiceover') or {};narration=(root/voice.get('path','')).resolve()
     if not narration.is_relative_to(root/'inputs') or not narration.is_file():raise ValueError('The original narration file is missing.')
@@ -80,14 +100,26 @@ def build_audio(root, project, plan, destination, progress=lambda *a:None, stric
                 part=adjusted
             segment_lengths.append(adjusted_length if segment['kind']=='sound_bite' else length);parts.append(part)
         listing=work/'concat.txt';listing.write_text(''.join("file '"+str(p).replace("'","'\\''")+"'\n" for p in parts),encoding='utf-8')
-        speech=work/'speech.wav';_run_command([ff,'-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',str(listing),'-c:a','pcm_s16le',str(speech)])
+        speech=work/'speech.wav'
+        # A level below 100% is a plain attenuation. Anything above it is limited
+        # afterwards so a quiet source cannot clip on the way out.
+        speech_gain=min(levels_config['narration_percent'],levels_config['clip_percent'])/100.0
+        concat_cmd=[ff,'-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',str(listing)]
+        if abs(speech_gain-1.0)>1e-9:
+            filt=f'volume={speech_gain:.6f}'
+            if speech_gain>1.0:
+                filt+=',alimiter=limit=0.891251:level=0:latency=1'
+            concat_cmd+=['-af',filt]
+        concat_cmd+=['-c:a','pcm_s16le',str(speech)]
+        _run_command(concat_cmd)
         music_result=None
         out=work/'result.wav'
         if music:
             from documentary_music import build_bed, music_path
             bed=work/'music-bed.wav'
             music_result=build_bed(project,music_path(root),bed,timeline['duration_s'],timeline['segments'])
-            # Narration and bites stay at their reviewed level; only the bed is ducked.
+            # Narration and bites stay at their reviewed level, and the bed runs
+            # unbroken underneath them: it is not ducked or cut anywhere.
             _run_command([ff,'-hide_banner','-loglevel','error','-y','-i',str(speech),'-i',str(bed),'-filter_complex','[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891251:level=0:latency=1','-ar','48000','-c:a','pcm_s16le',str(out)])
         else:
             shutil.copyfile(speech,out)
@@ -108,7 +140,7 @@ def build_audio(root, project, plan, destination, progress=lambda *a:None, stric
         else:
             out.replace(destination)
     progress(len(timeline['segments']),len(timeline['segments']))
-    return {'duration_s':duration,'planned_duration_s':timeline['duration_s'],'segments':timeline['segments'],'audio_processing_version':AUDIO_PROCESSING_VERSION,'narration_lufs':round(narration_level['integrated_lufs'],2),'sound_bite_levels':levels,'segment_lengths_s':segment_lengths,'music':music_result}
+    return {'duration_s':duration,'planned_duration_s':timeline['duration_s'],'segments':timeline['segments'],'audio_processing_version':AUDIO_PROCESSING_VERSION,'narration_lufs':round(narration_level['integrated_lufs'],2),'sound_bite_levels':levels,'segment_lengths_s':segment_lengths,'music':music_result,'audio_levels':{**levels_config,'applied_speech_gain':round(speech_gain,4)}}
 
 
 def encode_preview(ff, source):

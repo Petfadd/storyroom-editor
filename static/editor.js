@@ -10,7 +10,7 @@ const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>P?.edit_mode==='documentary'?(window.docTimelineData?.duration||0):(scenes().at(-1)?.frame_out/30||0);
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
 const frameAt=t=>Math.floor(t*30+.001);
-let enhancePicture=true,docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false},docTrackVolume={audio:100,video:0,music:35},waveformKey='',waveformPeaks=null,waveformPending=null,slotScalePreview=null,selectedSlotIds=new Set(),selectionExplicitlyEmpty=false,marquee=null,suppressClipClick=false;
+let enhancePicture=true,docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false},docTrackVolume={audio:100,video:0,music:35,narration:100,clip:100},waveformKey='',waveformPeaks=null,waveformPending=null,slotScalePreview=null,selectedSlotIds=new Set(),selectionExplicitlyEmpty=false,marquee=null,suppressClipClick=false;
 const editorTime=()=>editorMaster?(masterNode.currentTime||0):(P?.voiceover&&narrNode.getAttribute('src')?narrNode.currentTime:clockBase+(editorPlaying&&!editorBuffering?(performance.now()-clockAt)/1000:0));
 const deletingProjects=new Set();
 list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<div class="project-row ${P?.id===p.id?'active':''}"><button type="button" class="project-link" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes · ${p.edit_mode==='documentary'?'Documentary':'Script review'}</small></button><button type="button" class="project-delete" aria-label="Delete ${E(p.title)}" onclick="deleteProduction('${p.id}')" ${deletingProjects.has(p.id)?'disabled':''}>Delete</button></div>`).join('')||'<p class="muted">No productions yet.</p>';return d};
@@ -43,7 +43,7 @@ function renderManagement(){if(!P)return;ensureStrictStatus();if(P.edit_mode==='
  // The music card reads its saved state after the panel is on screen, so opening
  // Setup never waits on an extra request.
  if(P.edit_mode==='documentary'&&tab==='brief'&&typeof loadDocMusicCard==='function')loadDocMusicCard().then(()=>{if(P?.edit_mode==='documentary'&&tab==='brief')$('#content').innerHTML=briefHTML()});if(P.render?.url&&!isCurrentRender(P.render))$('#content').insertAdjacentHTML('afterbegin','<div class="notice warn"><strong>Previous MP4, not current.</strong> It was made before the latest timeline or export changes. Resolve the checks below, then render again to include your changes.</div>')}
-renderProject=function(){renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
+renderProject=function(){syncMonitorShape();syncAspectChip();renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
 const oldNewProduction=newProduction;newProduction=function(){pauseEditor();oldNewProduction()};
 selectScene=i=>selectEditorScene(i);
 const savedSplit=splitBeat,savedMerge=mergeBeat;
@@ -51,8 +51,21 @@ splitBeat=async function(){pauseEditor();await savedSplit();sourceScene='';rende
 function renderEditor(){
  const isDoc=P?.edit_mode==='documentary';if(window.ensureDocTimeline)window.ensureDocTimeline();if(window.refreshDocumentaryDraft)window.refreshDocumentaryDraft();document.body.classList.toggle('documentary-workspace',isDoc);$('#documentary-button').hidden=!isDoc;$('#documentary-timeline-label').hidden=!isDoc;$('#documentary-prepare-timeline').hidden=!isDoc;$('#doc-source-track').hidden=!isDoc;$('#doc-source-label').hidden=!isDoc;
  const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));$('#project-name').textContent=P?.title?(P.title+(isDoc?' · Documentary':'')):'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null;$('#project-status').textContent=P?`${cueGroups?`${cueGroups.length} cue shots · ${ss.length} picture slots`:ss.length+' scenes'} · ${totalTime().toFixed(3)}s · ${P.scenes.filter(s=>s.approved).length} ${cueGroups?'slots approved':'approved'}${P.script_application?.issues.length?' · '+P.script_application.issues.length+' script gaps':''}`:'Same timeline workflow · create a production to begin';
- document.querySelector('.media-hint').textContent=P?.script_moving_only?'Click any uploaded video above to play the original source. The review timeline opens at the first shot with explicit video IN/OUT times.':P&&!ss.length&&assets().some(a=>a.kind==='video')?'Click an uploaded video above to play it. Add the original SRT to begin a storyboard.':'The same narration-led editor, with separate projects. Verify every identity. No unrelated substitutes, looping footage or baked-in captions.';
- const requirement=P?.footage_requirements;$('#footage-requirements-pool').textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
+ // Clicking a source opens it, so the pool carries that instruction on the list
+ // itself. It used to be written through `.media-hint`, which matched the
+ // footage-count line first and wiped that count on every render.
+ const pool=$('#media-list');
+ if(pool){
+  const clickable=P?.script_moving_only||!scenes().length;
+  pool.title=clickable?'Click a source to play the original file.':'';
+ }
+ const requirement=P?.footage_requirements;
+ // "11 matched · 0 missing" is the normal state, so it earns no space. The line
+ // only appears when it has something to act on: a missing file or a duplicate.
+ const reqPool=$('#footage-requirements-pool');
+ const reqClean=requirement?.status==='found'&&!requirement.missing&&!requirement.ambiguous;
+ if(reqPool)reqPool.hidden=!!reqClean;
+ reqPool.textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
  const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';$('#media-list').innerHTML=visibleAssets.map((a,i)=>`<div class="media-item ${current?.asset_id===a.id?'selected':''}" role="button" tabindex="0" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" onkeydown="if(event.key==='Enter')inspectAsset('${a.id.replace(/'/g,'')}')"><span class="source-icon">${a.reserve?E(a.source_label):a.kind==='image'?'PHOTO':/^[SV]\d+/i.test(a.name)?E(a.name.replace(/\.[^.]+$/,'')):String(i+1).padStart(2,'0')}</span><div class="media-meta"><strong>${E(a.name)}</strong><span>${a.reserve?(assetIsUsed(a)?'Reserve source · explicitly placed':'Held in reserve')+' · ':''}${a.kind==='image'?'Photograph':a.duration?a.duration.toFixed(1)+'s video':'Case video'} · ${a.verified?(a.approval_record?.independent_verification===false?'approved · user instruction':'approved'):'not approved'}</span></div><span class="ready-dot ${a.verified?'':'missing'}"></span></div>`).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
  $('#audio-status').className='audio-card '+(P?.voiceover?'ready':'missing');$('#audio-status').innerHTML=`<strong>Voiceover · ${E(P?.voiceover?.name||'not imported')}</strong><span>${P?.voiceover?P.voiceover.duration.toFixed(3)+(isDoc?'s original · split around sound bites':'s · continuous original audio'):'Import from Setup. No per-cut audio restarts.'}</span>`;
  $('#srt-status').className='audio-card '+(P?.srt?'ready':'missing');$('#srt-status').innerHTML=`<strong>${P?.srt?P.srt.blocks.length:0} original SRT blocks</strong><span>Timing reference · captions not baked in</span>`;
@@ -220,19 +233,26 @@ function seekAudioTrack(event){const rect=$('#audio-track').getBoundingClientRec
 
 function renderInspector(){const s=scenes()[sceneIndex];
  if(P?.edit_mode==='documentary'&&editorPlaying){if(s){const lbl=s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('\u2013');$('#shot-number').textContent=lbl}return}$('#shot-number').textContent=s?((s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('–'))):'—';
- if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Waiting for footage links</label><p>The script refers to ${missing.map(x=>E(x.source_file)).join(', ')}. Select the correct existing videos or upload the missing files.</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?(P?.edit_mode==='documentary'&&P?.script_reading?.status==='not_detailed'?'<div class="inspector-group"><label>No picture beats yet</label><p>The SRT is imported and the Beat script was read. Build the picture from the reviewed Beat ranges; Setup cannot build this script automatically.</p><button type="button" onclick="openBeatProposal()">Review the Beat picture plan</button></div>':'<div class="inspector-group"><label>No picture beats yet</label><p>The SRT is imported. Open Setup and build the storyboard.</p><button type="button" onclick="manage(\'brief\')">Open setup</button></div>'):'<div class="inspector-group"><label>Ready for a new production</label><p>Upload your production script, SRT and narration under Setup.</p></div>';return}
+ if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Waiting for footage links</label><p>The script refers to ${missing.map(x=>E(x.source_file)).join(', ')}. Select the correct existing videos or upload the missing files.</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?(P?.edit_mode==='documentary'&&P?.script_reading?.status==='not_detailed'?'<div class="inspector-group"><label>No picture beats yet</label><p>The SRT is imported and the Beat script was read. Build the picture from the reviewed Beat ranges; Setup cannot build this script automatically.</p><button type="button" onclick="openBeatProposal()">Review the Beat picture plan</button></div>':'<div class="inspector-group"><label>No picture beats yet</label><button type="button" onclick="manage(\'brief\')">Open setup</button></div>'):'<div class="inspector-group"><label>Ready for a new production</label></div>';return}
  const a=assets().find(a=>a.id===s.asset_id),m=s.motion_plan||{};
  const chosen=selectedScenes(),scaleTarget=chosen.find(x=>x.id===s.id)||chosen[0],scaleValue=scaleTarget?effectivePictureScale(scaleTarget):100,scaleMixed=new Set(chosen.map(effectivePictureScale)).size>1;
  const flow=s.picture_flow,cut=s.cut_sync;
  const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous beat',continued_running_take:'continued take',slid_inside_a_shot:'conformed inside a shot',slid_far_inside_a_shot:'moved far — check it',repeats_recent_footage:'repeats recent footage',jump_cut_within_shot:'deliberate jump cut',no_single_shot_fits:'no shot fits this beat',not_decoded:'source not decoded'};
  const cutLabel={in_a_breath:'cut in a breath',on_a_block_boundary:'cut on a line break',over_speech:'cut over a spoken word',between_blocks:'cut between blocks'};
  const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Picture flow</span><span title="${E(flow.note||'')}">${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · shot ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut to next</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · moved from ${cut.moved_from_s}s`:''}</span></div>`:''}`;
- $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button><p class="small">Applies only to highlighted slots. Above 100% crops the edges; review each picture.</p></div><form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.plain_cue?`<div class="inspector-group"><label>Editor note · continuity</label><p>${E(s.plan_row.continuity ?? s.plan_row.match_reason ?? '')}</p></div>`:''}${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+ $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
  if(a?.kind==='video')loadSceneUnderstanding(s.id);
  $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
  if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
 }
-function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p><p>${planned?'Script IN: '+((planned.extracted_frame_ms??planned.source_in_ms)/1000).toFixed(3)+'s'+(planned.source_out_ms!=null?' · OUT: '+(planned.source_out_ms/1000).toFixed(3)+'s (exclusive)':''):'Source timing selected in the editor.'}</p><p id="source-clock" class="small"></p></div>`}
+function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
+ // The script's IN/OUT is only worth a line when it disagrees with what is saved.
+ // On a conformed beat the two are identical, so printing both just invited the
+ // reader to hunt for a difference that is not there.
+ const plannedIn=planned?(planned.extracted_frame_ms??planned.source_in_ms)/1000:null;
+ const plannedOut=planned?.source_out_ms!=null?planned.source_out_ms/1000:null;
+ const moved=plannedIn!=null&&(Math.abs(plannedIn-actual)>0.0005||(plannedOut!=null&&Math.abs(plannedOut-(actual+(s.frame_out-s.frame_in)/30))>0.0005));
+ return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p>Script asked for: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s (exclusive)':''}</p>`:''}${planned?'':'<p>Source timing selected in the editor.</p>'}<p id="source-clock" class="small"></p></div>`}
 
 
 async function loadSceneUnderstanding(sceneId){
@@ -241,7 +261,7 @@ async function loadSceneUnderstanding(sceneId){
   const r=await api(`/api/projects/${id}/scenes/${sceneId}/understanding`);
   const node=$('#scene-understanding');if(!node||P?.id!==id||scenes()[sceneIndex]?.id!==sceneId)return;
   if(!['partial','complete'].includes(r.status)){
-   node.innerHTML=`<div class="inspector-group"><label>Source understanding</label><p class="small">${E(r.status==='not_started'?'No local analysis yet. Run it from Production setup.':r.status)}</p></div>`;return;
+   node.innerHTML=`<div class="inspector-group"><label>Source understanding</label><p class="small">${E(r.status==='not_started'?'No local analysis yet. Open Setup, then Case footage & photos, and choose Local analysis.':r.status)}</p></div>`;return;
   }
   const entry=(time,text)=>({time:Number(time),html:`<p class="small">${Number(time).toFixed(2)}s · ${text}</p>`});
   const rows=[...r.transcript.map(x=>entry(x.timeline_start_s,`Dialogue: ${E(x.text)}`)),
@@ -250,7 +270,7 @@ async function loadSceneUnderstanding(sceneId){
    ...(r.speakers||[]).map(x=>entry(x.timeline_start_s,`Speaker: ${E(x.speaker)}`)),
    ...(r.low_energy_intervals||[]).map(x=>entry(x.timeline_start_s,'Low-energy audio (estimate)')),
    ...(r.scene_changes||[]).filter(x=>x.start_s>=r.source_in_s).map(x=>entry(x.timeline_start_s,'Detected source scene start'))].sort((a,b)=>a.time-b.time);
-  node.innerHTML=`<div class="inspector-group"><label>Source understanding · timeline times</label><p class="small">Estimated observations, not verified. Only sampled frames and overlapping source intervals are shown; dialogue text may extend outside this beat.</p>${r.stage_status?.visual==='unavailable'?'<p class="small">Visual analysis unavailable for this source.</p>':''}${r.timing_warning?`<p class="small">${E(r.timing_warning)}</p>`:''}${rows.slice(0,12).map(x=>x.html).join('')||'<p class="small">No observations overlap this beat.</p>'}${rows.length>12?'<p class="small">More observations are available in the full report.</p>':''}</div>`;
+  node.innerHTML=`<div class="inspector-group"><label>Source understanding · timeline times</label>${r.stage_status?.visual==='unavailable'?'<p class="small">Visual analysis unavailable for this source.</p>':''}${r.timing_warning?`<p class="small">${E(r.timing_warning)}</p>`:''}${rows.slice(0,12).map(x=>x.html).join('')||'<p class="small">No observations overlap this beat.</p>'}${rows.length>12?'<p class="small">More observations are available in the full report.</p>':''}</div>`;
  }catch(e){/* A missing or changed video leaves the existing inspector usable. */}
 }
 
@@ -266,47 +286,57 @@ async function loadPlanning(id){
   return planCache;
 }
 
-function planningSummaryHTML(){
-  const f = planCache.feasibility || {};
-  if(f.error) return `<div class="notice">Feasibility could not be read: ${E(f.error)}</div>`;
-  const unfilled = (f.unfilled_beats || []).length;
-  const blocked = (f.sources || []).filter(s => s.problems.length);
-  const verdict = f.verdict === 'feasible' ? 'The plan fits the footage as written.'
-    : f.verdict === 'no_plan' ? 'No block map yet, so there is nothing to check.'
-    : `${unfilled} beat${unfilled===1?'':'s'} still unfilled and ${blocked.length} source${blocked.length===1?'':'s'} with a problem.`;
-  const rows = (f.sources || []).map(s => `<tr><td>${E(s.file)}</td><td>${s.beats}</td><td>${s.required_s}s</td><td>${s.available_s}s</td><td>${s.longest_beat_s}s</td><td>${s.longest_shot_s}s</td></tr>`).join('');
-  return `<p>${E(verdict)}</p>${rows?`<table class="plan-table"><thead><tr><th>Source</th><th>Beats</th><th>Needed</th><th>File length</th><th>Longest beat</th><th>Longest shot</th></tr></thead><tbody>${rows}</tbody></table>`:''}
-  ${blocked.map(s => `<div class="notice warn"><strong>${E(s.file)}</strong>${s.problems.map(x => `<p class="small">${E(x)}</p>`).join('')}</div>`).join('')}
-  ${unfilled ? `<p class="small">${unfilled} name${unfilled===1?'s':'s'} no source yet. Those rows are gaps by design; fill them in the block map rather than letting a clip be chosen by guesswork.</p>` : ''}`;
+
+// The shot inspector edits one shot, so it no longer carries a block of
+// project-wide planning links. Those live in Setup now, next to the material
+// they inspect. Kept as a function because the inspector still calls it.
+// Three levels, in the order they sit in the mix: narration, then the audio
+// carried by the footage, then the bed. They are saved with the project and
+// applied on the next export, so a change never re-renders behind your back.
+function docVolumeHTML(){
+  if(!P || P.edit_mode!=='documentary' || !P.documentary_beat_review) return '';
+  const v = docTrackVolume;
+  // Labels only. Each fader says what it controls and nothing else.
+  const mix = (label, key, value, max) => `<div class="doc-volume-row"><label for="doc-vol-${key}">${label}</label><input id="doc-vol-${key}" type="range" min="0" max="${max}" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><input id="doc-vol-${key}-n" type="number" min="0" max="${max}" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><span>%</span></div>`;
+  const musicOff = !(docMusic && docMusic.file_present);
+  return `<div class="doc-volume-control"><label>Audio</label>
+  ${mix('Narration', 'narration', v.narration, 150)}
+  ${mix('Clip audio', 'clip', v.clip, 150)}
+  ${mix('Music', 'music', v.music, 100)}</div>`;
 }
 
-function planToolsHTML(){
-  return `<div class="inspector-group"><label>Planning</label>
-  <div class="planning-actions">
-    <div><button type="button" onclick="openPlanDialog('index')">Shot index</button><p>See the sources and timing used in each shot.</p></div>
-    <div><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><p>Check whether a block map fits the available footage.</p></div>
-    <div><button type="button" onclick="downloadMapTemplate()">Download map template</button><p>Download an optional blank picture map with SRT timing. Your script does not need a map.</p></div>
-    <div><button type="button" onclick="openFrameQC(1)">Frame QC sheet</button><p>Inspect source frames around each shot and its boundaries.</p></div>
-    <div><button type="button" onclick="approveReadyScenes()">Approve all ready beats</button><p>Marks technically ready beats approved; it does not inspect or verify picture content, identity or rights.</p></div>
-  </div></div>`;
+// The review preview is one already-mixed file: narration and the selected sound
+// bites are level-matched and concatenated before the browser ever sees them, so
+// there is no per-track node to turn down. Narration and clip levels therefore
+// share that stream, and the quieter of the two is what can honestly be applied
+// to it: raising one alone would lift the other with it. Music has its own layer
+// and is unaffected. Nothing here touches the exported mix until the project is
+// saved and rendered again.
+function previewDocVolume(key, raw){
+  const value = Math.max(0, Math.min(150, Number(raw) || 0));
+  if(key==='music') docTrackVolume.music = value;
+  else docTrackVolume[key] = value;
+  const sync = document.querySelectorAll(`#doc-vol-${key}, #doc-vol-${key}-n`);
+  sync.forEach(node => { if(Number(node.value)!==Math.round(value)) node.value = Math.round(value); });
+  window.docApplyPreviewVolumes?.();
 }
 
-async function openPlanDialog(view){
+async function saveDocVolume(key, raw){
   if(!P) return;
-  $('#plan-title').textContent = view === 'index' ? 'Shot index' : 'Feasibility';
-  $('#plan-body').innerHTML = '<p class="small">Reading decoded sources…</p>';
-  $('#plan-dialog').showModal();
-  await loadPlanning(P.id);
-  if(view === 'index'){
-    const sources = (planCache.index?.sources || []);
-    if(!sources.length){ $('#plan-body').innerHTML = '<p>Upload at least one video, then run the build so the sources are decoded.</p>'; return; }
-    $('#plan-body').innerHTML = sources.map(s => `<div class="card"><h3>${E(s.file)} · ${s.duration_s.toFixed(3)}s · ${s.shots.length} shots${s.not_decoded?' · not decoded yet':''}</h3>
-      ${s.not_decoded ? '<p class="small">Run the build once so this file is decoded.</p>' : `<table class="plan-table"><thead><tr><th>#</th><th>IN</th><th>OUT</th><th>Length</th><th>Map columns</th><th></th></tr></thead><tbody>${s.shots.map((x,i)=>`<tr><td>${i+1}</td><td>${x.in_s}s</td><td>${x.out_s}s</td><td>${x.duration_s}s</td><td><code>${x.in_clock} → ${x.out_clock}</code></td><td>${x.black?'black':''}</td></tr>`).join('')}</tbody></table>`}</div>`).join('')
-      + `<p class="small">A shot is a decoded span between detected changes. This list says nothing about who or what appears in it.</p>`;
-  } else {
-    $('#plan-body').innerHTML = `<div class="card"><h3>Does this plan fit the footage?</h3>${planningSummaryHTML()}</div>`;
-  }
+  const value = Math.max(0, key==='music' ? Math.min(100, Number(raw) || 0) : Math.min(150, Number(raw) || 0));
+  previewDocVolume(key, value);
+  // Send only the fader that moved. Sending all three overwrote the music level
+  // with the last value that happened to be in memory, which is how moving the
+  // narration fader could quietly reset the bed.
+  const keyName = {narration:'narration_percent', clip:'clip_percent', music:'volume_percent'}[key];
+  const body = {[keyName]: key==='music' ? Math.max(1, Math.round(value)) : Math.round(value)};
+  try{
+    P = await api(`/api/projects/${P.id}/documentary-audio-levels`, 'PATCH', body);
+    toast(`Saved. ${key==='music'?'Music':'Narration and clip'} level is applied on the next export.`);
+  }catch(e){ toast(e.message); }
 }
+
+function planToolsHTML(){ return ''; }
 
 async function downloadMapTemplate(){
   if(!P) return;
@@ -322,19 +352,22 @@ async function downloadMapTemplate(){
 
 async function candidateHTMLForScene(s){
   if(!P) return '';
+  // A documentary cut is driven by the script's own IN/OUT against the source the
+  // beat names, so offering "other shots of this length" could only invite replacing
+  // scripted footage. Nothing here is actionable, so the panel stays clean.
+  if(P.edit_mode==='documentary'&&P.documentary_beat_review) return '';
   const length = (s.frame_out - s.frame_in) / 30;
   const handle = s.transition === 'dissolve' ? (s.transition_handle_frames || 0) / 30 : 0;
   try{
     const d = await api(`/api/projects/${P.id}/candidates?length_s=${length.toFixed(6)}&handle_s=${handle.toFixed(6)}&limit=6`);
     if(!d.candidates.length){
-      const anyDecoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
-      if(!anyDecoded && !planCache.index) await loadPlanning(P.id);
+      if(!planCache.index) await loadPlanning(P.id);
       const decoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
       return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${decoded
         ? `No decoded shot is exactly ${(length+handle).toFixed(3)}s long. Nothing is offered rather than something approximate; the build reports this as a gap.`
-        : 'The sources have not been decoded yet. Run the build once, then this list is exact.'}</p></div>`;
+        : 'The footage has not been scanned for shots yet. Build the storyboard once; this list is exact after that.'}</p></div>`;
     }
-    return `<div class="inspector-group"><label>Shots that fit this beat · ${(length+handle).toFixed(3)}s</label>${d.candidates.map(c=>`<p class="small"><strong>${E(c.file)}</strong> · <code>${c.in_clock} → ${c.out_clock}</code> · ${c.duration_s}s · ${c.slack_s}s spare</p>`).join('')}<p class="small">Exact-length shots only. Choosing one is still your editorial decision.</p></div>`;
+    return `<div class="inspector-group"><label>Shots that fit this beat · ${(length+handle).toFixed(3)}s</label>${d.candidates.map(c=>`<p class="small"><strong>${E(c.file)}</strong> · <code>${c.in_clock} → ${c.out_clock}</code> · ${c.duration_s}s · ${c.slack_s}s spare</p>`).join('')}</div>`;
   }catch(e){ return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${E(e.message)}</p></div>`; }
 }
 
@@ -393,7 +426,7 @@ async function openFrameQC(shot){
       ${beat.samples.some(x=>!x.decoded)?'<p class="notice warn">One or more inspection frames are unavailable; a boundary may be outside the source or the frame could not be decoded.</p>':''}
       <h4>Play the full shot</h4>${asset?.kind==='video'?`<video id="qc-video" controls muted preload="metadata" src="${E(asset.url)}"></video><p><button type="button" onclick="qcPlayRange('qc-video',${start},${end})">Play selected source interval</button> Source audio is muted; use the controls to inspect nearby context.</p>`:asset?.kind==='image'?`<img class="qc-photo" src="${E(asset.url)}" alt="Assigned original photograph"><p>Original uploaded photograph. Verify who or what it shows.</p>`:'<p>No source is assigned to this shot.</p>'}
       ${P.voiceover?.url?`<h4>Listen to narration for this shot</h4><audio id="qc-audio" controls preload="metadata" src="${E(P.voiceover.url)}"></audio><p><button type="button" onclick="qcPlayRange('qc-audio',${timeIn},${timeOut})">Play shot narration</button></p>`:''}
-      <div class="notice"><strong>Review checklist</strong><p>1. Inspect the boundary frames for unwanted cuts. 2. Play the whole interval against the narration and visual direction. 3. Independently confirm identities, source and date. 4. Correct unsuitable sources or ranges in the shot inspector. 5. Record any reuse decision separately.</p><p>This view does not automatically verify content, identity or rights. Existing approvals are not proof of inspection.</p></div>
+      <div class="notice"><strong>Review checklist</strong><p>1. Inspect the boundary frames for unwanted cuts. 2. Play the whole interval against the narration and visual direction. 3. Independently confirm identities, source and date. 4. Correct unsuitable sources or ranges in the shot inspector. 5. Record any reuse decision separately.</p></div>
       <div class="qc-navigation"><button type="button" onclick="openFrameQC(${n-1})" ${n<=1?'disabled':''}>← Previous shot</button><button type="button" onclick="openFrameQC(${n+1})" ${n>=scenes().length?'disabled':''}>Next shot →</button></div>
     </div>`;
     $('#plan-body').scrollTop=0;
@@ -459,12 +492,12 @@ function renderRenderPage(){
   :`<button type="button" class="button primary" ${ready?'':'disabled'} onclick="renderFromEditor()">Render review MP4</button><button type="button" class="button" ${!P.validation?.can_export||busy?'disabled':''} onclick="startExport(true)">Render final MP4</button>`;
  const previous=r.url&&!isCurrentRender(r)?`<div class="notice warn"><strong>Previous MP4 — not current</strong><p>This file does not include your latest edits. Render again to include them.</p><video controls class="reference-video" src="${r.url}"></video><a class="download" href="${r.url}?download=1">↓ Download previous MP4</a></div>`:'';
  const current=r.url&&isCurrentRender(r)?`<div class="notice"><strong>Current MP4</strong><video controls class="reference-video" src="${r.url}"></video><a class="download" href="${r.url}?download=1">↓ Download current MP4</a> <a class="download" href="${r.url.replace(/\.mp4$/,'.srt')}?download=1">↓ Separate SRT</a></div>`:'';
- box.innerHTML=`<p class="small">Everything that affects the exported file lives here.</p>
- <section class="card"><h3>Picture</h3><label class="check-label"><input id="enhance-picture" type="checkbox" ${enhancePicture?'checked':''} onchange="setEnhancePicture(this.checked)"> Enhance all videos &amp; photos on export</label><p class="small">Gentle cleanup and sharpening. The preview shows the unenhanced picture.</p><p class="small">Per-slot picture scale stays in the shot inspector. Slots are saved at ${Number(P?.picture_scale)||100}%.</p></section>
- <section class="card"><h3>Captions &amp; subtitles</h3>${doc?`<label class="check-label"><input id="burn-on-screen-captions" type="checkbox" ${P?.burn_captions!==false?'checked':''} onchange="setBurnCaptions(this.checked)"> Burn on-screen script captions and spoken sound-bite words</label><label class="check-label"><input id="doc-fade-enabled" type="checkbox" ${(P?.documentary_fades?.enabled!==false)?'checked':''} onchange="setDocumentaryFades({enabled:this.checked})"> Include the script's Cut Action fade in the export</label><p class="small">A fade ramps brightness on existing frames, so it never moves a cut, a frame or the reviewed timing. Preview plays without it.</p><p class="small">Turn this off for clean picture with no text burned in. The script, the saved spoken words and every cut stay unchanged; the text just stops appearing on screen and in the export.</p><label class="check-label"><input id="burn-srt-subtitles" type="checkbox" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn adjusted SRT subtitles (matches CC preview)</label><p class="small">The original uploaded SRT is never changed.</p>`:`<label class="check-label"><input type="checkbox" id="burn-script-captions" ${exportScriptCaptions?'checked':''} onchange="setScriptCaptionExport(this.checked)"> Burn on-screen script captions</label><label class="check-label"><input type="checkbox" id="burn-srt-subtitles" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn SRT subtitles (matches CC preview)</label>`}</section>
- <section class="card"><h3>Audio</h3><p>Narration at its original level, footage speech matched to it${docMusic.enabled?' and background music under the narration':' and no background music'}.</p><p class="small">A sound bite carries the only audio in its span. The background music is therefore <strong>cut for the whole of every bite</strong>, exactly like the narration pauses, and it is never played under one. ${docMusic.narration_level==='mute'?'Under the narration it is stopped as well, so music is only heard where the picture has no speech.':'Elsewhere it keeps playing at the saved level, dipping under the narration.'} <button class="button secondary" type="button" onclick="docToggleNarrationLevel()">${docMusic.narration_level==='mute'?'Let music dip under the narration':'Stop music under the narration too'}</button></p><p class="small">The timeline music strip shows each span of music as a separate piece, so the gaps under the bites are visible. Volume buttons change the preview level only; the export uses the saved level.</p>${docMusic.file_present?`<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Replace the music file</button> <button class="button secondary" type="button" onclick="docToggleMusic()">${docMusic.enabled?'Switch the music off':'Switch the music on'}</button>${docMusic.enabled?'':' <span>Music is currently off, so the export has narration and bites only.</span>'}</p>`:'<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Add background music or SFX</button> No music is saved yet; the export has narration and bites only.</p>'}</section>
+ box.innerHTML=`
+ <section class="card"><h3>Picture</h3><label class="check-label"><input id="enhance-picture" type="checkbox" ${enhancePicture?'checked':''} onchange="setEnhancePicture(this.checked)"> Enhance all videos &amp; photos on export</label></section>
+ <section class="card"><h3>Captions &amp; subtitles</h3>${doc?`<label class="check-label"><input id="burn-on-screen-captions" type="checkbox" ${P?.burn_captions!==false?'checked':''} onchange="setBurnCaptions(this.checked)"> Burn on-screen script captions and spoken sound-bite words</label><label class="check-label"><input id="doc-fade-enabled" type="checkbox" ${(P?.documentary_fades?.enabled!==false)?'checked':''} onchange="setDocumentaryFades({enabled:this.checked})"> Include the script's Cut Action fade in the export</label><p class="small"> and in the export.</p><label class="check-label"><input id="burn-srt-subtitles" type="checkbox" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn adjusted SRT subtitles (matches CC preview)</label><p class="small">The original uploaded SRT is never changed.</p>`:`<label class="check-label"><input type="checkbox" id="burn-script-captions" ${exportScriptCaptions?'checked':''} onchange="setScriptCaptionExport(this.checked)"> Burn on-screen script captions</label><label class="check-label"><input type="checkbox" id="burn-srt-subtitles" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn SRT subtitles (matches CC preview)</label>`}</section>
+ <section class="card"><h3>Audio</h3>${docMusic.file_present?`<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Replace the music file</button> <button class="button secondary" type="button" onclick="docToggleMusic()">${docMusic.enabled?'Switch the music off':'Switch the music on'}</button>${docMusic.enabled?'':''}</p>`:'<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Add background music or SFX</button></p>'}</section>
  <section class="card"><h3>Export status</h3><p><strong>${E(stage)}</strong></p><p class="small">${E(detail)}</p><progress max="100" value="${Number(r.progress)||0}"></progress><p class="small">${Math.round(Number(r.progress)||0)}%</p>${r.status==='error'?`<div class="notice error">Export could not finish. The production is intact.</div><details><summary>Technical details</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:10px">${E(r.error)}</pre></details>${doc?'':'<button type="button" onclick="documentaryRetry()">Retry</button>'}`:''}${busy?'<button type="button" onclick="cancelExport()">Cancel export</button>':''}${current}${previous}</section>
- <section class="card"><h3>Checks &amp; files</h3><p><button type="button" class="text-button" onclick="closeRenderPage();manage('delivery')">Open review / export checks</button></p><p class="small">Checks cover source ranges, approvals, rights attestations and freshness. Content, identity and rights still need your review.</p>${doc?'<p><a class="download" href="/api/projects/'+P.id+'/coverage-summary">↓ Download coverage summary</a></p>':''}</section>
+ <section class="card"><h3>Checks &amp; files</h3><p><button type="button" class="text-button" onclick="closeRenderPage();manage('delivery')">Open review / export checks</button></p>${doc?'<p><a class="download" href="/api/projects/'+P.id+'/coverage-summary">↓ Download coverage summary</a></p>':''}</section>
  <div class="actionbar">${actions}</div>`;
 }
 function documentaryRetry(){if(!P)return;toast('Open Review / export checks to retry the export.')}
@@ -508,6 +541,48 @@ function setTimecode(current,total){const a=$('#timecode-current'),b=$('#timecod
 let monitorFit='contain',monitorAspect='16:9';
 function toggleMonitorFullscreen(){const box=$('#monitor');if(!box)return;try{if(document.fullscreenElement)document.exitFullscreen();else box.requestFullscreen()}catch(e){toast('This browser did not allow fullscreen for the monitor.')}}
 document.addEventListener('fullscreenchange',()=>{const m=$('#monitor');if(m)m.classList.toggle('is-fullscreen',!!document.fullscreenElement)});
+// The monitor is the project's frame, not a fixed 16:9 box. Portrait and 4:5 films
+// get a tall frame and crop-to-fill, the same framing the renderer uses, so what is
+// reviewed is what is exported. View preference only: never touches a stored edit.
+const MONITOR_SHAPES={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'239:100'};
+// The shape switch lives beside the monitor, where you can see what it does. It
+// writes the same project setting as Setup's Aspect ratio control, so the two can
+// never disagree. Only an explicit click changes a production.
+// Only the two shapes this workflow actually delivers: a 16:9 film for YouTube and
+// a 9:16 reel for TikTok/Reels. Square and 4:5 were never used and only made the
+// choice longer. The engine still knows those shapes for existing projects; they are
+// simply no longer offered here.
+const ASPECT_ORDER=['landscape','portrait'];
+const ASPECT_LABEL={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'2.39:1'};
+const ASPECT_NAME={landscape:'Landscape',portrait:'Portrait'};
+function syncAspectChip(){const chip=$('#aspect-toggle');if(!chip)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';chip.textContent=ASPECT_LABEL[P?.format]||shape;chip.hidden=!P;chip.title='Frame shape · '+shape+'. Click to choose.'}
+// A menu, not a cycle: clicking used to jump to the next shape, so reading the
+// current one and choosing one were the same action and an accidental click moved
+// the production. The menu lists every shape and marks the current one.
+function aspectMenuOpen(){const m=$('#aspect-menu');return !!m&&!m.hidden}
+function closeAspectMenu(){const m=$('#aspect-menu'),b=$('#aspect-toggle');if(m)m.hidden=true;if(b)b.setAttribute('aria-expanded','false')}
+function buildAspectMenu(){const m=$('#aspect-menu');if(!m)return;
+ m.innerHTML=ASPECT_ORDER.map(k=>`<button type="button" role="option" aria-selected="${P?.format===k}" data-format="${k}" class="${P?.format===k?'current':''}" onclick="chooseAspect('${k}')"><span class="aspect-size">${ASPECT_LABEL[k]}</span><span class="aspect-name">${ASPECT_NAME[k]}</span><span class="aspect-tick">${P?.format===k?'✓':''}</span></button>`).join('')}
+// Positioned against the button, then flipped and clamped so it always lands on
+// screen even though the transport itself clips its overflow.
+function placeAspectMenu(){const m=$('#aspect-menu'),b=$('#aspect-toggle');if(!m||!b)return;
+ const r=b.getBoundingClientRect();m.hidden=false;
+ const w=m.offsetWidth||180,h=m.offsetHeight||150;
+ let left=r.right-w;if(left<8)left=8;
+ if(left+w>window.innerWidth-8)left=window.innerWidth-w-8;
+ let top=r.top-h-8;if(top<8)top=r.bottom+8;
+ m.style.left=Math.round(left)+'px';m.style.top=Math.round(top)+'px'}
+function toggleAspectMenu(event){if(event&&event.stopPropagation)event.stopPropagation();if(!P)return;
+ if(aspectMenuOpen()){closeAspectMenu();return}buildAspectMenu();placeAspectMenu();$('#aspect-toggle').setAttribute('aria-expanded','true')}
+async function chooseAspect(format){closeAspectMenu();if(!P||P.format===format)return;if(typeof setFormat==='function')await setFormat(format);syncAspectChip()}
+document.addEventListener('click',e=>{if(!aspectMenuOpen())return;if(e.target.closest&&e.target.closest('#aspect-menu,#aspect-toggle'))return;closeAspectMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&aspectMenuOpen()){closeAspectMenu();$('#aspect-toggle')?.focus()}});
+window.addEventListener('resize',()=>{if(aspectMenuOpen())placeAspectMenu()});
+window.addEventListener('scroll',()=>{if(aspectMenuOpen())placeAspectMenu()},true);
+function syncMonitorShape(){const box=$('#monitor');if(!box)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';box.dataset.aspect=shape;box.dataset.fit=shape==='16:9'?'contain':'cover';
+ // A vertical film gets a taller panel so the frame can be a useful size; leaving
+ // portrait returns the grid to its default proportions untouched.
+ const grid=box.closest('.editor-grid');if(grid)grid.classList.toggle('is-vertical',(P?.format||'landscape')!=='landscape')}
 function updatePlaybackButton(){const button=$('#play-button');button.textContent=editorPlaying?'❚❚':'▶';button.title=editorPlaying?'Pause':'Play';button.setAttribute('aria-label',button.title)}
 function toggleEditorPlayback(){if(editorPlaying)pauseEditor();else playEditor()}
 async function playEditor(){if(P?.edit_mode==='documentary'){return docPlayTimeline()}if(!scenes().length){toast('Import SRT and build the storyboard first.');return}if(scenes()[sceneIndex]?.missing_video_out){toast('This still or freeze is not shown in the moving-video review.');return}if(dirty){toast('Save or discard scene edits before playing.');return}if(editorTime()>=totalTime()-.01)seekEditor(0,true);editorPlaying=true;updatePlaybackButton();clockAt=performance.now();try{if(editorMaster){masterNode.muted=editorMuted;await masterNode.play()}else{const s=scenes()[sceneIndex],a=assets().find(a=>a.id===s?.asset_id);if(a?.kind==='video'&&!sourceReady){seekSourceAtTimeline(s,a,editorTime());return}showSource(sceneIndex,editorTime());if(P?.voiceover){narrNode.muted=editorMuted;await narrNode.play()}if(a?.kind==='video'&&sourceReady&&sourceNode.readyState>=2)await sourceNode.play()}}catch(e){pauseEditor();toast('Playback could not start. Check the selected media or try again.')}}
@@ -596,7 +671,9 @@ $('#playhead-handle').addEventListener('pointermove',e=>{if(playheadDrag?.pointe
 function endPlayheadDrag(e){
  const d=playheadDrag;if(!d||d.pointerId!==e.pointerId)return;
  cancelAnimationFrame(d.raf);playheadDrag=null;e.currentTarget.classList.remove('dragging');
- scrubPlayhead(e.clientX,d);if(d.wasPlaying)playEditor();
+ // The drag itself only moved the picture. Drop the dedupe marker so this final
+ // seek runs in full and settles the scene selection and the inspector.
+ d.lastTarget=null;scrubPlayhead(e.clientX,d);if(d.wasPlaying)playEditor();
 }
 $('#playhead-handle').addEventListener('pointerup',endPlayheadDrag);
 $('#playhead-handle').addEventListener('pointercancel',endPlayheadDrag);
@@ -624,10 +701,10 @@ function mapClock(ms){const n=Math.round(Number(ms)),h=Math.floor(n/3600000),m=M
 function renderMapEditor(){
  const d=mapDraft,r=d.rows[d.index],block=P.srt?.blocks.find(b=>Number(b.number)===Number(r.block??r.srt_blocks?.[0]));
  const field=(label,key,placeholder='')=>`<label>${label}<input data-map-field="${key}" value="${E(mapValue(r,key))}" placeholder="${E(placeholder)}"></label>`;
- $('#map-editor-body').innerHTML=`<p class="small">Choose footage and exact source times for each SRT block. Nothing is selected automatically. Leave a source blank and explain the gap if footage is not ready. Save the map, then rebuild the storyboard; saving resets existing approvals.</p>
+ $('#map-editor-body').innerHTML=`<p class="small">Save the map, then rebuild the storyboard; saving resets existing approvals.</p>
  <div class="inline"><button type="button" onclick="mapStep(-1)" ${d.index===0?'disabled':''}>← Previous</button><label>Block <select onchange="mapGo(this.value)">${d.rows.map((row,i)=>`<option value="${i}" ${i===d.index?'selected':''}>${E(row.block??row.srt_blocks?.[0]??i+1)}${mapValue(row,'media_file')?'':' · gap'}</option>`).join('')}</select></label><button type="button" onclick="mapStep(1)" ${d.index===d.rows.length-1?'disabled':''}>Next →</button></div>
  <div class="notice"><strong>${E(block?.start_ms!=null?mapClock(block.start_ms):r.start)} → ${E(block?.end_ms!=null?mapClock(block.end_ms):r.end)}</strong><p>${E(block?.text||'Narration not found for this block; review the map against the SRT.')}</p></div>
- <form id="map-row-form" onsubmit="event.preventDefault();saveBlockMap()"><div class="two">${field('Parent beat number','beat','1')}<label>Source filename<input data-map-field="media_file" list="map-source-files" value="${E(mapValue(r,'media_file'))}" placeholder="Select or type original filename"></label>${field('Source IN','source_in','00:00:00.000')}${field('Source OUT (exclusive)','source_out','00:00:04.000')}${field('Status (optional)','status','VIDEO, STILL or CTX')}${field('Footage group (optional)','footage_group','Same label for the same shot')}</div>${field('Picture description (optional)','visible_content','What the picture should show')}<label>Gap note (required if no source)<textarea data-map-field="gap_note" rows="2">${E(mapValue(r,'gap_note'))}</textarea></label><datalist id="map-source-files">${P.assets.map(a=>`<option value="${E(a.original_name||a.name)}"></option>`).join('')}</datalist><p class="small">Use HH:MM:SS.mmm for source times. OUT must follow IN; a moving interval must fit the block duration. Existing extra map instructions are preserved.</p><div id="map-save-error" class="notice warn" role="alert" hidden></div><div class="dialog-actions"><button type="button" onclick="closeBlockMapEditor()">Cancel</button><button class="new" type="submit">Save block map</button></div></form>`;
+ <form id="map-row-form" onsubmit="event.preventDefault();saveBlockMap()"><div class="two">${field('Parent beat number','beat','1')}<label>Source filename<input data-map-field="media_file" list="map-source-files" value="${E(mapValue(r,'media_file'))}" placeholder="Select or type original filename"></label>${field('Source IN','source_in','00:00:00.000')}${field('Source OUT (exclusive)','source_out','00:00:04.000')}${field('Status (optional)','status','VIDEO, STILL or CTX')}${field('Footage group (optional)','footage_group','Same label for the same shot')}</div>${field('Picture description (optional)','visible_content','What the picture should show')}<label>Gap note (required if no source)<textarea data-map-field="gap_note" rows="2">${E(mapValue(r,'gap_note'))}</textarea></label><datalist id="map-source-files">${P.assets.map(a=>`<option value="${E(a.original_name||a.name)}"></option>`).join('')}</datalist><div id="map-save-error" class="notice warn" role="alert" hidden></div><div class="dialog-actions"><button type="button" onclick="closeBlockMapEditor()">Cancel</button><button class="new" type="submit">Save block map</button></div></form>`;
  $('#map-row-form').addEventListener('input',e=>{
   const key=e.target.dataset.mapField;if(!key)return;
   r['_edit_'+key]=e.target.value;d.changed=true;dirty=true;
@@ -683,7 +760,7 @@ async function refreshUnderstanding(){
   if(!$('#understanding-dialog').open||!P||id!==P.id||target!==understandingTarget)return;
   const stages=result.stages||{};
   const stage=(key,label,render)=>{const x=stages[key];if(!x)return '';return `<section class="card"><h3>${E(label)} · ${E(x.status)}</h3>${x.detail?`<p class="small">${E(x.detail)}</p>`:''}${x.result&&['complete','partial','running'].includes(x.status)?render(x.result):''}</section>`};
-  body.innerHTML=`<p class="small">Local processing only. AI descriptions and timestamps are estimates, not verification. Analysis does not edit your captions or storyboard unless you explicitly apply the narration transcript.</p>
+  body.innerHTML=`<p class="small">apply the narration transcript.</p>
    <label>Media <select id="understanding-source" onchange="understandingTarget=this.value;refreshUnderstanding()">${understandingSources().map(([k,v])=>`<option value="${E(k)}" ${k===target?'selected':''}>${E(v)}</option>`).join('')}</select></label>
    <p class="small">Whisper: ${cap.whisper_model_ready&&cap.faster_whisper?'local model available':'local model or package missing'} · PySceneDetect: ${cap.scenedetect?'installed':'missing'} · Librosa: ${cap.librosa?'installed':'missing'} · vision: ${E(cap.vision_model)} on local Ollama (availability checked when run) · sound events: ${cap.sound_classifier?'local model configured':'optional model not configured'} · diarization: ${cap.speaker_diarization?'local pipeline configured':'optional pipeline not configured'}.</p>
    <p>Status: <strong>${E(result.status)}</strong> ${result.detail?E(result.detail):''}</p>${result.timing_warning?`<p class="small">${E(result.timing_warning)}</p>`:''}<button type="button" onclick="runUnderstanding()" ${['queued','running'].includes(result.status)?'disabled':''}>${result.status==='not_started'?'Analyse locally':'Run analysis again'}</button>
