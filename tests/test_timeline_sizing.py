@@ -1013,9 +1013,44 @@ class VerticalReframeTest(unittest.TestCase):
         self.assertIn('id="aspect-toggle"', transport)
         self.assertIn('id="caption-toggle"', transport)
         editor = Path('static/editor.js').read_text()
-        self.assertIn('function cycleAspect', editor)
+        self.assertIn('function toggleAspectMenu', editor)
         self.assertIn('syncAspectChip', editor)
         self.assertIn('function setFormat', Path('static/studio.js').read_text())
+
+    def test_the_shape_switch_is_a_dropdown_not_a_cycle(self):
+        # Clicking used to advance to the next shape, so an accidental click moved
+        # the production. The control must open a menu and change nothing until a
+        # shape is chosen.
+        editor = Path('static/editor.js').read_text()
+        self.assertNotIn('function cycleAspect', editor)
+        self.assertIn('function toggleAspectMenu', editor)
+        self.assertIn('function chooseAspect', editor)
+        # Choosing is a separate, deliberate step.
+        body = editor[editor.index('async function chooseAspect'):]
+        body = body[:body.index('\n')]
+        self.assertIn('setFormat(format)', body)
+        # And the click handler opens the menu rather than switching.
+        html = Path('templates/index.html').read_text()
+        self.assertIn('onclick="toggleAspectMenu(event)"', html)
+        self.assertNotIn('onclick="cycleAspect()"', html)
+
+    def test_the_menu_escapes_the_clipping_transport(self):
+        # `.transport` sets overflow:hidden, so a menu inside it would be cut off.
+        html = Path('templates/index.html').read_text()
+        transport = html[html.index('class="transport"'):]
+        transport = transport[:transport.index('</div></div>')]
+        self.assertNotIn('id="aspect-menu"', transport)
+        self.assertIn('id="aspect-menu"', html)
+        css = Path('static/editor.css').read_text()
+        rule = css[css.index('.aspect-menu{'):]
+        rule = rule[:rule.index('}')]
+        self.assertIn('position:fixed', rule)
+
+    def test_the_menu_lists_every_choice_and_marks_the_current_one(self):
+        editor = Path('static/editor.js').read_text()
+        self.assertIn("['landscape','portrait','square','vertical_4_5']", editor)
+        self.assertIn('aria-selected=', editor)
+        self.assertIn("'✓'", editor)
 
     def test_only_one_shape_control_changes_a_project(self):
         # Setup shows the shape; it must not offer a second way to change it.

@@ -550,8 +550,31 @@ const MONITOR_SHAPES={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5
 // never disagree. Only an explicit click changes a production.
 const ASPECT_ORDER=['landscape','portrait','square','vertical_4_5'];
 const ASPECT_LABEL={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'2.39:1'};
-function syncAspectChip(){const chip=$('#aspect-toggle');if(!chip)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';chip.textContent=ASPECT_LABEL[P?.format]||shape;chip.hidden=!P;chip.title='Frame shape · '+shape+'. Click to switch.'}
-async function cycleAspect(){if(!P||!leave())return;const at=ASPECT_ORDER.indexOf(P.format);const next=ASPECT_ORDER[(at+1+ASPECT_ORDER.length)%ASPECT_ORDER.length];if(typeof setFormat==='function')await setFormat(next);syncAspectChip()}
+const ASPECT_NAME={landscape:'Landscape',portrait:'Portrait',square:'Square',vertical_4_5:'Vertical'};
+function syncAspectChip(){const chip=$('#aspect-toggle');if(!chip)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';chip.textContent=ASPECT_LABEL[P?.format]||shape;chip.hidden=!P;chip.title='Frame shape · '+shape+'. Click to choose.'}
+// A menu, not a cycle: clicking used to jump to the next shape, so reading the
+// current one and choosing one were the same action and an accidental click moved
+// the production. The menu lists every shape and marks the current one.
+function aspectMenuOpen(){const m=$('#aspect-menu');return !!m&&!m.hidden}
+function closeAspectMenu(){const m=$('#aspect-menu'),b=$('#aspect-toggle');if(m)m.hidden=true;if(b)b.setAttribute('aria-expanded','false')}
+function buildAspectMenu(){const m=$('#aspect-menu');if(!m)return;
+ m.innerHTML=ASPECT_ORDER.map(k=>`<button type="button" role="option" aria-selected="${P?.format===k}" data-format="${k}" class="${P?.format===k?'current':''}" onclick="chooseAspect('${k}')"><span class="aspect-size">${ASPECT_LABEL[k]}</span><span class="aspect-name">${ASPECT_NAME[k]}</span><span class="aspect-tick">${P?.format===k?'✓':''}</span></button>`).join('')}
+// Positioned against the button, then flipped and clamped so it always lands on
+// screen even though the transport itself clips its overflow.
+function placeAspectMenu(){const m=$('#aspect-menu'),b=$('#aspect-toggle');if(!m||!b)return;
+ const r=b.getBoundingClientRect();m.hidden=false;
+ const w=m.offsetWidth||180,h=m.offsetHeight||150;
+ let left=r.right-w;if(left<8)left=8;
+ if(left+w>window.innerWidth-8)left=window.innerWidth-w-8;
+ let top=r.top-h-8;if(top<8)top=r.bottom+8;
+ m.style.left=Math.round(left)+'px';m.style.top=Math.round(top)+'px'}
+function toggleAspectMenu(event){if(event&&event.stopPropagation)event.stopPropagation();if(!P)return;
+ if(aspectMenuOpen()){closeAspectMenu();return}buildAspectMenu();placeAspectMenu();$('#aspect-toggle').setAttribute('aria-expanded','true')}
+async function chooseAspect(format){closeAspectMenu();if(!P||P.format===format)return;if(typeof setFormat==='function')await setFormat(format);syncAspectChip()}
+document.addEventListener('click',e=>{if(!aspectMenuOpen())return;if(e.target.closest&&e.target.closest('#aspect-menu,#aspect-toggle'))return;closeAspectMenu()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&aspectMenuOpen()){closeAspectMenu();$('#aspect-toggle')?.focus()}});
+window.addEventListener('resize',()=>{if(aspectMenuOpen())placeAspectMenu()});
+window.addEventListener('scroll',()=>{if(aspectMenuOpen())placeAspectMenu()},true);
 function syncMonitorShape(){const box=$('#monitor');if(!box)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';box.dataset.aspect=shape;box.dataset.fit=shape==='16:9'?'contain':'cover';
  // A vertical film gets a taller panel so the frame can be a useful size; leaving
  // portrait returns the grid to its default proportions untouched.

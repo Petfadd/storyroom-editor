@@ -367,6 +367,22 @@
 .transport-chip{border:1px solid #4c4c4c;background:transparent;color:#c8c8c8;
   border-radius:3px;padding:2px 7px;font-size:11px;font-weight:700;cursor:pointer;min-width:0}
 .transport-chip:hover{border-color:#7a7a7a;color:#fff}
+.transport-chip[aria-expanded="true"]{border-color:#7a7a7a;color:#fff;background:#383838}
+/* Floats above the whole editor, outside the transport: the transport clips its own
+   overflow, so a menu placed inside it would be cut off. */
+.aspect-menu{position:fixed;z-index:400;min-width:186px;padding:5px;
+  background:#1b1f26;border:1px solid #3b4655;border-radius:7px;
+  box-shadow:0 16px 44px #000a;display:flex;flex-direction:column;gap:1px}
+.aspect-menu[hidden]{display:none}
+.aspect-menu button{display:grid;grid-template-columns:52px 1fr 16px;align-items:center;gap:8px;
+  border:0;background:transparent;color:#dbe3ee;font:inherit;font-size:11px;
+  padding:7px 8px;border-radius:5px;cursor:pointer;text-align:left;width:100%}
+.aspect-menu button:hover{background:#2b333f}
+.aspect-menu button.current{background:#2b333f;color:#fff;font-weight:700}
+.aspect-size{font-weight:800;letter-spacing:.4px;color:#fff}
+.aspect-name{color:#93a1b4}
+.aspect-menu button.current .aspect-name{color:#c3cfdd}
+.aspect-tick{color:var(--green);text-align:right}
 .transport-icon{border:0;background:transparent;color:#bdbdbd;font-size:14px;line-height:1;
   padding:3px 4px;border-radius:3px;cursor:pointer}
 .transport-icon:hover{background:#383838;color:#fff}
