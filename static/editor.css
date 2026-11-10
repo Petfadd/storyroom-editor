@@ -185,6 +185,23 @@
 .render-page progress{width:100%;height:6px}
 .render-page .actionbar{display:flex;gap:10px;justify-content:flex-end;padding:12px 0 4px}
 .render-page .reference-video{width:100%;max-height:320px;margin-top:8px}
+/* A download control ON the player. The browser's own overflow menu cannot be
+   extended by any page, so the affordance lives over the video instead, in the
+   top-right corner and clear of the browser's bottom controls. */
+.player-shell{position:relative;display:block;margin-top:8px}
+.player-shell .reference-video{margin-top:0}
+.player-download{position:absolute;top:9px;right:9px;z-index:3;
+  display:inline-flex;align-items:center;gap:5px;text-decoration:none;
+  background:#0f1318e6;color:#eaf2fb;border:1px solid #ffffff3d;border-radius:6px;
+  padding:7px 11px;font-size:11px;font-weight:750;letter-spacing:.2px;
+  backdrop-filter:blur(6px);box-shadow:0 6px 20px #0007;transition:.15s}
+.player-download:hover{background:#ee455f;border-color:#ee455f;color:#fff}
+.player-download:focus-visible{outline:2px solid #fff;outline-offset:2px}
+/* On a narrow player the label would cover the picture; the arrow carries it. */
+@media(max-width:520px){
+  .player-download{padding:6px;font-size:0}
+  .player-download::before{content:"↓";font-size:14px}
+}
 .render-page .small{display:block;margin:6px 0;line-height:1.5;color:#93a3b8}
 .doc-cue-shot .audio-waveform.speech-wave{position:absolute;inset:auto 0 0 0;height:16px;opacity:.55}
 

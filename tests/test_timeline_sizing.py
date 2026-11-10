@@ -1123,6 +1123,39 @@ class SquarePixelTest(unittest.TestCase):
         self.assertLess(line.index('scale='), line.index('setsar=1'))
 
 
+class PlayerDownloadTest(unittest.TestCase):
+    """The render page must offer the download on the player itself.
+
+    The menu a user sees over a <video> element is drawn by the browser and cannot
+    be extended by any page, so the affordance has to sit over the picture rather
+    than inside that menu.
+    """
+
+    def test_a_download_control_sits_on_the_player(self):
+        studio = Path('static/studio.js').read_text()
+        self.assertIn('class="player-shell"', studio)
+        self.assertIn('class="player-download"', studio)
+        # It is a real download, not a link that opens a new tab.
+        self.assertIn('?download=1" download', studio)
+
+    def test_the_control_is_positioned_over_the_player(self):
+        css = Path('static/editor.css').read_text()
+        rule = css[css.index('.player-download{'):]
+        rule = rule[:rule.index('}')]
+        self.assertIn('position:absolute', rule)
+        self.assertIn('top:', rule)
+        self.assertIn('right:', rule)
+        shell = css[css.index('.player-shell{'):]
+        shell = shell[:shell.index('}')]
+        self.assertIn('position:relative', shell, 'the control needs a positioned parent')
+
+    def test_the_existing_downloads_are_kept(self):
+        # The player chip is an addition, not a replacement.
+        studio = Path('static/studio.js').read_text()
+        self.assertIn('↓ Download current MP4', studio)
+        self.assertIn('↓ Separate SRT', studio)
+
+
 class NoExplanatoryProseTest(unittest.TestCase):
     """The inspector and Setup carry labels and results, not advisory sentences."""
 
