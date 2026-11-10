@@ -4,3 +4,6 @@ projects/
 __pycache__/
 *.pyc
 .cache/
+
+# Media delivered for review stays out of the repository
+*.mp4
