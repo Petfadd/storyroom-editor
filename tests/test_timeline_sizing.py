@@ -879,6 +879,41 @@ class PreviewMatchesExportLevelTest(unittest.TestCase):
         self.assertIn('docMusicGain()', body)
 
 
+class FrameRateDecimationTest(unittest.TestCase):
+    """A 59.94 fps source in a 29.97 fps film must be decimated, not slowed.
+
+    The render plan halves the frame count for such a span and records
+    `frame_conversion: 'halve'`, but the renderer trimmed every source frame and
+    let `setpts` replay them all at the output rate. A 30 s bite then showed its
+    first 15 s stretched over 30 s: picture at half speed against normal-speed
+    audio, which is what "talking in slow motion" looked like.
+    """
+
+    def setUp(self):
+        self.source = Path('documentary_final_renderer.py').read_text()
+
+    def test_a_halved_span_selects_every_other_frame(self):
+        self.assertIn("halve = span.get('frame_conversion') == 'halve'", self.source)
+        # One backslash reaches ffmpeg; two would be passed through literally.
+        self.assertIn("'select=not(mod(n' + chr(92) + ',2)),'", self.source)
+
+    def test_the_select_runs_before_setpts(self):
+        # Decimate first, then renumber: the other order would still stretch the
+        # remaining frames over the whole slot.
+        self.assertIn("{select}setpts=N/({rate}*TB)", self.source)
+
+    def test_an_ordinary_span_selects_nothing(self):
+        self.assertIn("select = ", self.source)
+        body = self.source[self.source.index('halve = '):self.source.index('halve = ') + 200]
+        self.assertIn("if halve else ''", body,
+                      'a 29.97 fps source must not lose every other frame')
+
+    def test_the_plan_and_the_renderer_agree_on_the_frame_count(self):
+        # The plan counts output frames, the renderer caps with `-frames:v` at the
+        # same number, so a mismatch shows up as a short or stretched clip.
+        self.assertIn("'-frames:v', str(span['source_frame_count'])", self.source)
+
+
 class NoExplanatoryProseTest(unittest.TestCase):
     """The inspector and Setup carry labels and results, not advisory sentences."""
 

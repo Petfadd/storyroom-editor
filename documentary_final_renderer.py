@@ -124,8 +124,15 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
             if asset.get('kind') != 'video' or not source.is_relative_to(root / 'sources') or not source.is_file():
                 raise ValueError('An assigned source video is missing.')
             scale = span['picture_scale']; clip = work / f'{i:04}.mp4'
+            # A source shot at twice the output rate (59.94 fps into a 29.97 fps
+            # film) must be decimated, not slowed. The render plan already halves
+            # the frame count and records `frame_conversion`; without the matching
+            # `select` below, `setpts` replayed every source frame at the output
+            # rate, so a 30 s bite showed its first 15 s stretched over 30 s.
+            halve = span.get('frame_conversion') == 'halve'
+            select = 'select=not(mod(n' + chr(92) + ',2)),' if halve else ''
             filters = (f"trim=start_frame={span['source_start_frame']}:end_frame={span['source_end_frame']},"
-                       f"setpts=N/({rate}*TB),scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                       f"{select}setpts=N/({rate}*TB),scale={width}:{height}:force_original_aspect_ratio=decrease,"
                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1")
             if scale != 100:
                 sw = round(width * scale / 200) * 2; sh = round(height * scale / 200) * 2
