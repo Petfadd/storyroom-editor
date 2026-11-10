@@ -958,10 +958,23 @@ class VerticalReframeTest(unittest.TestCase):
         css = Path('static/editor.css').read_text()
         self.assertIn('data-aspect="9:16"', css)
 
-    def test_the_aspect_control_exists(self):
+    def test_the_aspect_control_sits_beside_the_monitor(self):
+        # Switched from the transport bar, where the frame it changes is visible.
+        html = Path('templates/index.html').read_text()
+        transport = html[html.index('class="transport"'):]
+        transport = transport[:transport.index('</div></div>')]
+        self.assertIn('id="aspect-toggle"', transport)
+        self.assertIn('id="caption-toggle"', transport)
+        editor = Path('static/editor.js').read_text()
+        self.assertIn('function cycleAspect', editor)
+        self.assertIn('syncAspectChip', editor)
+        self.assertIn('function setFormat', Path('static/studio.js').read_text())
+
+    def test_only_one_shape_control_changes_a_project(self):
+        # Setup shows the shape; it must not offer a second way to change it.
         studio = Path('static/studio.js').read_text()
-        self.assertIn('Aspect ratio', studio)
-        self.assertIn('function setFormat', studio)
+        self.assertNotIn('onchange="setFormat(this.value)"', studio)
+        self.assertEqual(studio.count('async function setFormat'), 1)
 
 
 class NoExplanatoryProseTest(unittest.TestCase):

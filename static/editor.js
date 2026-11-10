@@ -43,7 +43,7 @@ function renderManagement(){if(!P)return;ensureStrictStatus();if(P.edit_mode==='
  // The music card reads its saved state after the panel is on screen, so opening
  // Setup never waits on an extra request.
  if(P.edit_mode==='documentary'&&tab==='brief'&&typeof loadDocMusicCard==='function')loadDocMusicCard().then(()=>{if(P?.edit_mode==='documentary'&&tab==='brief')$('#content').innerHTML=briefHTML()});if(P.render?.url&&!isCurrentRender(P.render))$('#content').insertAdjacentHTML('afterbegin','<div class="notice warn"><strong>Previous MP4, not current.</strong> It was made before the latest timeline or export changes. Resolve the checks below, then render again to include your changes.</div>')}
-renderProject=function(){syncMonitorShape();renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
+renderProject=function(){syncMonitorShape();syncAspectChip();renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
 const oldNewProduction=newProduction;newProduction=function(){pauseEditor();oldNewProduction()};
 selectScene=i=>selectEditorScene(i);
 const savedSplit=splitBeat,savedMerge=mergeBeat;
@@ -545,6 +545,13 @@ document.addEventListener('fullscreenchange',()=>{const m=$('#monitor');if(m)m.c
 // get a tall frame and crop-to-fill, the same framing the renderer uses, so what is
 // reviewed is what is exported. View preference only: never touches a stored edit.
 const MONITOR_SHAPES={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'239:100'};
+// The shape switch lives beside the monitor, where you can see what it does. It
+// writes the same project setting as Setup's Aspect ratio control, so the two can
+// never disagree. Only an explicit click changes a production.
+const ASPECT_ORDER=['landscape','portrait','square','vertical_4_5'];
+const ASPECT_LABEL={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'2.39:1'};
+function syncAspectChip(){const chip=$('#aspect-toggle');if(!chip)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';chip.textContent=ASPECT_LABEL[P?.format]||shape;chip.hidden=!P;chip.title='Frame shape · '+shape+'. Click to switch.'}
+async function cycleAspect(){if(!P||!leave())return;const at=ASPECT_ORDER.indexOf(P.format);const next=ASPECT_ORDER[(at+1+ASPECT_ORDER.length)%ASPECT_ORDER.length];if(typeof setFormat==='function')await setFormat(next);syncAspectChip()}
 function syncMonitorShape(){const box=$('#monitor');if(!box)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';box.dataset.aspect=shape;box.dataset.fit=shape==='16:9'?'contain':'cover'}
 function updatePlaybackButton(){const button=$('#play-button');button.textContent=editorPlaying?'❚❚':'▶';button.title=editorPlaying?'Pause':'Play';button.setAttribute('aria-label',button.title)}
 function toggleEditorPlayback(){if(editorPlaying)pauseEditor();else playEditor()}
