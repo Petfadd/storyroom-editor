@@ -407,7 +407,7 @@ function docStartBiteDrag(event){
 
 setInterval(async()=>{const d=window.docTimelineData;if(!d||d.status!=='ready'||P?.id!==d.id)return;try{const state=await api(`/api/projects/${d.id}/`+(d.direct?'documentary-audio':'documentary-review-preview'));if(window.docTimelineData===d&&((d.direct?state.status!=='done':state.status!=='ready')||state.url!==d.url)){pauseEditor();reloadDocTimeline()}}catch{if(window.docTimelineData===d){d.verifyFailures=(d.verifyFailures||0)+1;if(d.verifyFailures>=3){pauseEditor();d.status='error';d.detail='Could not verify the timeline preview; playback stopped.';renderProject()}}}},5000);
 
-/* Background music: optional bed, ducked under narration and footage speech. */
+/* Background music: optional bed, played continuously for the whole film. */
 window.docLoadMusic=async function(){
  if(P?.edit_mode!=='documentary'){docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false};docRenderMusicTrack();return}
  try{docMusic=await api(`/api/projects/${P.id}/documentary-music`)}catch{docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false}}
@@ -547,9 +547,8 @@ function docMusicElement(){
  }
  return docMusicNode;
 }
-// Music sits under the narration and is cut under every chosen footage sound
-// bite. Both decisions are read from the edit clock, so they follow the picture
-// without a rebuild.
+// The bed plays at one level for the whole film: nothing duck or cut it. The
+// mode is read from the edit clock so the preview keeps following the picture.
 // The bed runs at the volume the user set, for the whole film. It is not ducked
 // under the narration and not cut under a sound bite, because the export does
 // the same and the preview must match the file.

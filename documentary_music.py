@@ -1,8 +1,9 @@
 """Optional background music for a documentary, kept separate from narration.
 
-The upload is normalised into the project's own folder, mixed at a low bed level,
-and ducked under every narration and footage-speech window. The narration, the
-sound-bite audio and the original SRT are never altered.
+The upload is normalised into the project's own folder and played at one level
+for the whole film: it is not ducked under the narration and not cut under a
+sound bite. The narration, the sound-bite audio and the original SRT are never
+altered.
 """
 from pathlib import Path
 import re, subprocess, uuid
@@ -10,7 +11,7 @@ import re, subprocess, uuid
 import av
 import imageio_ffmpeg
 
-MUSIC_VERSION = 'music-bed-autoduck-v1'
+MUSIC_VERSION = 'music-bed-continuous-v2'
 ALLOWED_SUFFIXES = {'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'}
 MAX_BYTES = 200 * 1024 * 1024
 
