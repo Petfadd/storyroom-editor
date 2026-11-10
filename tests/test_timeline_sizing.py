@@ -914,6 +914,56 @@ class FrameRateDecimationTest(unittest.TestCase):
         self.assertIn("'-frames:v', str(span['source_frame_count'])", self.source)
 
 
+class VerticalReframeTest(unittest.TestCase):
+    """A 16:9 shot in a 9:16 film must fill the frame, not sit between black bars.
+
+    Fitting a wide source into a tall frame leaves a thin strip of picture with
+    black pillars either side. A reel built that way is unusable, so a narrow
+    output fills the frame and crops the overflow from the centre instead.
+    """
+
+    def setUp(self):
+        self.renderer = Path('documentary_final_renderer.py').read_text()
+        self.preview = Path('documentary_preview.py').read_text()
+
+    def test_a_narrow_output_crops_to_fill(self):
+        self.assertIn('fill = width / height < 16 / 9', self.renderer)
+        self.assertIn("'increase,crop='", self.renderer)
+
+    def test_a_wide_output_still_keeps_the_whole_frame(self):
+        # Letterboxing must survive for 16:9 and wider: cropping there would throw
+        # picture away for no gain.
+        self.assertIn("'decrease,pad='", self.renderer)
+
+    def test_the_preview_uses_the_same_framing_rule(self):
+        self.assertIn('narrow=width/height < 16/9', self.preview)
+        self.assertGreaterEqual(self.preview.count('increase,crop='), 1)
+
+    def test_the_preview_is_not_hard_wired_to_16_9(self):
+        # The old filter pinned 640x360, so a vertical film was reviewed through a
+        # wide frame and every reframing error stayed invisible until the export.
+        self.assertNotIn("scale=640:360", self.preview)
+        self.assertIn('def preview_size(project)', self.preview)
+
+    def test_portrait_preview_shape(self):
+        from documentary_preview import preview_size
+        self.assertEqual(preview_size({'format':'portrait'}),(640,1138))
+        self.assertEqual(preview_size({'format':'landscape'}),(640,360))
+        self.assertEqual(preview_size({'format':'square'}),(640,640))
+
+    def test_the_monitor_follows_the_project_shape(self):
+        editor = Path('static/editor.js').read_text()
+        self.assertIn('syncMonitorShape', editor)
+        self.assertIn("portrait:'9:16'", editor)
+        css = Path('static/editor.css').read_text()
+        self.assertIn('data-aspect="9:16"', css)
+
+    def test_the_aspect_control_exists(self):
+        studio = Path('static/studio.js').read_text()
+        self.assertIn('Aspect ratio', studio)
+        self.assertIn('function setFormat', studio)
+
+
 class NoExplanatoryProseTest(unittest.TestCase):
     """The inspector and Setup carry labels and results, not advisory sentences."""
 

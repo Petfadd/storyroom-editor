@@ -1898,6 +1898,11 @@ def documentary_review_preview_state(pid):
   name=record['output']
   if not re.fullmatch(r'documentary_review_[a-f0-9]{32}\.mp4',name) or not (root/'renders'/name).is_file():return {'status':'unavailable'}
   plan=load_plan(root)
+  # A preview made for a different frame shape is not a preview of this film. Records
+  # written before the shape was recorded are judged on the values they carry.
+  import documentary_preview
+  shape=documentary_preview.preview_size(p)
+  if record.get('width') is not None and (record.get('width'),record.get('height'))!=shape:return {'status':'stale'}
   if record.get('audio_processing_version')!=AUDIO_PROCESSING_VERSION or record.get('project_version')!=p.get('updated') or record.get('plan_revision')!=plan['revision'] or any(x.get('stale_reasons') for x in annotate_plan(p,root,plan)['bites']):return {'status':'stale'}
   return {'status':'ready','url':f'/api/projects/{pid}/documentary-review-preview/{name}','detail':'Low-resolution review preview; selected sound-bite levels matched to narration. Not a final export.','narration_lufs':record.get('narration_lufs'),'sound_bite_levels':record.get('sound_bite_levels',[])}
  except (OSError,ValueError,KeyError,TypeError):return {'status':'unavailable'}

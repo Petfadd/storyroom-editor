@@ -131,9 +131,16 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
             # rate, so a 30 s bite showed its first 15 s stretched over 30 s.
             halve = span.get('frame_conversion') == 'halve'
             select = 'select=not(mod(n' + chr(92) + ',2)),' if halve else ''
+            # Fit the source into the frame. A narrow output (a 9:16 reel from a
+            # 16:9 source) cannot be fitted without leaving the picture a thin
+            # strip between black bars, so it is filled and the overflow cropped
+            # away from the centre instead. A wide output keeps the whole frame.
+            fill = width / height < 16 / 9
+            fit = ('increase,crop=' + str(width) + ':' + str(height)) if fill else (
+                'decrease,pad=' + str(width) + ':' + str(height) + ':(ow-iw)/2:(oh-ih)/2:black')
             filters = (f"trim=start_frame={span['source_start_frame']}:end_frame={span['source_end_frame']},"
-                       f"{select}setpts=N/({rate}*TB),scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                       f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1")
+                       f"{select}setpts=N/({rate}*TB),scale={width}:{height}:force_original_aspect_ratio={fit},"
+                       f"setsar=1")
             if scale != 100:
                 sw = round(width * scale / 200) * 2; sh = round(height * scale / 200) * 2
                 filters += f',scale={sw}:{sh},crop={width}:{height}'

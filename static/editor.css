@@ -318,6 +318,12 @@
 .monitor[data-aspect="4:3"]{aspect-ratio:4/3}
 .monitor[data-aspect="1:1"]{aspect-ratio:1/1}
 .monitor[data-aspect="21:9"]{aspect-ratio:21/9}
+/* A vertical film gets a tall frame. It is capped by the height available above the
+   transport, so the picture never overflows the panel; `cover` then crops the
+   source from the centre exactly as the renderer does. */
+.monitor[data-aspect="9:16"]{aspect-ratio:9/16;max-height:100%;width:auto}
+.monitor[data-aspect="4:5"]{aspect-ratio:4/5;max-height:100%;width:auto}
+.monitor[data-aspect="239:100"]{aspect-ratio:239/100}
 .monitor[data-fit="cover"] video,.monitor[data-fit="cover"] img{object-fit:cover}
 .monitor.is-fullscreen{border-radius:0;margin:0;background:#000}
 

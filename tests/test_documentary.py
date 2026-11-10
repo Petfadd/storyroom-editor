@@ -109,7 +109,7 @@ class DocumentaryPlanTest(unittest.TestCase):
   self.p['edit_mode']='documentary';self.p['voiceover']['duration']=2;self.p['scenes']=[{'frame_in':0,'frame_out':60,'asset_id':'a','in_s':0}];(self.root/'project.json').write_text(json.dumps(self.p))
   bite=validate_bite(self.p,self.root,{'asset_id':'a','pause_s':1,'source_in_s':2,'source_out_s':3},lambda path:True)
   (self.root/'documentary_plan.json').write_text(json.dumps({'version':1,'revision':1,'bites':[bite]}));(self.root/'renders').mkdir()
-  def build(root,project,plan,out,allow_tail,progress):out.write_bytes(b'review preview');return {'duration_s':3,'picture_tail_s':0,'audio_processing_version':__import__('documentary_audio').AUDIO_PROCESSING_VERSION}
+  def build(root,project,plan,out,allow_tail,progress,**shape):out.write_bytes(b'review preview');return {'duration_s':3,'picture_tail_s':0,'audio_processing_version':__import__('documentary_audio').AUDIO_PROCESSING_VERSION}
   url=f'/api/projects/{self.pid}/documentary-review-preview'
   with patch.object(documentary_preview,'build',side_effect=build):
    self.assertEqual(self.client.post(url,json={}).status_code,202)

@@ -43,7 +43,7 @@ function renderManagement(){if(!P)return;ensureStrictStatus();if(P.edit_mode==='
  // The music card reads its saved state after the panel is on screen, so opening
  // Setup never waits on an extra request.
  if(P.edit_mode==='documentary'&&tab==='brief'&&typeof loadDocMusicCard==='function')loadDocMusicCard().then(()=>{if(P?.edit_mode==='documentary'&&tab==='brief')$('#content').innerHTML=briefHTML()});if(P.render?.url&&!isCurrentRender(P.render))$('#content').insertAdjacentHTML('afterbegin','<div class="notice warn"><strong>Previous MP4, not current.</strong> It was made before the latest timeline or export changes. Resolve the checks below, then render again to include your changes.</div>')}
-renderProject=function(){renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
+renderProject=function(){syncMonitorShape();renderEditor();if($('#manage-dialog').open)renderManagement();const briefBox=document.getElementById('doc-brief-readiness');if(briefBox&&P?.id&&P?.documentary_beat_review&&typeof loadDocumentaryReadiness==='function')loadDocumentaryReadiness(P.id,'doc-brief-readiness')};
 const oldNewProduction=newProduction;newProduction=function(){pauseEditor();oldNewProduction()};
 selectScene=i=>selectEditorScene(i);
 const savedSplit=splitBeat,savedMerge=mergeBeat;
@@ -541,6 +541,11 @@ function setTimecode(current,total){const a=$('#timecode-current'),b=$('#timecod
 let monitorFit='contain',monitorAspect='16:9';
 function toggleMonitorFullscreen(){const box=$('#monitor');if(!box)return;try{if(document.fullscreenElement)document.exitFullscreen();else box.requestFullscreen()}catch(e){toast('This browser did not allow fullscreen for the monitor.')}}
 document.addEventListener('fullscreenchange',()=>{const m=$('#monitor');if(m)m.classList.toggle('is-fullscreen',!!document.fullscreenElement)});
+// The monitor is the project's frame, not a fixed 16:9 box. Portrait and 4:5 films
+// get a tall frame and crop-to-fill, the same framing the renderer uses, so what is
+// reviewed is what is exported. View preference only: never touches a stored edit.
+const MONITOR_SHAPES={landscape:'16:9',portrait:'9:16',square:'1:1',vertical_4_5:'4:5',cinema:'239:100'};
+function syncMonitorShape(){const box=$('#monitor');if(!box)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';box.dataset.aspect=shape;box.dataset.fit=shape==='16:9'?'contain':'cover'}
 function updatePlaybackButton(){const button=$('#play-button');button.textContent=editorPlaying?'❚❚':'▶';button.title=editorPlaying?'Pause':'Play';button.setAttribute('aria-label',button.title)}
 function toggleEditorPlayback(){if(editorPlaying)pauseEditor();else playEditor()}
 async function playEditor(){if(P?.edit_mode==='documentary'){return docPlayTimeline()}if(!scenes().length){toast('Import SRT and build the storyboard first.');return}if(scenes()[sceneIndex]?.missing_video_out){toast('This still or freeze is not shown in the moving-video review.');return}if(dirty){toast('Save or discard scene edits before playing.');return}if(editorTime()>=totalTime()-.01)seekEditor(0,true);editorPlaying=true;updatePlaybackButton();clockAt=performance.now();try{if(editorMaster){masterNode.muted=editorMuted;await masterNode.play()}else{const s=scenes()[sceneIndex],a=assets().find(a=>a.id===s?.asset_id);if(a?.kind==='video'&&!sourceReady){seekSourceAtTimeline(s,a,editorTime());return}showSource(sceneIndex,editorTime());if(P?.voiceover){narrNode.muted=editorMuted;await narrNode.play()}if(a?.kind==='video'&&sourceReady&&sourceNode.readyState>=2)await sourceNode.play()}}catch(e){pauseEditor();toast('Playback could not start. Check the selected media or try again.')}}
