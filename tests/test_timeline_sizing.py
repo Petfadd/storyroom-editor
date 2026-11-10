@@ -455,3 +455,99 @@ class PlaybackResilienceTest(unittest.TestCase):
         source = Path('documentary_render_plan.py').read_text()
         self.assertIn('if not available and container.duration:', source)
         self.assertIn('average_rate', source)
+
+
+class EncodedRateCheckTest(unittest.TestCase):
+    """An export must not be blocked by a correct clip.
+
+    average_rate is frames/duration and drifts off the nominal rate whenever the
+    duration does not divide exactly -- a clip trimmed to its own frame count is
+    short by one frame, which read as 29.9849 instead of 30000/1001 and failed
+    every export at the first scene.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import av, imageio_ffmpeg, subprocess  # noqa: F401
+        except Exception:
+            raise unittest.SkipTest('av/ffmpeg unavailable')
+        import subprocess, tempfile, imageio_ffmpeg
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.ff = imageio_ffmpeg.get_ffmpeg_exe()
+        cls.src = str(Path(cls.tmp.name) / 'src60.mp4')
+        subprocess.run([cls.ff, '-v', 'error', '-y', '-f', 'lavfi',
+                        '-i', 'testsrc=size=1280x720:rate=60000/1001:duration=40',
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                        cls.src], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _encode(self, name, rate, frames='1007', source=None):
+        import subprocess
+        out = str(Path(self.tmp.name) / name)
+        filters = (f"trim=start_frame=0:end_frame={int(frames) * 2},setpts=N/({rate}*TB),"
+                   f"scale=1280:720,setsar=1,format=yuv420p")
+        subprocess.run([self.ff, '-v', 'error', '-y', '-i', source or self.src, '-an', '-vf', filters,
+                        '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast',
+                        '-frames:v', frames, out], check=True)
+        return out
+
+    def test_a_correct_ntsc_clip_is_not_rejected(self):
+        """The exact case that killed the export at 5%."""
+        from fractions import Fraction
+        from documentary_final_renderer import _video_info
+        clip = self._encode('ntsc.mp4', '30000/1001')
+        count, rate = _video_info(clip)
+        self.assertEqual(count, 1007, 'frame count must be exact')
+        self.assertEqual(rate, Fraction(30000, 1001),
+                         'the nominal rate is the timebase, not frames/duration')
+
+    def test_a_wrong_rate_is_still_rejected(self):
+        """Relaxing the check must not let a genuinely wrong clip through.
+
+        The source must itself be 30fps: re-timing a 59.94 source with setpts
+        keeps the 30000/1001 container timebase, which is not what the renderer
+        produces when it is asked for a different output rate.
+        """
+        import subprocess
+        from fractions import Fraction
+        from documentary_final_renderer import _video_info
+        src30 = str(Path(self.tmp.name) / 'src30.mp4')
+        subprocess.run([self.ff, '-v', 'error', '-y', '-f', 'lavfi',
+                        '-i', 'testsrc=size=1280x720:rate=30:duration=10',
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                        src30], check=True)
+        wrong = self._encode('p30.mp4', '30', frames='300', source=src30)
+        _, rate = _video_info(wrong)
+        self.assertNotEqual(rate, Fraction(30000, 1001),
+                            'a 30fps clip is not an NTSC clip')
+
+
+class PreRollWindowTest(unittest.TestCase):
+    """The incoming picture must be loaded before the cut, not after it.
+
+    A source clip is tens of MB and sits on a keyframe interval of several
+    seconds, so it needs real time on the standby element. At 1.5s the picture
+    arrived after the cut and the monitor was blank while narration continued.
+    """
+
+    def test_the_pre_roll_window_covers_a_real_clip_load(self):
+        from pathlib import Path
+        js = Path('static/documentary_timeline.js').read_text()
+        match = __import__('re').search(r'const DOC_PREROLL_S=([0-9.]+)', js)
+        self.assertTrue(match, 'the pre-roll window is not declared')
+        window = float(match.group(1))
+        self.assertGreaterEqual(window, 5,
+                                'a 40MB clip needs more than a couple of seconds')
+
+    def test_the_pre_roll_still_targets_the_upcoming_cut(self):
+        """A wider window must not pre-load a cut further ahead than the next."""
+        from pathlib import Path
+        js = Path('static/documentary_timeline.js').read_text()
+        start = js.index('function docTick(){')
+        body = js[start:start + 1200]
+        self.assertIn('docPremoteNext(t)', body)
+        self.assertIn('docNextAt(t)', body)

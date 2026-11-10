@@ -189,7 +189,10 @@ function docDrawNarrationWaveforms(){
 let docDirectEvent=null,docDirectBusy=false,docDirectToken=0;
 let docNextEvent=null,docNextToken=0,docPictureAt=null;
 let liveNode=masterNode,standbyNodeEl=null;
-const DOC_PREROLL_S=1.5;   // begin preparing the next picture this early
+// Prepare the next picture well before the cut. A source clip is tens of MB and
+// must be fetched and seeked on the standby element; at 1.5s the incoming
+// picture arrived after the cut, leaving the monitor blank while audio ran on.
+const DOC_PREROLL_S=8;
 const DOC_DRIFT_S=0.08;    // picture/clock drift tolerated before correcting
 function docStandby(){return standbyNodeEl||(standbyNodeEl=($('#program-source-next')||nextSourceNode))}
 function docDirectAt(t){return window.docTimelineData?.schedule?.find(e=>t*1000>=e.timeline_in_ms&&t*1000<e.timeline_out_ms)}
@@ -289,7 +292,10 @@ function docSegmentAt(t){const d=window.docTimelineData;return d?.segments.find(
 function docBaseAt(t){const seg=docSegmentAt(t);if(!seg)return 0;return seg.kind==='sound_bite'?seg.narration_resume_s:Math.min(seg.source_out_s,seg.source_in_s+Math.max(0,t-seg.timeline_in_s))}
 function docSelectAt(i,t,event){if(!leave())return;pauseEditor();if(event&&(event.ctrlKey||event.metaKey)){const id=scenes()[i].id;if(selectedSlotIds.has(id))selectedSlotIds.delete(id);else selectedSlotIds.add(id)}else selectedSlotIds=new Set([scenes()[i].id]);sceneIndex=i;docSeekTimeline(t,false);renderInspector();markSelected();syncPictureScale()}
 function docSelectScene(i,event){const s=scenes()[i],span=s&&docNarrationSpans(s.frame_in/30,s.frame_out/30)[0];if(span)docSelectAt(i,span.start,event)}
-function docSeekTimeline(t,select=true){const d=window.docTimelineData;if(!d?.duration)return;if(select&&!leave())return;const was=editorPlaying;pauseEditor();t=Math.max(0,Math.min(d.duration-.001,t));if(d.status==='ready'){try{if(d.direct){docResetStandby();liveNode=masterNode;narrNode.currentTime=Math.min(t,narrNode.duration||t);docSyncMusic(t,false);masterNode.pause();docStandby().pause();docStandby().classList.remove('is-active');docDirectSwitch(t,false,true)}else masterNode.currentTime=t}catch{}}if(select){const base=docBaseAt(t),i=scenes().findIndex(s=>base>=s.frame_in/30&&base<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;renderInspector();markSelected()}}docUpdatePosition();if(was)docPlayTimeline()}
+function docSeekTimeline(t,select=true){const d=window.docTimelineData;if(!d?.duration)return;if(select&&!leave())return;const was=editorPlaying;pauseEditor();t=Math.max(0,Math.min(d.duration-.001,t));
+ // While a drag is in flight, only move the picture and the playhead. The
+ // inspector and the scene selection settle once the pointer is released.
+ const scrubbing=!!playheadDrag;if(d.status==='ready'){try{if(d.direct){docResetStandby();liveNode=masterNode;narrNode.currentTime=Math.min(t,narrNode.duration||t);docSyncMusic(t,false);masterNode.pause();docStandby().pause();docStandby().classList.remove('is-active');docDirectSwitch(t,false,true)}else masterNode.currentTime=t}catch{}}if(select&&!scrubbing){const base=docBaseAt(t),i=scenes().findIndex(s=>base>=s.frame_in/30&&base<s.frame_out/30);if(i>=0&&i!==sceneIndex){sceneIndex=i;renderInspector();markSelected()}}docUpdatePosition();if(was&&!scrubbing)docPlayTimeline()}
 async function docPlayTimeline(){const token=++docPlayGeneration,d=window.docTimelineData;if(d?.status!=='ready'||!d.url){toast('Prepare the documentary timeline preview first.');return}try{const state=await api(`/api/projects/${d.id}/`+(d.direct?'documentary-audio':'documentary-review-preview'));if(token!==docPlayGeneration||window.docTimelineData!==d)return;if((d.direct?state.status!=='done':state.status!=='ready')||state.url!==d.url){toast('The timeline changed. Prepare the preview again.');reloadDocTimeline();return}}catch(e){toast('Cannot verify the timeline preview: '+e.message);return}if(dirty){toast('Save or discard scene edits before playing.');return}if(d.direct){if(narrNode.currentTime>=d.duration-.05)narrNode.currentTime=0;editorPlaying=true;updatePlaybackButton();docDirectEvent=null;docPictureAt=null;docResetStandby();masterNode.muted=true;narrNode.muted=editorMuted;try{await narrNode.play()}catch(e){pauseEditor();toast('Playback could not start: '+e.message);return}/* the picture follows the clock */docDirectSwitch(narrNode.currentTime,true,true);if(editorPlaying){docPremoteNext(narrNode.currentTime||0);docSyncMusic(narrNode.currentTime||0,true)}return}if(masterNode.currentTime>=d.duration-.01)masterNode.currentTime=0;editorPlaying=true;updatePlaybackButton();try{masterNode.muted=editorMuted;await masterNode.play()}catch(e){pauseEditor();toast('Timeline playback could not start: '+e.message)}}
 // The Scale slider crops or enlarges the picture in the monitor. It must survive
 // the per-frame position repaint, which used to reset the layer to scale(1).
@@ -525,7 +531,11 @@ window.docPickMusic=async function(){
  const input=document.createElement('input');input.type='file';input.accept='audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus';
  input.onchange=async()=>{const file=input.files?.[0];if(!file||!P)return;
   const form=new FormData();form.append('music',file);
-  try{const response=await fetch(`/api/projects/${P.id}/documentary-music`,{method:'POST',body:form});const data=await response.json();if(!response.ok)throw Error(data.error||'Music could not be saved.');docMusic=data;toast('Background music saved. Prepare the timeline preview to hear the ducked mix.');await window.docLoadMusic?await window.docLoadMusic():0;window.reloadDocTimeline()}catch(e){toast(e.message)}};
+  try{const response=await fetch(`/api/projects/${P.id}/documentary-music`,{method:'POST',body:form});
+  // Read the body defensively: a non-JSON reply (a proxy error page, a dropped
+  // upload) must not be reported as an unreadable server.
+  let data={};try{data=await response.json()}catch{data={}}
+  if(!response.ok)throw Error(data.error||`Music could not be saved (${response.status}).`);docMusic=data;toast('Background music saved. Prepare the timeline preview to hear the ducked mix.');await window.docLoadMusic?await window.docLoadMusic():0;window.reloadDocTimeline()}catch(e){toast(e.message)}};
  input.click();
 };
 window.docToggleMusic=async function(){

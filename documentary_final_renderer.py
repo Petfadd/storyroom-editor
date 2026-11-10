@@ -29,7 +29,14 @@ def _video_info(path):
         if not media.streams.video:
             raise ValueError('Assembled documentary has no video stream.')
         stream = media.streams.video[0]
-        return stream.frames, Fraction(stream.average_rate) if stream.average_rate else None
+        # base_rate is the container timebase and is exactly 30000/1001 for an NTSC
+        # frame rate. average_rate is frames/duration, which only equals the
+        # nominal rate when the duration divides exactly -- a clip trimmed to its
+        # own frame count is short by one frame, so average_rate drifts to
+        # 29.9849 and every comparison against 30000/1001 failed on a clip that
+        # was in fact correct. Fall back to average_rate only if no timebase.
+        rate = stream.base_rate or stream.average_rate
+        return stream.frames, Fraction(rate) if rate else None
 
 
 def render(root, project, sound_plan, destination, width, height, progress=lambda *_: None, enhance_picture=False, subtitle_ass=None, cancel_check=lambda: None, music=False):

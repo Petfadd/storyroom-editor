@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import defaultdict
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, send_file, render_template, Response
-from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge
+from werkzeug.exceptions import BadRequest, NotFound, RequestEntityTooLarge, HTTPException
 from types import SimpleNamespace
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import cv2, imageio_ffmpeg
@@ -2516,8 +2516,21 @@ def scene_thumbnail(pid,sid):
  return send_from_directory(cache,out.name,conditional=True)
 @app.errorhandler(400)
 @app.errorhandler(404)
+@app.errorhandler(405)
 @app.errorhandler(413)
+@app.errorhandler(415)
+@app.errorhandler(422)
+@app.errorhandler(429)
 def friendly(e):return jsonify({'error':str(e.description)}),e.code
+
+
+@app.errorhandler(HTTPException)
+def any_http_error(e):
+ # Every remaining HTTP error must still be JSON. A bare 405 (wrong method) or a
+ # proxy-generated error arrives as HTML, and the client only reads JSON -- the
+ # reader then reports "the server response could not be read" instead of the
+ # real reason, which is how a wrong method surfaced as an unreachable server.
+ return jsonify({'error':str(e.description or e.name)}), e.code
 @app.errorhandler(500)
 def internal(e):return jsonify({'error':'The operation could not finish. Your saved project remains on disk. Check server diagnostics.'}),500
 if __name__=='__main__':app.run(host=os.environ.get('STORYROOM_HOST','0.0.0.0'),port=int(os.environ.get('PORT','8003')),threaded=True,debug=False)

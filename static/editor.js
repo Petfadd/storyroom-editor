@@ -596,7 +596,9 @@ $('#playhead-handle').addEventListener('pointermove',e=>{if(playheadDrag?.pointe
 function endPlayheadDrag(e){
  const d=playheadDrag;if(!d||d.pointerId!==e.pointerId)return;
  cancelAnimationFrame(d.raf);playheadDrag=null;e.currentTarget.classList.remove('dragging');
- scrubPlayhead(e.clientX,d);if(d.wasPlaying)playEditor();
+ // The drag itself only moved the picture. Drop the dedupe marker so this final
+ // seek runs in full and settles the scene selection and the inspector.
+ d.lastTarget=null;scrubPlayhead(e.clientX,d);if(d.wasPlaying)playEditor();
 }
 $('#playhead-handle').addEventListener('pointerup',endPlayheadDrag);
 $('#playhead-handle').addEventListener('pointercancel',endPlayheadDrag);
