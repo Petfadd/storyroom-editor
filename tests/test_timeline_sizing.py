@@ -961,14 +961,49 @@ class VerticalReframeTest(unittest.TestCase):
         self.assertIn('.monitor-frame{', css)
         self.assertIn('[data-aspect="9:16"] .monitor-frame', css)
 
-    def test_a_vertical_frame_is_bounded_on_both_axes(self):
-        # Bounded by height AND a share of the width: an unbounded aspect-ratio box
-        # would overflow its panel on a short window.
+    def test_a_vertical_frame_can_never_collapse_to_nothing(self):
+        # Everything drawn into the frame is absolutely positioned, so it contributes
+        # no height. `height:auto` let the frame size itself from that empty content
+        # and it collapsed to 0x0 -- the monitor went blank. The frame must keep the
+        # definite height the base rule gives it.
         css = Path('static/editor.css').read_text()
-        rule = css[css.index('[data-aspect="9:16"] .monitor-frame'):]
+        base = css[css.index('.monitor-frame{'):]
+        base = base[:base.index('}')]
+        self.assertIn('height:100%', base, 'the frame needs a definite height')
+        # The shared rule sets height:100%; each ratio rule only supplies the ratio.
+        shared = css[css.index('.monitor[data-aspect="9:16"] .monitor-frame,'):]
+        shared = shared[:shared.index('}')]
+        self.assertIn('height:100%', shared, 'the frame needs a definite height')
+        self.assertNotIn('height:auto', shared,
+                         'height:auto lets the frame size itself from empty contents')
+        self.assertIn('flex:none', shared, 'a flex basis must not decide the width')
+        for key in ('9:16', '4:5'):
+            marker = f'.monitor[data-aspect="{key}"] .monitor-frame' + '{'
+            # Search AFTER the shared block, which lists both selectors together.
+            rule = css[css.index(marker, css.index('flex:none;height:100%')):]
+            rule = rule[:rule.index('}')]
+            self.assertIn('aspect-ratio:', rule)
+            self.assertNotIn('height:auto', rule)
+
+    def test_absolute_children_mean_the_frame_cannot_be_content_sized(self):
+        # Guard the premise of the test above.
+        css = Path('static/editor.css').read_text()
+        for sel in ('#picture-layer', '.blur-backdrop', '#program-source'):
+            idx = css.find(sel + '{')
+            if idx == -1: continue
+            self.assertIn('position:absolute', css[idx:css.index('}', idx)])
+
+    def test_a_vertical_frame_is_bounded_by_its_parent(self):
+        # Bounded by the height of the stage it sits in, so it cannot overflow the
+        # panel: the base rule's `height:100%` plus `max-width:100%` do that, and the
+        # ratio derives the width from the height.
+        css = Path('static/editor.css').read_text()
+        base = css[css.index('.monitor-frame{'):]
+        base = base[:base.index('}')]
+        self.assertIn('height:100%', base)
+        self.assertIn('max-width:100%', base)
+        rule = css[css.index('.monitor[data-aspect="9:16"] .monitor-frame{'):]
         rule = rule[:rule.index('}')]
-        self.assertIn('max-height:100%', rule)
-        self.assertIn('max-width:', rule)
         self.assertIn('aspect-ratio:9/16', rule)
 
     def test_a_vertical_project_gives_the_panel_more_height(self):

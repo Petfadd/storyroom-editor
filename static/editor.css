@@ -326,10 +326,17 @@
 .monitor[data-aspect="1:1"] .monitor-frame{aspect-ratio:1/1}
 .monitor[data-aspect="21:9"] .monitor-frame{aspect-ratio:21/9}
 .monitor[data-aspect="239:100"] .monitor-frame{aspect-ratio:239/100}
-.monitor[data-aspect="9:16"] .monitor-frame{height:auto;width:auto;
-  aspect-ratio:9/16;max-height:100%;max-width:min(52%,62vh)}
-.monitor[data-aspect="4:5"] .monitor-frame{height:auto;width:auto;
-  aspect-ratio:4/5;max-height:100%;max-width:min(58%,68vh)}
+/* A vertical film: a tall card centred in the dark stage, the same framing rule the
+   renderer uses. The one thing this must never do is let the frame size itself from
+   its contents: everything drawn into the frame is absolutely positioned, so its
+   contents measure zero and `height:auto` collapsed the whole monitor to a dot. The
+   height therefore stays definite (100% of the stage) and `aspect-ratio` derives the
+   width from it. `flex:none` keeps a flex basis from interfering with that width. */
+.monitor[data-aspect="9:16"] .monitor-frame,
+.monitor[data-aspect="4:5"] .monitor-frame{
+  flex:none;height:100%;width:auto;max-width:100%}
+.monitor[data-aspect="9:16"] .monitor-frame{aspect-ratio:9/16}
+.monitor[data-aspect="4:5"] .monitor-frame{aspect-ratio:4/5}
 .monitor[data-fit="cover"] .monitor-frame video,.monitor[data-fit="cover"] .monitor-frame img{object-fit:cover}
 .monitor.is-fullscreen .monitor-frame{border-radius:0}
 /* Nothing drawn into the frame may spill past it, so the picture is always a clean
