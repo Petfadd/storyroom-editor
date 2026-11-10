@@ -941,3 +941,36 @@ class AudioFaderLabelsOnlyTest(unittest.TestCase):
             self.assertNotIn(sentence, body)
         for label in ('Narration', 'Clip audio', 'Music'):
             self.assertIn(label, body)
+
+
+class DeliverySizeTest(unittest.TestCase):
+    """The export must not be encoded with the worst compressor available."""
+
+    def setUp(self):
+        self.source = Path('documentary_final_renderer.py').read_text()
+
+    def test_the_export_does_not_use_ultrafast(self):
+        # `ultrafast` drops the compression tools and writes Constrained Baseline.
+        # On this project's footage it produced 2.9x the bytes of veryfast at the
+        # same CRF, and the export encodes twice (clips, then captions).
+        self.assertIn("VIDEO_PRESET = 'veryfast'", self.source)
+        self.assertNotIn("'-preset', 'ultrafast'", self.source)
+
+    def test_b_frames_are_disabled(self):
+        # The timestamp check in `strict_cuts.inspect_video` requires evenly spaced
+        # PTS. B-frames reorder them and `veryfast` enables them, so the export
+        # fails its own verification without this. Measured: it is what makes
+        # `veryfast` legal here without giving back the size win.
+        self.assertEqual(self.source.count("'-bf', '0'"), 3,
+                         'one per encode site')
+
+    def test_every_encode_site_uses_the_shared_preset(self):
+        self.assertEqual(self.source.count("-preset', VIDEO_PRESET"), 3)
+
+    def test_stray_work_directories_are_swept(self):
+        # A killed render leaves hundreds of megabytes behind; the next render
+        # is the safe moment to clear them.
+        self.assertIn('sweep_work_dirs(destination.parent)', self.source)
+        start = self.source.index('def sweep_work_dirs(')
+        body = self.source[start:self.source.index('\n\ndef ', start)]
+        self.assertIn('rmtree', body)

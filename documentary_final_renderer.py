@@ -13,6 +13,30 @@ import av
 import imageio_ffmpeg
 from documentary import annotate_plan, build_timeline
 from documentary_audio import build_audio
+# `ultrafast` is not just faster, it is far larger: on this project's footage it
+# wrote 4.3x the bytes of `veryfast` at the same CRF, because it drops the
+# compression tools and falls back to the Constrained Baseline profile. The
+# export encodes twice (clips, then captions), so every byte was paid twice.
+VIDEO_PRESET = 'veryfast'
+
+def sweep_work_dirs(renders_dir, keep=None):
+    """Remove work directories left by a render that was killed, not raised.
+
+    `TemporaryDirectory` cleans up when the job finishes or raises, but a killed
+    process leaves its `documentary-final-*` directory behind with hundreds of
+    megabytes of intermediate audio. Rendering again is the safe moment to clear
+    them, because no other render is running against this project.
+    """
+    import shutil
+    removed = 0
+    for old in Path(renders_dir).glob('documentary-final-*'):
+        if not old.is_dir() or (keep and old.name == keep):
+            continue
+        shutil.rmtree(old, ignore_errors=True)
+        removed += 1
+    return removed
+
+
 from documentary_render_plan import plan as picture_plan, load_decisions
 from strict_cuts import inspect_video
 
@@ -64,6 +88,7 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
         raise ValueError('The documentary has no picture frames.')
     video_duration = Fraction(total_frames, 1) / fps
     ff = imageio_ffmpeg.get_ffmpeg_exe(); destination.parent.mkdir(parents=True, exist_ok=True)
+    sweep_work_dirs(destination.parent)
     with tempfile.TemporaryDirectory(prefix='documentary-final-', dir=destination.parent) as temp:
         work = Path(temp); audio = work / 'audio.wav'
         levels = build_audio(root, project, annotated, audio, progress=lambda *_: cancel_check(), strict_handoffs=True, music=music)
@@ -113,7 +138,7 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
             # 1/30000, and the `-c copy` concat below cannot stitch mixed time bases:
             # it silently leaves hundreds of seconds of black where those clips belong.
             _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source), '-an',
-                  '-vf', filters, '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast',
+                  '-vf', filters, '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', VIDEO_PRESET, '-bf', '0',
                   '-crf', '20', '-threads', '2', '-frames:v', str(span['source_frame_count']),
                   '-video_track_timescale', str(fps.numerator), str(clip)])
             count, actual_rate = _video_info(clip)
@@ -173,7 +198,7 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
             parts.append('format=yuv420p')
             _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(joined),
                   '-an', '-vf', ','.join(parts), '-fps_mode', 'passthrough',
-                  '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-threads', '2',
+                  '-c:v', 'libx264', '-preset', VIDEO_PRESET, '-bf', '0', '-crf', '20', '-threads', '2',
                   '-frames:v', str(total_frames), str(faded)])
             count, actual_rate = _video_info(faded)
             if count != total_frames or actual_rate != fps:
@@ -182,7 +207,7 @@ def render(root, project, sound_plan, destination, width, height, progress=lambd
         result = work / 'result.mp4'
         cmd = [ff, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(joined), '-i', str(audio), '-map', '0:v:0', '-map', '1:a:0']
         if caption_filters:
-            cmd += ['-vf', ','.join(caption_filters), '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20', '-threads', '2']
+            cmd += ['-vf', ','.join(caption_filters), '-fps_mode', 'passthrough', '-c:v', 'libx264', '-preset', VIDEO_PRESET, '-bf', '0', '-crf', '20', '-threads', '2']
         else:
             cmd += ['-c:v', 'copy']
         if difference > 0:
