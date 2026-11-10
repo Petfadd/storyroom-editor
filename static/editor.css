@@ -367,3 +367,16 @@
   .caption-toggle{display:none}
   .timecode{font-size:9px}
 }
+
+/* Audio levels sit directly under Scale and reuse its proportions, so the three
+   faders read as one block with the picture control above them. */
+.doc-volume-control{padding:8px 0;border-bottom:1px solid #2b333e}
+.doc-volume-control>label{display:block;margin-bottom:4px}
+.doc-volume-row{display:flex;align-items:center;gap:6px;margin-top:4px}
+.doc-volume-row>label{flex:0 0 66px;font-size:10px;color:#9fb0c2}
+.inspector-scroll .doc-volume-row input[type=range]{flex:1;min-width:30px;accent-color:#ee455f;padding:0}
+.inspector-scroll .doc-volume-row input[type=number]{width:48px;text-align:right}
+.doc-volume-row>span{font-size:10px;color:#9fb0c2}
+.doc-vol-reset{margin:0;padding:2px 5px;background:#1b222d;color:#cad5df;border:1px solid #364251;border-radius:4px;cursor:pointer;font-size:10px;line-height:1}
+.doc-vol-reset:hover{background:#232c39}
+.doc-volume-control>p.small{margin:2px 0 6px}

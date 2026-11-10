@@ -622,11 +622,15 @@ class PlanningToolsPlacementTest(unittest.TestCase):
         self.assertIn("return ''", body,
                       'the shot inspector must not render planning links')
 
-    def test_picture_checks_live_in_the_setup_panel(self):
-        self.assertIn('<h3>Picture checks</h3>', self.studio)
-        for label in ('Shot index', 'Feasibility', 'Frame QC sheet'):
-            self.assertIn(label, self.studio,
-                          f'{label} must be reachable from Setup')
+    def test_frame_check_lives_in_the_setup_panel(self):
+        self.assertIn('<h3>Frame check</h3>', self.studio)
+        self.assertIn('openFrameQC(1)', self.studio)
+
+    def test_unbuildable_picture_lists_are_gone(self):
+        # Shot index and Feasibility both read reviews/Full_source_analysis.json,
+        # which a documentary project never writes, so they could never fill in.
+        self.assertNotIn('openPlanDialog', self.studio)
+        self.assertNotIn('openPlanDialog', self.editor)
 
     def test_map_template_only_offered_when_a_map_is_needed(self):
         # Downloading a blank map when a script already drives the cut is noise.
@@ -688,3 +692,58 @@ class SidebarContentsTest(unittest.TestCase):
         body = self.editor[index:index + 2000]
         self.assertIn('Script asked for', body)
         self.assertNotIn('<p>Script IN: ', body)
+
+
+class AudioLevelsTest(unittest.TestCase):
+    """The three faders must be safe when absent, exact when used, and isolated."""
+
+    def test_absent_levels_render_exactly_as_before(self):
+        from documentary_audio import audio_levels
+        for project in ({}, {'documentary_audio_levels': {}}):
+            self.assertEqual(audio_levels(project),
+                             {'narration_percent': 100, 'clip_percent': 100})
+
+    def test_nonsense_levels_fall_back_to_100(self):
+        from documentary_audio import audio_levels
+        self.assertEqual(
+            audio_levels({'documentary_audio_levels': {'narration_percent': 'x', 'clip_percent': True}}),
+            {'narration_percent': 100, 'clip_percent': 100})
+
+    def test_levels_are_clamped_to_the_allowed_range(self):
+        from documentary_audio import audio_levels
+        got = audio_levels({'documentary_audio_levels': {'narration_percent': 900, 'clip_percent': -40}})
+        self.assertEqual(got, {'narration_percent': 150, 'clip_percent': 0})
+
+    def test_saving_one_fader_never_sends_the_others(self):
+        # Sending all three let a stale in-memory music value overwrite the saved
+        # bed level, which silently reduced the music to 1%.
+        editor = Path('static/editor.js').read_text()
+        start = editor.index('async function saveDocVolume')
+        body = editor[start:start + 900]
+        self.assertIn('keyName', body)
+        self.assertNotIn('narration_percent: docTrackVolume.narration', body)
+        self.assertNotIn('volume_percent: Math.max(1, docTrackVolume.music)', body)
+
+    def test_export_applies_the_quieter_speech_level(self):
+        audio = Path('documentary_audio.py').read_text()
+        self.assertIn("min(levels_config['narration_percent'],levels_config['clip_percent'])", audio)
+
+    def test_levels_are_reported_in_the_render_result(self):
+        audio = Path('documentary_audio.py').read_text()
+        self.assertIn("'applied_speech_gain'", audio)
+
+    def test_volume_control_sits_under_scale_in_the_inspector(self):
+        editor = Path('static/editor.js').read_text()
+        scale = editor.index('slot-scale-control')
+        volumes = editor.index('docVolumeHTML()')
+        self.assertGreater(volumes, scale, 'audio levels belong under the scale control')
+
+    def test_three_faders_in_the_documented_order(self):
+        editor = Path('static/editor.js').read_text()
+        start = editor.index('function docVolumeHTML')
+        body = editor[start:start + 1600]
+        narration = body.index("'Narration'")
+        clip = body.index("'Clip audio'")
+        music = body.index("'Music'")
+        self.assertLess(narration, clip)
+        self.assertLess(clip, music)

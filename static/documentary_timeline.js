@@ -411,7 +411,12 @@ setInterval(async()=>{const d=window.docTimelineData;if(!d||d.status!=='ready'||
 window.docLoadMusic=async function(){
  if(P?.edit_mode!=='documentary'){docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false};docRenderMusicTrack();return}
  try{docMusic=await api(`/api/projects/${P.id}/documentary-music`)}catch{docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false}}
- docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:35;docRenderMusicTrack();window.docUpdateMuteControls?.()};
+ // The saved speech levels ride along with the music settings so one request
+ // fills every fader in the inspector.
+ docTrackVolume.music=Number.isFinite(docMusic.volume_percent)?docMusic.volume_percent:35;
+ if(Number.isFinite(docMusic.narration_percent))docTrackVolume.narration=docMusic.narration_percent;
+ if(Number.isFinite(docMusic.clip_percent))docTrackVolume.clip=docMusic.clip_percent;
+ docRenderMusicTrack();window.docUpdateMuteControls?.()};
 // A sound bite carries the only audio in its span, so the bed is cut there. The
 // strip must show that: one piece per span where music actually plays, and a
 // real gap under every bite. A single unbroken bar claimed music was running
@@ -609,8 +614,13 @@ function docSyncMusic(t,playing){
 window.docApplyPreviewVolumes=function(){
  // Preview-only switching. The export always uses the saved narration, bite and
  // ducked music levels; nothing here changes the rendered file.
- if(window.docTimelineData?.direct)narrNode.volume=1;
- else masterNode.volume=1;
+ //
+ // Narration and the selected sound bites arrive as a single mixed stream, so one
+ // fader cannot move one without the other. The quieter of the two saved levels is
+ // what that stream can honestly represent; raising either alone would lift both.
+ const speechLevel=Math.min(100,Math.min(docTrackVolume.narration??100,docTrackVolume.clip??100))/100;
+ if(window.docTimelineData?.direct)narrNode.volume=speechLevel;
+ else masterNode.volume=speechLevel;
  masterNode.muted=window.docTimelineData?.direct?true:editorMuted;
  sourceNode.volume=0;
  const t=window.docTimelineData?.direct?(narrNode.currentTime||0):(masterNode.currentTime||0);

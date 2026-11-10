@@ -10,7 +10,7 @@ const scenes=()=>P?P.scenes:[],assets=()=>P?P.assets:[];
 const totalTime=()=>P?.edit_mode==='documentary'?(window.docTimelineData?.duration||0):(scenes().at(-1)?.frame_out/30||0);
 const fmt=t=>{t=Math.max(0,t||0);const f=Math.floor(t*30+.00001),pad=n=>String(Math.floor(n)).padStart(2,'0');return `${pad(f/108000)}:${pad(f/1800%60)}:${pad(f/30%60)}:${pad(f%30)}`};
 const frameAt=t=>Math.floor(t*30+.001);
-let enhancePicture=true,docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false},docTrackVolume={audio:100,video:0,music:35},waveformKey='',waveformPeaks=null,waveformPending=null,slotScalePreview=null,selectedSlotIds=new Set(),selectionExplicitlyEmpty=false,marquee=null,suppressClipClick=false;
+let enhancePicture=true,docMusic={enabled:false,volume_percent:35,narration_level:'duck',file_present:false},docTrackVolume={audio:100,video:0,music:35,narration:100,clip:100},waveformKey='',waveformPeaks=null,waveformPending=null,slotScalePreview=null,selectedSlotIds=new Set(),selectionExplicitlyEmpty=false,marquee=null,suppressClipClick=false;
 const editorTime=()=>editorMaster?(masterNode.currentTime||0):(P?.voiceover&&narrNode.getAttribute('src')?narrNode.currentTime:clockBase+(editorPlaying&&!editorBuffering?(performance.now()-clockAt)/1000:0));
 const deletingProjects=new Set();
 list=async function(){const d=await api('/api/projects');projects=d.projects;PROFILES=d.profiles||PROFILES;$('#project-list').innerHTML=projects.map(p=>`<div class="project-row ${P?.id===p.id?'active':''}"><button type="button" class="project-link" onclick="openProject('${p.id}')">${E(p.title)}<small>${p.scenes} scenes · ${p.edit_mode==='documentary'?'Documentary':'Script review'}</small></button><button type="button" class="project-delete" aria-label="Delete ${E(p.title)}" onclick="deleteProduction('${p.id}')" ${deletingProjects.has(p.id)?'disabled':''}>Delete</button></div>`).join('')||'<p class="muted">No productions yet.</p>';return d};
@@ -240,7 +240,7 @@ function renderInspector(){const s=scenes()[sceneIndex];
  const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous beat',continued_running_take:'continued take',slid_inside_a_shot:'conformed inside a shot',slid_far_inside_a_shot:'moved far — check it',repeats_recent_footage:'repeats recent footage',jump_cut_within_shot:'deliberate jump cut',no_single_shot_fits:'no shot fits this beat',not_decoded:'source not decoded'};
  const cutLabel={in_a_breath:'cut in a breath',on_a_block_boundary:'cut on a line break',over_speech:'cut over a spoken word',between_blocks:'cut between blocks'};
  const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Picture flow</span><span title="${E(flow.note||'')}">${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · shot ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut to next</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · moved from ${cut.moved_from_s}s`:''}</span></div>`:''}`;
- $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button><p class="small">Applies only to highlighted slots. Above 100% crops the edges; review each picture.</p></div><form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.plain_cue?`<div class="inspector-group"><label>Editor note · continuity</label><p>${E(s.plan_row.continuity ?? s.plan_row.match_reason ?? '')}</p></div>`:''}${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+ $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button><p class="small">Applies only to highlighted slots. Above 100% crops the edges; review each picture.</p></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.plain_cue?`<div class="inspector-group"><label>Editor note · continuity</label><p>${E(s.plan_row.continuity ?? s.plan_row.match_reason ?? '')}</p></div>`:''}${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
  if(a?.kind==='video')loadSceneUnderstanding(s.id);
  $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
  if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
@@ -286,41 +286,57 @@ async function loadPlanning(id){
   return planCache;
 }
 
-function planningSummaryHTML(){
-  const f = planCache.feasibility || {};
-  if(f.error) return `<div class="notice">Feasibility could not be read: ${E(f.error)}</div>`;
-  const unfilled = (f.unfilled_beats || []).length;
-  const blocked = (f.sources || []).filter(s => s.problems.length);
-  const verdict = f.verdict === 'feasible' ? 'The plan fits the footage as written.'
-    : f.verdict === 'no_plan' ? 'No block map yet, so there is nothing to check.'
-    : `${unfilled} beat${unfilled===1?'':'s'} still unfilled and ${blocked.length} source${blocked.length===1?'':'s'} with a problem.`;
-  const rows = (f.sources || []).map(s => `<tr><td>${E(s.file)}</td><td>${s.beats}</td><td>${s.required_s}s</td><td>${s.available_s}s</td><td>${s.longest_beat_s}s</td><td>${s.longest_shot_s}s</td></tr>`).join('');
-  return `<p>${E(verdict)}</p>${rows?`<table class="plan-table"><thead><tr><th>Source</th><th>Beats</th><th>Needed</th><th>File length</th><th>Longest beat</th><th>Longest shot</th></tr></thead><tbody>${rows}</tbody></table>`:''}
-  ${blocked.map(s => `<div class="notice warn"><strong>${E(s.file)}</strong>${s.problems.map(x => `<p class="small">${E(x)}</p>`).join('')}</div>`).join('')}
-  ${unfilled ? `<p class="small">${unfilled} name${unfilled===1?'s':'s'} no source yet. Those rows are gaps by design; fill them in the block map rather than letting a clip be chosen by guesswork.</p>` : ''}`;
-}
 
 // The shot inspector edits one shot, so it no longer carries a block of
 // project-wide planning links. Those live in Setup now, next to the material
 // they inspect. Kept as a function because the inspector still calls it.
-function planToolsHTML(){ return ''; }
-
-async function openPlanDialog(view){
-  if(!P) return;
-  $('#plan-title').textContent = view === 'index' ? 'Shot index' : 'Feasibility';
-  $('#plan-body').innerHTML = '<p class="small">Reading decoded sources…</p>';
-  $('#plan-dialog').showModal();
-  await loadPlanning(P.id);
-  if(view === 'index'){
-    const sources = (planCache.index?.sources || []);
-    if(!sources.length){ $('#plan-body').innerHTML = '<p>Upload at least one video, then run the build so the sources are decoded.</p>'; return; }
-    $('#plan-body').innerHTML = sources.map(s => `<div class="card"><h3>${E(s.file)} · ${s.duration_s.toFixed(3)}s · ${s.shots.length} shots${s.not_decoded?' · not decoded yet':''}</h3>
-      ${s.not_decoded ? '<p class="small">Run the build once so this file is decoded.</p>' : `<table class="plan-table"><thead><tr><th>#</th><th>IN</th><th>OUT</th><th>Length</th><th>Map columns</th><th></th></tr></thead><tbody>${s.shots.map((x,i)=>`<tr><td>${i+1}</td><td>${x.in_s}s</td><td>${x.out_s}s</td><td>${x.duration_s}s</td><td><code>${x.in_clock} → ${x.out_clock}</code></td><td>${x.black?'black':''}</td></tr>`).join('')}</tbody></table>`}</div>`).join('')
-      + `<p class="small">A shot is a decoded span between detected changes. This list says nothing about who or what appears in it.</p>`;
-  } else {
-    $('#plan-body').innerHTML = `<div class="card"><h3>Does this plan fit the footage?</h3>${planningSummaryHTML()}</div>`;
-  }
+// Three levels, in the order they sit in the mix: narration, then the audio
+// carried by the footage, then the bed. They are saved with the project and
+// applied on the next export, so a change never re-renders behind your back.
+function docVolumeHTML(){
+  if(!P || P.edit_mode!=='documentary' || !P.documentary_beat_review) return '';
+  const v = docTrackVolume;
+  const mix = (label, key, value, hint, extra='') => `<div class="doc-volume-row"><label for="doc-vol-${key}">${label}</label><input id="doc-vol-${key}" type="range" min="0" max="150" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><input id="doc-vol-${key}-n" type="number" min="0" max="150" step="1" value="${Math.round(value)}" aria-label="${label} level percent" oninput="previewDocVolume('${key}',this.value)" onchange="saveDocVolume('${key}',this.value)"><span>%</span><button type="button" class="doc-vol-reset" title="Back to 100%" onclick="saveDocVolume('${key}',100)">↺</button></div><p class="small">${hint}</p>${extra}`;
+  const musicHeld = !(docMusic && docMusic.file_present);
+  return `<div class="doc-volume-control"><label>Audio levels</label>
+  ${mix('Narration', 'narration', v.narration, 'The uploaded voiceover. 100% is the level it was recorded and measured at.')}
+  ${mix('Clip audio', 'clip', v.clip, 'The speech inside a selected sound bite. It is matched to the narration first, then this level is applied.')}
+  ${mix('Music', 'music', v.music, musicHeld ? 'Add background music in Setup before this level does anything.' : 'The bed under the film. It still dips or stops under the narration and is cut under every sound bite.')}
+  <p class="small">Preview reflects narration, clip and music balance. The saved levels are applied when the film is exported.</p></div>`;
 }
+
+// The review preview is one already-mixed file: narration and the selected sound
+// bites are level-matched and concatenated before the browser ever sees them, so
+// there is no per-track node to turn down. Narration and clip levels therefore
+// share that stream, and the quieter of the two is what can honestly be applied
+// to it: raising one alone would lift the other with it. Music has its own layer
+// and is unaffected. Nothing here touches the exported mix until the project is
+// saved and rendered again.
+function previewDocVolume(key, raw){
+  const value = Math.max(0, Math.min(150, Number(raw) || 0));
+  if(key==='music') docTrackVolume.music = value;
+  else docTrackVolume[key] = value;
+  const sync = document.querySelectorAll(`#doc-vol-${key}, #doc-vol-${key}-n`);
+  sync.forEach(node => { if(Number(node.value)!==Math.round(value)) node.value = Math.round(value); });
+  window.docApplyPreviewVolumes?.();
+}
+
+async function saveDocVolume(key, raw){
+  if(!P) return;
+  const value = Math.max(0, key==='music' ? Math.min(100, Number(raw) || 0) : Math.min(150, Number(raw) || 0));
+  previewDocVolume(key, value);
+  // Send only the fader that moved. Sending all three overwrote the music level
+  // with the last value that happened to be in memory, which is how moving the
+  // narration fader could quietly reset the bed.
+  const keyName = {narration:'narration_percent', clip:'clip_percent', music:'volume_percent'}[key];
+  const body = {[keyName]: key==='music' ? Math.max(1, Math.round(value)) : Math.round(value)};
+  try{
+    P = await api(`/api/projects/${P.id}/documentary-audio-levels`, 'PATCH', body);
+    toast(`Saved. ${key==='music'?'Music':'Narration and clip'} level is applied on the next export.`);
+  }catch(e){ toast(e.message); }
+}
+
+function planToolsHTML(){ return ''; }
 
 async function downloadMapTemplate(){
   if(!P) return;

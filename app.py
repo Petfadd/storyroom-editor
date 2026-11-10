@@ -1689,6 +1689,9 @@ def documentary_music_state(pid):
   state=settings(p)
   state['file_present']=music_path(root).is_file()
   state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
+  levels=p.get('documentary_audio_levels') or {}
+  state['narration_percent']=levels.get('narration_percent',100)
+  state['clip_percent']=levels.get('clip_percent',100)
  return jsonify(state)
 
 @app.post('/api/projects/<pid>/documentary-music')
@@ -1743,6 +1746,38 @@ def update_documentary_music(pid):
   if not music_path(root).is_file():music['enabled']=False
   p['documentary_music']=music;save(p)
   state=settings(p);state['file_present']=music_path(root).is_file();state['url']=f'/api/projects/{pid}/documentary-music/file' if state['file_present'] else ''
+ return jsonify(state)
+
+@app.patch('/api/projects/<pid>/documentary-audio-levels')
+def update_documentary_audio_levels(pid):
+ """Save the narration, clip-audio and music balance that the export will apply."""
+ from documentary_music import settings as music_settings
+ data=request.get_json(silent=True) or {}
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if p.get('edit_mode','review')!='documentary':raise BadRequest('Audio levels are available only in a documentary project.')
+  levels=dict(p.get('documentary_audio_levels') or {})
+  # Percentages, not decibels: a reviewer can reason about 80% without knowing
+  # what a dB step sounds like. 150% is the ceiling for the two speech levels so a
+  # quiet source can be lifted; music keeps its own 1-100 range because the bed is
+  # already expressed that way everywhere else.
+  for key,ceiling in (('narration_percent',150),('clip_percent',150)):
+   if key not in data:continue
+   value=data[key]
+   if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Audio levels must be whole percentages.')
+   if not 0<=value<=ceiling:raise BadRequest(f'Audio level must be between 0 and {ceiling} percent.')
+   levels[key]=value
+  music=dict(p.get('documentary_music') or {})
+  if 'volume_percent' in data:
+   value=data['volume_percent']
+   if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Music level must be a whole percentage.')
+   if not 1<=value<=100:raise BadRequest('Music level must be between 1 and 100 percent. Use the music switch to turn the bed off.')
+   music['volume_percent']=value;p['documentary_music']=music
+  levels.setdefault('narration_percent',100);levels.setdefault('clip_percent',100)
+  p['documentary_audio_levels']=levels;save(p)
+  state=music_settings(p);state['file_present']=bool((p.get('documentary_music') or {}).get('name'))
+  state['volume_percent']=(p.get('documentary_music') or {}).get('volume_percent',state.get('volume_percent',35))
+  state['narration_percent']=levels['narration_percent'];state['clip_percent']=levels['clip_percent']
  return jsonify(state)
 
 @app.get('/api/projects/<pid>/documentary-music/file')
