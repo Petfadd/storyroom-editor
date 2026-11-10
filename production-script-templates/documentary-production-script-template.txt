@@ -1,0 +1,346 @@
+DOCUMENTARY PRODUCTION SCRIPT — REUSABLE TEMPLATE (Beat-based)
+
+WHAT THIS IS
+This is the working format for a documentary whose picture is chosen beat by beat from
+your own footage, with narration over it and the real spoken moments left in. It is the
+format the storyboard reads directly, so no separate block map or conversion step is
+needed. It follows the structure that worked on the finished project "qqqqqqqq", with the faults
+that project still carried closed: two of its beats asked for footage past the end of the
+file they named, and its picture needed reusing the same shot. Both are now caught before
+a build instead of during one.
+
+Read the RULES section once, then fill in the TWO PARTS. Delete every line in square
+brackets; they are instructions, not script.
+
+================================================================================
+PART 1 — THE NARRATION TABLE (this becomes your SRT)
+================================================================================
+
+The storyboard needs an SRT. You can upload an .srt file, or you can let the script
+provide one: a table shaped like the one below is read automatically, and its wording,
+order and timing are copied, never rewritten. Use exactly these three columns.
+
+Narration blocks:
+
+| Block | Narration timeline | Wording |
+|---|---|---|
+| 1 | 00:00:00,000 → 00:00:04,000 | [the exact words spoken in this block] |
+| 2 | 00:00:04,000 → 00:00:09,400 | [the exact words spoken in this block] |
+| 3 | 00:00:09,400 → 00:00:15,000 | [the exact words spoken in this block] |
+| 4 | 00:00:15,000 → 00:00:21,750 | [the exact words spoken in this block] |
+
+Table rules — each one is checked:
+
+1. Every block's start is the previous block's end. No holes, no overlaps. A few
+   milliseconds of rounding is snapped and recorded; anything larger refuses the table.
+2. Block numbers run 1, 2, 3 … with none skipped.
+3. Block 1 starts at 00:00:00,000.
+4. The last block's end equals the duration of your narration audio, to within a quarter
+   of a second. This is the most common mistake: the table stops short of the audio and
+   the closing words have no block.
+5. Wording is what is actually spoken — one block, one stretch of speech. Do not number
+   them Srt001/Srt002; plain numbers are what the table reader expects.
+
+If the SRT already exists separately, upload it and leave this table out. If you use both,
+the uploaded .srt wins and the table is ignored.
+
+================================================================================
+PART 2 — THE BEATS (this is the picture plan)
+================================================================================
+
+
+PROJECT: [case or working title]
+SOURCES: [S01.mp4, S02.mp4, S03.mp4 — every filename you will upload, exactly]
+FORMAT: Beat-by-Beat Documentary (Voice Over & Sync Sound Bites)
+TOTAL MASTER RUNTIME: [~MM:SS,mmm — the finished documentary length, sound bites included]
+
+
+--------------------------------------------------------------------------------
+TEMPLATE A — a narration beat
+--------------------------------------------------------------------------------
+
+Beat: 001
+Type: VOICE OVER
+Master timeline: 00:00:00,000 --> 00:00:33,600
+Narration clock: 00:00:00,000 --> 00:00:33,600
+Narration state: PLAYING
+Spoken narration: "[the exact words for this span — the same words as the matching rows
+of the narration table, joined into one paragraph]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:00:42,000
+Source out: 00:01:15,600
+Footage audio: MUTED (0%)
+Cut action: FADE IN FROM BLACK (1.0×, loop OFF)
+Visual direction: [what the picture must show here]
+On-screen caption: [the literal text to burn in, or None]
+Continuity note: [an editor note — where the narration lands, what to check]
+
+
+--------------------------------------------------------------------------------
+TEMPLATE B — a sound bite
+--------------------------------------------------------------------------------
+
+Beat: 002
+Type: DOCUMENTARY SOUND BITE
+Master timeline: 00:00:33,600 --> 00:01:06,100 (Duration: 32.5 sec)
+Narration clock: PAUSED at 00:00:33,600
+Narration state: PAUSED (Suspended for duration of bite)
+Speaker: [who is speaking, as declared — a claim, never a verified identity]
+Exact spoken dialogue: "[what is actually said in the selected range]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:00:49,000
+Source out: 00:01:21,500
+Footage audio: UNMUTED (100% Dialogue Level, Clean)
+Cut action: HARD CUT TO SPEAKER
+Visual direction: [what the picture must show here]
+On-screen caption: [the literal text to burn in, or None]
+Continuity note: [VO is paused. Note what has to be true either side of this.]
+
+
+--------------------------------------------------------------------------------
+TEMPLATE C — narration that resumes after one or more bites
+--------------------------------------------------------------------------------
+
+Beat: 003
+Type: VOICE OVER
+Master timeline: 00:01:06,100 --> 00:02:21,166
+Narration clock: RESUMES at 00:00:33,600 --> 00:01:48,666
+Narration state: RESUMING
+Spoken narration: "[the exact words from 00:00:33,600 onward]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:01:13,000
+Source out: 00:02:28,066
+Footage audio: MUTED (0%)
+Cut action: CUT TO [the new picture]
+Visual direction: [what the picture must show here]
+On-screen caption: None
+Continuity note: [VO resumes at master mark 00:01:06,100.]
+
+
+--------------------------------------------------------------------------------
+TEMPLATE D — a second bite at the same pause
+--------------------------------------------------------------------------------
+
+Beat: 004
+Type: DOCUMENTARY SOUND BITE
+Master timeline: 00:02:21,166 --> 00:02:47,166 (Duration: 26 sec)
+Narration clock: PAUSED at 00:01:48,666
+Narration state: PAUSED (Suspended for duration of bite)
+Speaker: [second speaker]
+Exact spoken dialogue: "[what is actually said]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:00:47,000
+Source out: 00:01:13,000
+Footage audio: UNMUTED (100% Dialogue Level, Clean)
+Cut action: HARD CUT TO SPEAKER
+Visual direction: [what the picture must show here]
+On-screen caption: [the literal text to burn in, or None]
+Continuity note: VO is paused. Plays straight after Beat 003 at the same pause.
+
+[Beat 005 then resumes the narration at 00:01:48,666, using Template C.]
+
+================================================================================
+RULES — READ THIS ONCE, THEN KEEP TO IT
+================================================================================
+
+THE ONE RULE THAT BREAKS EVERYTHING ELSE
+Every Source range must fit inside the file it names. If your script asks for footage
+past the end of a video, the storyboard cannot be built, and no amount of review will fix
+it. Before you upload, check each beat: Source out must be less than or equal to the
+length of that file. The app now reports this on upload — but the fix has to happen in
+your script.
+
+THE NARRATION CLOCK IS A SINGLE CONTINUOUS CLOCK
+It starts at 00:00:00,000 and it never skips while a bite plays — it is paused, not
+advancing. Write it like this:
+
+  - first narration beat:  Narration clock: 00:00:00,000 --> 00:00:33,600
+  - the bite:              Narration clock: PAUSED at 00:00:33,600
+  - the next narration:    Narration clock: RESUMES at 00:00:33,600 --> 00:02:27,166
+
+So every RESUMES begins with the exact time the PAUSED line named. The final narration
+OUT equals your narration file's duration. Missing that is what leaves the closing words
+with no beat.
+
+THE MASTER CLOCK IS THE FINISHED DOCUMENTARY CLOCK
+It runs from 00:00:00,000 to the total runtime and it does not pause. A narration beat
+takes up exactly the narration it covers. A bite takes up its own duration. So each beat
+starts where the previous one ended.
+
+Picture length must equal timeline length. For a narration beat:
+  (Narration out − Narration in) = (Source out − Source in) = (Master out − Master in)
+For a bite:
+  (Source out − Source in) = Duration
+  (Master out − Master in) = Duration
+
+THE DURATION FIELD ON A BITE
+Write it on the Master timeline line as shown, either as `(Duration: 32.5 sec)` or
+`(Duration: 1 min 06 sec)`, or on its own line as `Duration: 00:00:32,500`. Whichever you
+use, it must equal Source out minus Source in exactly. If it does not, the beat is
+refused.
+
+TIMECODES
+Always HH:MM:SS,mmm — `00:01:15,600`. Two digits for hours, minutes and seconds, exactly
+three for milliseconds. A missing column or a dot instead of a comma will stop the read.
+
+FILENAMES
+Use the exact uploaded name, with extension, on one line, with no path and no folder:
+`Full source: S01.mp4`. Never `./S01.mp4`, `footage/S01.mp4` or a wildcard. If the name
+does not match an uploaded file exactly, the beat is refused, by design.
+
+THE FIVE FIELDS THAT MUST BE EXACTLY RIGHT
+  Type                VOICE OVER  or  DOCUMENTARY SOUND BITE
+                      (NARRATION (VOICE OVER) is also accepted)
+  Narration state     PLAYING / RESUMING on narration; PAUSED on a bite
+  Footage audio       MUTED (0%) on narration; UNMUTED (…) on a bite
+  Source in / out     inside the real file, with the right span
+  Narration clock     continuous, as described above
+
+ONE FIELD, ONE LINE
+Do not write any field twice in the same beat — two Source in lines is a hard error, not a
+last-one-wins. Blank lines and `--------` separators between beats are fine and ignored.
+
+EVERY BEAT IS A SINGLE BLOCK
+Begin with `Beat: 001`, then the fields, then the next `Beat: 002`. Number them in order
+with no duplicates and no gaps, and nothing else may start a line with `Beat:` — that word
+begins a new beat. Other notes are safe: `Continuity note:` or `Note:` are read as
+editorial text and ignored by the checks.
+
+ORDER OF BEATS
+Start with narration, end with narration, and put every bite between narration. Two bites
+in a row are allowed only when they share the same pause time, which is how a two-voice
+exchange is written (Template D).
+
+REUSING A SHOT
+A shot may come back later under different narration — that is normal documentary
+practice. The app lists every repeated range and asks you to approve it before building.
+It is a note, not an error. Do not repeat an *identical* range twice: showing the exact
+same frames twice is refused, because it means the picture could not cover the words.
+
+ON-SCREEN CAPTIONS
+`On-screen caption:` is the literal text burned into the picture. Captions are on by
+default for the project, so this line decides whether text appears in that beat.
+
+  On-screen caption: Sunset Crossing Apartments      -> that text is burned in
+  On-screen caption: None                            -> no caption on this beat
+
+Write `None` (or leave the line out) wherever you do not want text — never leave it blank
+after the colon while expecting a caption, and never put quotation marks around None.
+If you want no burned-in captions anywhere, turn captions off for the whole project; the
+SRT and the narration are unaffected by that setting.
+
+WHAT THE STORYBOARD DOES WITH YOUR RANGES
+It fits each beat's picture to its own narration clock and records every change:
+shortens a range that is longer than the narration, extends one that is shorter inside
+the same file, snaps OUT to a real frame. It never changes your script, never swaps in a
+file you did not name, and never speeds up or repeats footage to cover a gap. If it
+cannot fit a beat honestly, it stops and says which beat and why.
+
+CHECK YOURSELF BEFORE YOU UPLOAD
+The app will tell you all of this on upload, but fixing it here saves a round trip.
+
+  1. Length of each file. Note each video's real duration. For every beat, Source out
+     must be less than or equal to the length of the file named on its Full source line.
+     This is the single mistake that stops a storyboard being built.
+  2. Span arithmetic. For narration: Narration out − Narration in must equal
+     Source out − Source in, and equal Master out − Master in. For a bite:
+     Source out − Source in must equal the Duration you wrote.
+  3. Narration clock. First beat starts at 0. Each bite's PAUSED time is the previous
+     narration's OUT. Each RESUMES begins at the same PAUSED time. The final narration
+     OUT equals your audio duration to within a quarter second.
+  4. Master clock. Each beat's Master in is the previous beat's Master out, and the last
+     Master out is your TOTAL MASTER RUNTIME.
+  5. Filenames. Every Full source line is an exact uploaded filename, used the same way
+     in SOURCES at the top.
+  6. Table. Every block starts where the previous ended, block 1 starts at zero, and the
+     last block ends at your audio duration.
+  7. Captions. Every beat has an On-screen caption line: the literal text, or None.
+
+If numbers 1 to 4 hold, the storyboard can be built and the only remaining work is
+editorial review.
+
+AFTER YOU UPLOAD
+1. Upload the narration audio first, then the script (or the .srt), then every source.
+2. Read the panel. Anything it lists here is a real conflict with your files.
+3. Open "Review the Beat picture plan". Read the picture-range changes and the repeated
+   footage list, then build.
+4. Review the timeline, then check the pictures.
+
+The app never edits your script, invents a source, or decides identity, chronology,
+speaker or reuse rights. Those stay your review.
+
+
+================================================================================
+WORKED EXAMPLE — A SHORT BUT COMPLETE SCRIPT
+================================================================================
+
+This is a whole, valid script. Two sources, four blocks, one bite, one caption each way.
+Copy its shape, replace its content.
+
+PROJECT: Worked Example — A Court Ruling
+SOURCES: S01.mp4, S02.mp4
+FORMAT: Beat-by-Beat Documentary (Voice Over & Sync Sound Bites)
+TOTAL MASTER RUNTIME: ~00:00:44,000
+
+Narration blocks:
+
+| Block | Narration timeline | Wording |
+|---|---|---|
+| 1 | 00:00:00,000 → 00:00:12,000 | the ruling came after two years of hearings and it changed how the court treated evidence gathered without a warrant |
+| 2 | 00:00:12,000 → 00:00:20,000 | the judge wrote that the officers had acted in good faith but that good faith could not replace the requirement itself |
+| 3 | 00:00:20,000 → 00:00:31,000 | the department said it would review its training while the plaintiff's lawyers called the decision a narrow victory |
+| 4 | 00:00:31,000 → 00:00:38,000 | both sides now wait for the written opinion that will decide how far the ruling reaches |
+
+Beat: 001
+Type: VOICE OVER
+Master timeline: 00:00:00,000 --> 00:00:32,000
+Narration clock: 00:00:00,000 --> 00:00:32,000
+Narration state: PLAYING
+Spoken narration: "the ruling came after two years of hearings and it changed how the court treated evidence gathered without a warrant. the judge wrote that the officers had acted in good faith but that good faith could not replace the requirement itself. the department said it would review its training while the plaintiff's lawyers called the decision a narrow victory."
+Full source: S01.mp4
+Source in: 00:00:06,000
+Source out: 00:00:38,000
+Footage audio: MUTED (0%)
+Cut action: FADE IN FROM BLACK (1.0×, loop OFF)
+Visual direction: The courthouse steps in early light, people arriving.
+On-screen caption: County Courthouse — March
+Continuity note: Opens the film. Narration runs to the first pause at 00:00:32,000.
+
+Beat: 002
+Type: DOCUMENTARY SOUND BITE
+Master timeline: 00:00:32,000 --> 00:00:38,000 (Duration: 6 sec)
+Narration clock: PAUSED at 00:00:32,000
+Narration state: PAUSED (Suspended for duration of bite)
+Speaker: Court spokesperson
+Exact spoken dialogue: "We will review the training materials and report back within the month."
+Full source: S02.mp4
+Source in: 00:00:14,000
+Source out: 00:00:20,000
+Footage audio: UNMUTED (100% Dialogue Level, Clean)
+Cut action: HARD CUT TO SPEAKER
+Visual direction: The spokesperson at the microphones, one unbroken take.
+On-screen caption: Court Spokesperson
+Continuity note: VO is paused. Bite runs exactly six seconds.
+
+Beat: 003
+Type: VOICE OVER
+Master timeline: 00:00:38,000 --> 00:00:44,000
+Narration clock: RESUMES at 00:00:32,000 --> 00:00:38,000
+Narration state: RESUMING
+Spoken narration: "both sides now wait for the written opinion that will decide how far the ruling reaches."
+Full source: S01.mp4
+Source in: 00:00:52,000
+Source out: 00:00:58,000
+Footage audio: MUTED (0%)
+Cut action: CUT TO EXTERIOR
+Visual direction: The courthouse doors closing, late afternoon.
+On-screen caption: None
+Continuity note: VO resumes at master mark 00:00:38,000 and closes the film.
+
+Check it against the rules before you upload:
+  001 narration  32.000 s = 32.000 s of source  = 32.000 s of timeline   (ok)
+  002 bite        6.000 s =  6.000 s of source  =  6.000 s of timeline   (ok)
+  003 narration   6.000 s =  6.000 s of source  =  6.000 s of timeline   (ok)
+  Narration clock: 0 → 32, paused at 32, resumes 32 → 38 = narration length (ok)
+  Master clock:    0 → 32 → 38 → 44 = total runtime (ok)
+  Sources: 001 and 003 are both within S01.mp4's length; 002 is within S02.mp4's (ok)
