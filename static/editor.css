@@ -315,16 +315,31 @@
    broadcast monitor does. Everything that draws into the frame is positioned
    absolutely, so the frame does not need to clamp its children's size. */
 .monitor video,.monitor img{object-fit:contain}
-.monitor[data-aspect="4:3"]{aspect-ratio:4/3}
-.monitor[data-aspect="1:1"]{aspect-ratio:1/1}
-.monitor[data-aspect="21:9"]{aspect-ratio:21/9}
-/* A vertical film gets a tall frame. It is capped by the height available above the
-   transport, so the picture never overflows the panel; `cover` then crops the
-   source from the centre exactly as the renderer does. */
-.monitor[data-aspect="9:16"]{aspect-ratio:9/16;max-height:100%;width:auto}
-.monitor[data-aspect="4:5"]{aspect-ratio:4/5;max-height:100%;width:auto}
-.monitor[data-aspect="239:100"]{aspect-ratio:239/100}
-.monitor[data-fit="cover"] video,.monitor[data-fit="cover"] img{object-fit:cover}
+/* The frame is its own box inside the dark stage. In 16:9 it fills the stage as it
+   always has; a vertical film becomes a tall card in the middle of the stage, so
+   the interface reads vertical while editing a vertical film. The card is bounded
+   by BOTH the height above the transport and a share of the width, so it can never
+   overflow its panel. */
+.monitor-frame{position:relative;flex:0 1 auto;min-height:0;min-width:0;
+  height:100%;aspect-ratio:16/9;max-width:100%;overflow:hidden;border-radius:8px}
+.monitor[data-aspect="4:3"] .monitor-frame{aspect-ratio:4/3}
+.monitor[data-aspect="1:1"] .monitor-frame{aspect-ratio:1/1}
+.monitor[data-aspect="21:9"] .monitor-frame{aspect-ratio:21/9}
+.monitor[data-aspect="239:100"] .monitor-frame{aspect-ratio:239/100}
+.monitor[data-aspect="9:16"] .monitor-frame{height:auto;width:auto;
+  aspect-ratio:9/16;max-height:100%;max-width:min(52%,62vh)}
+.monitor[data-aspect="4:5"] .monitor-frame{height:auto;width:auto;
+  aspect-ratio:4/5;max-height:100%;max-width:min(58%,68vh)}
+.monitor[data-fit="cover"] .monitor-frame video,.monitor[data-fit="cover"] .monitor-frame img{object-fit:cover}
+.monitor.is-fullscreen .monitor-frame{border-radius:0}
+/* Nothing drawn into the frame may spill past it, so the picture is always a clean
+   rectangle whatever shape it is. */
+.monitor-frame{container-type:size}
+/* A vertical film is reviewed in a taller panel. The monitor keeps the picture and
+   the timeline keeps its own share; nothing else about the layout changes, so
+   switching back to 16:9 restores the default proportions exactly. */
+.editor-grid.is-vertical{grid-template-rows:minmax(0,1.45fr) minmax(0,1fr)}
+.editor-grid.is-vertical .timeline-panel{flex:1 1 0;min-height:0}
 .monitor.is-fullscreen{border-radius:0;margin:0;background:#000}
 
 /* Transport row. */

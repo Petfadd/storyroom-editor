@@ -951,6 +951,38 @@ class VerticalReframeTest(unittest.TestCase):
         self.assertEqual(preview_size({'format':'landscape'}),(640,360))
         self.assertEqual(preview_size({'format':'square'}),(640,640))
 
+    def test_the_frame_becomes_vertical_not_just_the_picture_inside_it(self):
+        # A wide box with a tall strip in the middle does not read as a vertical
+        # editor. The frame is its own element so it can be a tall card.
+        html = Path('templates/index.html').read_text()
+        self.assertIn('id="monitor-frame"', html)
+        self.assertIn('class="monitor-frame"', html)
+        css = Path('static/editor.css').read_text()
+        self.assertIn('.monitor-frame{', css)
+        self.assertIn('[data-aspect="9:16"] .monitor-frame', css)
+
+    def test_a_vertical_frame_is_bounded_on_both_axes(self):
+        # Bounded by height AND a share of the width: an unbounded aspect-ratio box
+        # would overflow its panel on a short window.
+        css = Path('static/editor.css').read_text()
+        rule = css[css.index('[data-aspect="9:16"] .monitor-frame'):]
+        rule = rule[:rule.index('}')]
+        self.assertIn('max-height:100%', rule)
+        self.assertIn('max-width:', rule)
+        self.assertIn('aspect-ratio:9/16', rule)
+
+    def test_a_vertical_project_gives_the_panel_more_height(self):
+        editor = Path('static/editor.js').read_text()
+        self.assertIn("classList.toggle('is-vertical'", editor)
+        self.assertIn('.editor-grid.is-vertical{', Path('static/editor.css').read_text())
+
+    def test_landscape_keeps_the_default_frame(self):
+        # Switching back must restore the wide frame exactly, not a changed one.
+        css = Path('static/editor.css').read_text()
+        base = css[css.index('.monitor-frame{'):]
+        base = base[:base.index('}')]
+        self.assertIn('aspect-ratio:16/9', base)
+
     def test_the_monitor_follows_the_project_shape(self):
         editor = Path('static/editor.js').read_text()
         self.assertIn('syncMonitorShape', editor)
