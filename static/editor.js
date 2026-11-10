@@ -51,8 +51,21 @@ splitBeat=async function(){pauseEditor();await savedSplit();sourceScene='';rende
 function renderEditor(){
  const isDoc=P?.edit_mode==='documentary';if(window.ensureDocTimeline)window.ensureDocTimeline();if(window.refreshDocumentaryDraft)window.refreshDocumentaryDraft();document.body.classList.toggle('documentary-workspace',isDoc);$('#documentary-button').hidden=!isDoc;$('#documentary-timeline-label').hidden=!isDoc;$('#documentary-prepare-timeline').hidden=!isDoc;$('#doc-source-track').hidden=!isDoc;$('#doc-source-label').hidden=!isDoc;
  const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));$('#project-name').textContent=P?.title?(P.title+(isDoc?' · Documentary':'')):'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null;$('#project-status').textContent=P?`${cueGroups?`${cueGroups.length} cue shots · ${ss.length} picture slots`:ss.length+' scenes'} · ${totalTime().toFixed(3)}s · ${P.scenes.filter(s=>s.approved).length} ${cueGroups?'slots approved':'approved'}${P.script_application?.issues.length?' · '+P.script_application.issues.length+' script gaps':''}`:'Same timeline workflow · create a production to begin';
- document.querySelector('.media-hint').textContent=P?.script_moving_only?'Click any uploaded video above to play the original source. The review timeline opens at the first shot with explicit video IN/OUT times.':P&&!ss.length&&assets().some(a=>a.kind==='video')?'Click an uploaded video above to play it. Add the original SRT to begin a storyboard.':'The same narration-led editor, with separate projects. Verify every identity. No unrelated substitutes, looping footage or baked-in captions.';
- const requirement=P?.footage_requirements;$('#footage-requirements-pool').textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
+ // Clicking a source opens it, so the pool carries that instruction on the list
+ // itself. It used to be written through `.media-hint`, which matched the
+ // footage-count line first and wiped that count on every render.
+ const pool=$('#media-list');
+ if(pool){
+  const clickable=P?.script_moving_only||!scenes().length;
+  pool.title=clickable?'Click a source to play the original file.':'';
+ }
+ const requirement=P?.footage_requirements;
+ // "11 matched · 0 missing" is the normal state, so it earns no space. The line
+ // only appears when it has something to act on: a missing file or a duplicate.
+ const reqPool=$('#footage-requirements-pool');
+ const reqClean=requirement?.status==='found'&&!requirement.missing&&!requirement.ambiguous;
+ if(reqPool)reqPool.hidden=!!reqClean;
+ reqPool.textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
  const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';$('#media-list').innerHTML=visibleAssets.map((a,i)=>`<div class="media-item ${current?.asset_id===a.id?'selected':''}" role="button" tabindex="0" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" onkeydown="if(event.key==='Enter')inspectAsset('${a.id.replace(/'/g,'')}')"><span class="source-icon">${a.reserve?E(a.source_label):a.kind==='image'?'PHOTO':/^[SV]\d+/i.test(a.name)?E(a.name.replace(/\.[^.]+$/,'')):String(i+1).padStart(2,'0')}</span><div class="media-meta"><strong>${E(a.name)}</strong><span>${a.reserve?(assetIsUsed(a)?'Reserve source · explicitly placed':'Held in reserve')+' · ':''}${a.kind==='image'?'Photograph':a.duration?a.duration.toFixed(1)+'s video':'Case video'} · ${a.verified?(a.approval_record?.independent_verification===false?'approved · user instruction':'approved'):'not approved'}</span></div><span class="ready-dot ${a.verified?'':'missing'}"></span></div>`).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
  $('#audio-status').className='audio-card '+(P?.voiceover?'ready':'missing');$('#audio-status').innerHTML=`<strong>Voiceover · ${E(P?.voiceover?.name||'not imported')}</strong><span>${P?.voiceover?P.voiceover.duration.toFixed(3)+(isDoc?'s original · split around sound bites':'s · continuous original audio'):'Import from Setup. No per-cut audio restarts.'}</span>`;
  $('#srt-status').className='audio-card '+(P?.srt?'ready':'missing');$('#srt-status').innerHTML=`<strong>${P?.srt?P.srt.blocks.length:0} original SRT blocks</strong><span>Timing reference · captions not baked in</span>`;
@@ -232,7 +245,14 @@ function renderInspector(){const s=scenes()[sceneIndex];
  $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
  if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
 }
-function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p><p>${planned?'Script IN: '+((planned.extracted_frame_ms??planned.source_in_ms)/1000).toFixed(3)+'s'+(planned.source_out_ms!=null?' · OUT: '+(planned.source_out_ms/1000).toFixed(3)+'s (exclusive)':''):'Source timing selected in the editor.'}</p><p id="source-clock" class="small"></p></div>`}
+function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
+ // The script's IN/OUT is only worth a line when it disagrees with what is saved.
+ // On a conformed beat the two are identical, so printing both just invited the
+ // reader to hunt for a difference that is not there.
+ const plannedIn=planned?(planned.extracted_frame_ms??planned.source_in_ms)/1000:null;
+ const plannedOut=planned?.source_out_ms!=null?planned.source_out_ms/1000:null;
+ const moved=plannedIn!=null&&(Math.abs(plannedIn-actual)>0.0005||(plannedOut!=null&&Math.abs(plannedOut-(actual+(s.frame_out-s.frame_in)/30))>0.0005));
+ return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p>Script asked for: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s (exclusive)':''}</p>`:''}${planned?'':'<p>Source timing selected in the editor.</p>'}<p id="source-clock" class="small"></p></div>`}
 
 
 async function loadSceneUnderstanding(sceneId){
@@ -241,7 +261,7 @@ async function loadSceneUnderstanding(sceneId){
   const r=await api(`/api/projects/${id}/scenes/${sceneId}/understanding`);
   const node=$('#scene-understanding');if(!node||P?.id!==id||scenes()[sceneIndex]?.id!==sceneId)return;
   if(!['partial','complete'].includes(r.status)){
-   node.innerHTML=`<div class="inspector-group"><label>Source understanding</label><p class="small">${E(r.status==='not_started'?'No local analysis yet. Run it from Production setup.':r.status)}</p></div>`;return;
+   node.innerHTML=`<div class="inspector-group"><label>Source understanding</label><p class="small">${E(r.status==='not_started'?'No local analysis yet. Open Setup, then Case footage & photos, and choose Local analysis.':r.status)}</p></div>`;return;
   }
   const entry=(time,text)=>({time:Number(time),html:`<p class="small">${Number(time).toFixed(2)}s · ${text}</p>`});
   const rows=[...r.transcript.map(x=>entry(x.timeline_start_s,`Dialogue: ${E(x.text)}`)),
@@ -316,17 +336,20 @@ async function downloadMapTemplate(){
 
 async function candidateHTMLForScene(s){
   if(!P) return '';
+  // A documentary cut is driven by the script's own IN/OUT against the source the
+  // beat names, so offering "other shots of this length" could only invite replacing
+  // scripted footage. Nothing here is actionable, so the panel stays clean.
+  if(P.edit_mode==='documentary'&&P.documentary_beat_review) return '';
   const length = (s.frame_out - s.frame_in) / 30;
   const handle = s.transition === 'dissolve' ? (s.transition_handle_frames || 0) / 30 : 0;
   try{
     const d = await api(`/api/projects/${P.id}/candidates?length_s=${length.toFixed(6)}&handle_s=${handle.toFixed(6)}&limit=6`);
     if(!d.candidates.length){
-      const anyDecoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
-      if(!anyDecoded && !planCache.index) await loadPlanning(P.id);
+      if(!planCache.index) await loadPlanning(P.id);
       const decoded = (planCache.index?.sources || []).some(x => !x.not_decoded && x.shots.length);
       return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${decoded
         ? `No decoded shot is exactly ${(length+handle).toFixed(3)}s long. Nothing is offered rather than something approximate; the build reports this as a gap.`
-        : 'The sources have not been decoded yet. Run the build once, then this list is exact.'}</p></div>`;
+        : 'The footage has not been scanned for shots yet. Build the storyboard once; this list is exact after that.'}</p></div>`;
     }
     return `<div class="inspector-group"><label>Shots that fit this beat · ${(length+handle).toFixed(3)}s</label>${d.candidates.map(c=>`<p class="small"><strong>${E(c.file)}</strong> · <code>${c.in_clock} → ${c.out_clock}</code> · ${c.duration_s}s · ${c.slack_s}s spare</p>`).join('')}<p class="small">Exact-length shots only. Choosing one is still your editorial decision.</p></div>`;
   }catch(e){ return `<div class="inspector-group"><label>Shots that fit this beat</label><p class="small">${E(e.message)}</p></div>`; }

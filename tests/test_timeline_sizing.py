@@ -642,3 +642,49 @@ class PlanningToolsPlacementTest(unittest.TestCase):
         numbers = [n for n, _ in steps]
         self.assertEqual(len(numbers), len(set(numbers)),
                          f'duplicate setup step numbers: {steps}')
+
+
+class SidebarContentsTest(unittest.TestCase):
+    """Both sidebars show only things that are true and actionable."""
+
+    def setUp(self):
+        self.editor = Path('static/editor.js').read_text()
+        self.template = Path('templates/index.html').read_text()
+        self.studio = Path('static/studio.js').read_text()
+
+    def test_media_pool_has_one_hint_element(self):
+        # Two elements shared `.media-hint`, and the code wrote through the class
+        # selector, so the footage-count line was overwritten on every render
+        # while the real hint stayed empty forever.
+        self.assertEqual(self.template.count('class="media-hint"'), 1)
+
+    def test_no_write_through_the_media_hint_class(self):
+        self.assertNotIn("querySelector('.media-hint')", self.editor)
+
+    def test_footage_count_line_hidden_when_nothing_is_missing(self):
+        index = self.editor.index("footage-requirements-pool")
+        body = self.editor[index:index + 700]
+        self.assertIn('hidden', body,
+                      'a fully matched pool should not spend a line saying so')
+
+    def test_checks_card_is_not_called_pre_render(self):
+        # It is on screen at all times, including after a successful export.
+        self.assertNotIn('Pre-render check', self.template)
+
+    def test_documentary_hides_unused_candidate_list(self):
+        index = self.editor.index('async function candidateHTMLForScene')
+        body = self.editor[index:index + 700]
+        self.assertIn("edit_mode==='documentary'", body)
+
+    def test_source_understanding_names_a_real_control(self):
+        index = self.editor.index('No local analysis yet')
+        text = self.editor[index:index + 160]
+        self.assertNotIn('Production setup', text,
+                         'that is not a control the reader can find')
+        self.assertIn('Case footage', text)
+
+    def test_script_in_line_only_when_it_differs(self):
+        index = self.editor.index('function sourceTimingHTML')
+        body = self.editor[index:index + 2000]
+        self.assertIn('Script asked for', body)
+        self.assertNotIn('<p>Script IN: ', body)
