@@ -603,3 +603,42 @@ class InspectVideoRateSourceTest(unittest.TestCase):
         body = source[start:start + 2000]
         self.assertIn('stream.base_rate or stream.average_rate', body,
                       'timestamp spacing must be checked against the declared rate')
+
+
+class PlanningToolsPlacementTest(unittest.TestCase):
+    """Project-wide planning links belong in Setup, not the shot inspector.
+
+    The shot inspector edits one shot. A block of project-wide links there
+    competed with that job and pushed the shot's own fields down the panel.
+    """
+
+    def setUp(self):
+        self.editor = Path('static/editor.js').read_text()
+        self.studio = Path('static/studio.js').read_text()
+
+    def test_shot_inspector_renders_no_planning_group(self):
+        start = self.editor.index('function planToolsHTML()')
+        body = self.editor[start:start + 200]
+        self.assertIn("return ''", body,
+                      'the shot inspector must not render planning links')
+
+    def test_picture_checks_live_in_the_setup_panel(self):
+        self.assertIn('<h3>Picture checks</h3>', self.studio)
+        for label in ('Shot index', 'Feasibility', 'Frame QC sheet'):
+            self.assertIn(label, self.studio,
+                          f'{label} must be reachable from Setup')
+
+    def test_map_template_only_offered_when_a_map_is_needed(self):
+        # Downloading a blank map when a script already drives the cut is noise.
+        index = self.studio.index('downloadMapTemplate()')
+        self.assertIn("status==='needs_plan'", self.studio[max(0, index - 200):index])
+
+    def test_approve_all_keeps_its_delivery_action(self):
+        self.assertIn('onclick="approveReadyScenes()"', self.studio)
+
+    def test_setup_cards_are_numbered_uniquely(self):
+        import re
+        steps = re.findall(r'setup-step">(\d+)</span><h3>([^<]+)', self.studio)
+        numbers = [n for n, _ in steps]
+        self.assertEqual(len(numbers), len(set(numbers)),
+                         f'duplicate setup step numbers: {steps}')

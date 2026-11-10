@@ -280,16 +280,10 @@ function planningSummaryHTML(){
   ${unfilled ? `<p class="small">${unfilled} name${unfilled===1?'s':'s'} no source yet. Those rows are gaps by design; fill them in the block map rather than letting a clip be chosen by guesswork.</p>` : ''}`;
 }
 
-function planToolsHTML(){
-  return `<div class="inspector-group"><label>Planning</label>
-  <div class="planning-actions">
-    <div><button type="button" onclick="openPlanDialog('index')">Shot index</button><p>See the sources and timing used in each shot.</p></div>
-    <div><button type="button" onclick="openPlanDialog('feasibility')">Feasibility</button><p>Check whether a block map fits the available footage.</p></div>
-    <div><button type="button" onclick="downloadMapTemplate()">Download map template</button><p>Download an optional blank picture map with SRT timing. Your script does not need a map.</p></div>
-    <div><button type="button" onclick="openFrameQC(1)">Frame QC sheet</button><p>Inspect source frames around each shot and its boundaries.</p></div>
-    <div><button type="button" onclick="approveReadyScenes()">Approve all ready beats</button><p>Marks technically ready beats approved; it does not inspect or verify picture content, identity or rights.</p></div>
-  </div></div>`;
-}
+// The shot inspector edits one shot, so it no longer carries a block of
+// project-wide planning links. Those live in Setup now, next to the material
+// they inspect. Kept as a function because the inspector still calls it.
+function planToolsHTML(){ return ''; }
 
 async function openPlanDialog(view){
   if(!P) return;
