@@ -461,3 +461,60 @@
 .doc-vol-reset{margin:0;padding:2px 5px;background:#1b222d;color:#cad5df;border:1px solid #364251;border-radius:4px;cursor:pointer;font-size:10px;line-height:1}
 .doc-vol-reset:hover{background:#232c39}
 .doc-volume-control>p.small{margin:2px 0 6px}
+
+/* ---- Media pool as a thumbnail grid -------------------------------------
+   A list of filenames told an editor nothing about its own footage: you had to
+   open each row to find out what the clip looked like. The pool is a grid of
+   poster tiles instead, the way the reference lays out its imports: the picture
+   is the label, and the name and length sit under it.
+
+   Tiles are sized from the column, not from a fixed pixel width, so the grid
+   reflows when the pane gets wider. The poster crops rather than letterboxes so
+   a row stays visually even; the chosen frame is a tenth into the clip. */
+.media-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));
+  gap:8px;padding:0 9px 10px;align-content:start}
+.media-tile{position:relative;display:flex;flex-direction:column;gap:4px;padding:0;
+  border:1px solid transparent;border-radius:7px;background:transparent;
+  text-align:left;cursor:pointer;min-width:0;font:inherit;color:inherit}
+.media-tile:hover{background:#1b2028}
+.media-tile.selected{background:#232a34;border-color:#59657a}
+.media-tile:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* The poster: a fixed 16:9 window so mixed portrait and landscape uploads still
+   read as one grid. */
+.tile-shot{position:relative;display:block;width:100%;aspect-ratio:16/9;
+  border-radius:5px;overflow:hidden;background:#0a0d12;border:1px solid #2b323d}
+.tile-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.media-tile.selected .tile-shot{border-color:#7d8ba3}
+/* A photograph keeps its whole frame; cropping a portrait photo to 16:9 would
+   hide most of it. */
+.media-tile.is-photo .tile-shot img{object-fit:contain}
+.tile-shot em{position:absolute;left:3px;top:3px;font-style:normal;font-size:8px;
+  font-weight:800;letter-spacing:.5px;color:#dfe7f0;background:#0b0e14b8;
+  padding:1px 4px;border-radius:3px;backdrop-filter:blur(4px)}
+.tile-shot b{position:absolute;right:3px;bottom:3px;font-size:8px;font-weight:700;
+  color:#eef3f9;background:#0b0e14c4;padding:1px 4px;border-radius:3px}
+/* No poster available: show a neutral plate rather than a broken image icon. */
+.tile-shot.no-poster{background:repeating-linear-gradient(45deg,#12161d,#12161d 6px,#171c24 6px,#171c24 12px)}
+.tile-shot.no-poster img{display:none}
+.tile-name{font-size:9.5px;font-weight:650;color:#dbe3ec;line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
+.tile-meta{font-size:8.5px;color:#7d8898;line-height:1.2;padding:0 1px 1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.media-tile .ready-dot{position:absolute;right:5px;top:5px;box-shadow:0 0 0 2px #0a0d12}
+
+/* ---- Audio tile in the media pool ---------------------------------------
+   An audio upload has no frame to show, so it gets a drawn waveform bar in the
+   same rhythm as the poster tiles above it. Same height and radius as
+   `.tile-shot`, so the left column reads as one grid rather than two lists. */
+.audio-card.audio-tile{display:flex;align-items:center;gap:9px;padding:8px 9px;
+  margin:0 9px 7px;border-color:#2b323d;min-height:56px}
+.audio-card.audio-tile.ready{border-color:#245743}
+.audio-tile .wave{display:flex;align-items:center;justify-content:space-between;gap:1.5px;
+  width:86px;height:40px;padding:5px 6px;border-radius:5px;background:#0d1218;
+  border:1px solid #2b323d;flex:0 0 auto}
+.audio-tile .wave i{display:block;flex:1 1 0;min-width:1px;background:#5fd3a6;
+  border-radius:1px;opacity:.85}
+.audio-tile .tile-body{min-width:0;display:flex;flex-direction:column;gap:2px}
+.audio-tile .tile-body strong{font-size:10.5px;font-weight:650;color:#e6edf5;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.audio-tile .tile-body span{font-size:9px;color:#8b96a6}

@@ -1313,3 +1313,34 @@ class DeliverySizeTest(unittest.TestCase):
         start = self.source.index('def sweep_work_dirs(')
         body = self.source[start:self.source.index('\n\ndef ', start)]
         self.assertIn('rmtree', body)
+
+class AssetPosterTest(unittest.TestCase):
+    """The media pool shows a poster for every upload.
+
+    A list of filenames told an editor nothing about unseen footage, so the pool
+    is a thumbnail grid. That needs a poster for uploads that are not yet placed
+    on any scene — the scene thumbnail route cannot supply one.
+    """
+
+    def test_every_asset_kind_has_a_poster_route(self):
+        import app as A
+        rules = {r.rule for r in A.app.url_map.iter_rules()}
+        self.assertIn('/api/projects/<pid>/assets/<aid>/poster', rules)
+
+    def test_photographs_are_read_from_the_assets_folder(self):
+        """Photographs live in assets/, decoded video in sources/."""
+        source = __import__('pathlib').Path('app.py').read_text()
+        body = source[source.index('def asset_poster'):source.index('def scene_thumbnail')]
+        self.assertIn("root/'assets'", body,
+                      'a photograph is stored under assets/, not sources/')
+        self.assertIn("root/'sources'", body)
+        # Both paths must still be confined to the project folder.
+        self.assertIn('is_relative_to', body)
+
+    def test_the_pool_renders_tiles_not_rows(self):
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        self.assertIn("class=\"media-tile", js)
+        self.assertIn('/poster', js)
+        css = __import__('pathlib').Path('static/editor.css').read_text()
+        self.assertIn('.media-tile{', css)
+        self.assertIn('grid-template-columns:repeat(auto-fill', css)
