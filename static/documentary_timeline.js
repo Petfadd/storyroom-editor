@@ -77,7 +77,16 @@ function docRenderProgram(){
   masterNode.pause();masterNode.classList.remove('is-active');if(masterUrl){masterUrl='';masterNode.removeAttribute('src');masterNode.load()}
   $('#monitor-empty').hidden=false;
   const beatPlan=!!(P?.edit_mode==='documentary'&&P?.script_reading?.status==='not_detailed'&&!scenes().length);
-  const text=beatPlan?'The script is read, but no picture is built yet. Review the Beat picture plan to place each Beat\u2019s footage, then this monitor plays it.':P?.documentary_beat_review?(d?.loading?'Loading the documentary timeline…':d?.detail||'Prepare the timeline preview to play. Browser cuts are approximate; the preview has no fade.'):d?.loading?'Loading the documentary timeline…':d?.detail||'Prepare a timeline preview to play the sound bite with your narration.';
+  // `d.detail` is a diagnostic string. It is shown here only when the project is
+  // merely not prepared yet -- never when the timeline failed, because a raw
+  // sentence about a stored value is not something to put in the middle of the
+  // monitor. A failure gets one plain line; the detail goes to the button's tooltip.
+  const failed=!!d&&!d.loading&&d.status&&d.status!=='ready'&&!['queued','running'].includes(d.status);
+  const ready=!!d&&!d.loading&&!failed;
+  const text=beatPlan?'The script is read, but no picture is built yet. Review the Beat picture plan to place each Beat\u2019s footage, then this monitor plays it.'
+   :failed?'This project is not ready to preview yet. Prepare it again after its narration and timeline are complete.'
+   :P?.documentary_beat_review?(d?.loading?'Loading the documentary timeline…':(ready&&d?.detail)||'Prepare the timeline preview to play. Browser cuts are approximate; the preview has no fade.')
+   :d?.loading?'Loading the documentary timeline…':(ready&&d?.detail)||'Prepare a timeline preview to play the sound bite with your narration.';
   const action=beatPlan?'<button class="button secondary" type="button" onclick="openBeatProposal()">Review the Beat picture plan</button>':d&&!d.loading&&!['queued','running'].includes(d.status)?'<button class="button secondary" type="button" onclick="docPrepareTimeline()">Prepare timeline preview</button>':'';
   $('#monitor-empty').innerHTML=`<strong>${beatPlan?'Picture beats not built yet':'Documentary timeline preview'}</strong><span>${E(text)}</span>${action}`;$('#preview-mode').textContent=beatPlan?'DOCUMENTARY PICTURE NOT BUILT':'DOCUMENTARY PREVIEW NOT READY';
  }
@@ -155,9 +164,22 @@ function docRenderTimeline(){
  if(!d||d.loading||!d.segments.length){
   $('#timeline-content').style.width='600px';$('#ruler-track').innerHTML='';$('#video-track').innerHTML='';
   $('#doc-source-track').innerHTML='';$('#audio-track').innerHTML='';
-  const note=d?.status==='error'?`DOCUMENTARY TIMELINE FAILED · ${d.detail||'the project could not be read'}`
-   :(d?.status&&d.status!=='loading'?`DOCUMENTARY TIMELINE UNAVAILABLE · ${d.detail||d.status}`
-   :'DOCUMENTARY TIMELINE LOADING');
+  // No raw failure sentence in the track. The timeline is a strip of the film, not a
+  // console: a sentence naming an internal condition sat there in capitals for as long
+  // as the project stayed in that state, and read like a crash. It is replaced by the
+  // one thing a picture track is allowed to say when it has nothing to show.
+  // The detail is not thrown away -- it goes to the button's tooltip and to the
+  // console, so a report can still be diagnosed.
+  const failed=!!d&&d.status&&d.status!=='loading'&&d.status!=='ready'&&!d.segments.length;
+  const prepare=$('#documentary-prepare-timeline');
+  if(prepare){
+   if(failed&&d.detail){
+    prepare.title=d.detail;
+    if(window.docTimelineProblem!==d.detail){window.docTimelineProblem=d.detail;console.warn('[documentary timeline]',d.detail)}
+   }else{prepare.removeAttribute('title')}
+  }
+  const note=d?.status==='loading'||!d?'Loading picture track…'
+   :(d.segments.length?'':'No picture track yet');
   $('#caption-track').innerHTML=`<span class="caption-note">${E(note)}</span>`;
   return}
  const width=Math.max(d.duration*timelineZoom,$('#timeline-scroll').clientWidth-2,600);$('#timeline-content').style.width=width+'px';const cueGroups=docCueGroups();// The toolbar carries no counts: the top bar already reports cue shots,

@@ -570,8 +570,13 @@
 .pool-foot strong{color:#b9c5d3;font-weight:700}
 .pool-foot[hidden]{display:none}
 
-/* The grid itself: two columns on a wide pool, more when it is wider. */
-.media-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));
+/* The grid itself: exactly THREE tiles per row, wrapping to the next row, so the pool
+   reads as a contact sheet with a predictable rhythm instead of a column count that
+   changes with the pane's width. `auto-fill`/`minmax` was doing the latter: at some
+   widths it produced two columns, at others three, and a tile could sit alone on the
+   last row looking like a mistake. Three fixed tracks keep every row identical, and
+   `minmax(0,1fr)` lets a long filename ellipsise instead of widening its column. */
+.media-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
   gap:10px 9px;padding:4px 10px 10px;align-content:start}
 .pool-tile{display:flex;flex-direction:column;gap:5px;padding:0;border:0;
   background:transparent;text-align:left;cursor:pointer;min-width:0;

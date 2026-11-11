@@ -150,6 +150,20 @@ class HeaderAlignmentInBrowserTest(unittest.TestCase):
                 f"at {row['width']}px the name overlaps the action buttons by "
                 f"{-row['clearance']}px")
 
+    def test_the_media_pool_lays_out_three_tiles_per_row(self):
+        """Measured, not read from the stylesheet: eight tiles, three per row."""
+        for row in self.report:
+            pool = row['pool']
+            self.assertEqual(pool['columns'], 3,
+                             f"at {row['width']}px the pool has {pool['columns']} columns")
+            self.assertEqual(pool['per_row'][:2], [3, 3],
+                             f"at {row['width']}px the rows hold {pool['per_row']} tiles")
+            # Eight tiles over three columns is three rows, the last one not full.
+            self.assertEqual(pool['rows'], 3,
+                             f"at {row['width']}px eight tiles took {pool['rows']} rows")
+            self.assertEqual(pool['per_row'][-1], 2,
+                             f"at {row['width']}px the last row holds {pool['per_row'][-1]}")
+
     def test_the_name_is_readable_at_every_width_that_keeps_it(self):
         """A centred name squeezed to one character is worse than one moved aside."""
         for row in self.report:

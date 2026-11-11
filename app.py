@@ -1267,7 +1267,15 @@ def perform_upload(pid,key=''):
     dest.unlink(missing_ok=True)
     if isinstance(e,BadRequest):raise
     raise BadRequest(str(e))
-   if not info['has_audio'] or not info['duration']:dest.unlink();raise BadRequest('The uploaded file has no decodable audio.')
+   # `probe` reports duration 0 when ffmpeg finds no Duration line -- a container it
+   # cannot read the length of, or a file still being written. Storing that 0 makes
+   # the narration look present but zero seconds long, and every later step that
+   # builds an edit clock then rejects it with "Narration duration must be a time in
+   # seconds." Refuse it here instead, where the user is still looking at the upload
+   # button and can pick a different export of the same file.
+   if not info['has_audio']:dest.unlink();raise BadRequest('The uploaded file has no decodable audio.')
+   if not info['duration']:
+    dest.unlink();raise BadRequest('This file\'s length could not be read, so it cannot be used as narration. Re-export it as MP3 or M4A and upload it again.')
    for old in (root/'inputs').glob('voiceover.*'):old.unlink()
    final=root/'inputs'/('voiceover'+ext);dest.replace(final);p['voiceover']={'name':f.filename,'path':final.relative_to(root).as_posix(),'duration':info['duration']}
    for scene in p['scenes']:scene['approved']=False
