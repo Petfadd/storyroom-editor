@@ -48,6 +48,28 @@ const oldNewProduction=newProduction;newProduction=function(){pauseEditor();oldN
 selectScene=i=>selectEditorScene(i);
 const savedSplit=splitBeat,savedMerge=mergeBeat;
 splitBeat=async function(){pauseEditor();await savedSplit();sourceScene='';renderProject()};mergeBeat=async function(){pauseEditor();await savedMerge();sourceScene='';renderProject()};
+function tileLen(seconds){const t=Math.max(0,Math.round(seconds||0));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0')}
+let poolFilter='all';
+function setPoolFilter(which){poolFilter=which;document.querySelectorAll('.pool-chip').forEach(b=>b.classList.toggle('is-on',b.dataset.poolFilter===which));renderEditor()}
+/* One tile shape for every upload. Video and photographs show a poster frame;
+   narration and captions get a plate in the same rhythm so the grid reads as a
+   single list rather than two kinds of box. */
+function mediaTileHTML(a){
+  const poster=`/api/projects/${P?.id}/assets/${a.id}/poster`;
+  const isPhoto=a.kind==='image';
+  const badge=a.reserve?'RESERVE':(isPhoto?'PHOTO':'VIDEO');
+  const len=!isPhoto&&a.duration?tileLen(a.duration):'';
+  // `current` is scoped to renderEditor, so read the selected scene directly.
+  const sel=(scenes()[sceneIndex]||{}).asset_id===a.id?'selected':'';
+  return {kind:isPhoto?'photo':'video',html:`<button type="button" class="pool-tile ${sel} ${isPhoto?'is-photo':''}" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" title="${E(a.name)}"><span class="tile-shot"><img src="${poster}" alt="" loading="lazy" onerror="this.closest('.tile-shot').classList.add('no-poster')"><em>${badge}</em>${len?`<b>${len}</b>`:''}<i class="ready-dot ${a.verified?'':'missing'}"></i></span><span class="tile-name">${E(a.name.replace(/\.[^.]+$/,''))}</span></button>`};
+}
+function poolAudioTile(vo){
+  const bars=[38,62,84,48,72,96,58,80,44,68,92,54,76,60,88,46,70,94,56,82,50,74,66,90,52,78];
+  return {kind:'audio',html:`<button type="button" class="pool-tile pool-audio" onclick="manage('brief')" title="${E(vo.name)}"><span class="tile-shot"><span class="wave" aria-hidden="true">${bars.map(h=>`<i style="height:${h}%"></i>`).join('')}</span><em>AUDIO</em><b>${tileLen(vo.duration)}</b></span><span class="tile-name">${E(vo.name.replace(/\.[^.]+$/,''))}</span></button>`};
+}
+function poolSrtTile(srt){
+  return {kind:'srt',html:`<button type="button" class="pool-tile pool-srt" onclick="manage('brief')" title="${E(srt.name||'captions')}"><span class="tile-shot"><span class="srt-plate" aria-hidden="true">SRT</span><em>TIMING</em><b>${srt.blocks.length}</b></span><span class="tile-name">${E((srt.name||'captions').replace(/\.[^.]+$/,''))}</span></button>`};
+}
 function renderEditor(){
  const isDoc=P?.edit_mode==='documentary';if(window.ensureDocTimeline)window.ensureDocTimeline();if(window.refreshDocumentaryDraft)window.refreshDocumentaryDraft();document.body.classList.toggle('documentary-workspace',isDoc);$('#documentary-button').hidden=!isDoc;$('#documentary-timeline-label').hidden=!isDoc;$('#documentary-prepare-timeline').hidden=!isDoc;$('#doc-source-track').hidden=!isDoc;$('#doc-source-label').hidden=!isDoc;
  const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));$('#project-name').textContent=P?.title?(P.title+(isDoc?' · Documentary':'')):'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null;$('#project-status').textContent=P?`${cueGroups?`${cueGroups.length} cue shots · ${ss.length} picture slots`:ss.length+' scenes'} · ${totalTime().toFixed(3)}s · ${P.scenes.filter(s=>s.approved).length} ${cueGroups?'slots approved':'approved'}${P.script_application?.issues.length?' · '+P.script_application.issues.length+' script gaps':''}`:'Same timeline workflow · create a production to begin';
@@ -66,25 +88,29 @@ function renderEditor(){
  const reqClean=requirement?.status==='found'&&!requirement.missing&&!requirement.ambiguous;
  if(reqPool)reqPool.hidden=!!reqClean;
  reqPool.textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
- const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';function tileLen(seconds){const t=Math.max(0,Math.round(seconds));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0')}
-$('#media-list').innerHTML=visibleAssets.map((a,i)=>{
-  const pid=P?.id||'';const poster=a.kind==='image'
-    ?`/api/projects/${pid}/assets/${a.id}/poster`
-    :`/api/projects/${pid}/assets/${a.id}/poster`;
-  const badge=a.reserve?E(a.source_label):(a.kind==='image'?'PHOTO':'VIDEO');
-  const len=a.kind==='video'&&a.duration?tileLen(a.duration):'';
-  const used=current?.asset_id===a.id;
-  return `<button type="button" class="media-tile ${used?'selected':''} ${a.kind==='image'?'is-photo':''}" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" title="${E(a.name)}">
-    <span class="tile-shot"><img src="${poster}" alt="" loading="lazy" onerror="this.parentNode.classList.add('no-poster')"><em>${badge}</em>${len?`<b>${len}</b>`:''}</span>
-    <span class="tile-name">${E(a.name.replace(/\.[^.]+$/,''))}</span>
-    <span class="tile-meta">${a.reserve?(assetIsUsed(a)?'Reserve \u00b7 placed':'Reserve'):''}${a.reserve?' \u00b7 ':''}${a.kind==='image'?'Photo':(a.duration?a.duration.toFixed(0)+'s':'Video')}</span>
-    <span class="ready-dot ${a.verified?'':'missing'}"></span>
-  </button>`;
-}).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
- $('#audio-status').className='audio-card audio-tile '+(P?.voiceover?'ready':'missing');
- $('#audio-status').innerHTML=`<span class="wave" aria-hidden="true">${Array.from({length:26},(_,i)=>`<i style="height:${[38,62,84,48,72,96,58,80,44,68,92,54,76,60,88,46,70,94,56,82,50,74,66,90,52,78][i]}%"></i>`).join('')}</span><span class="tile-body"><strong>${P?.voiceover?E(P.voiceover.name):'No voiceover'}</strong><span>${P?.voiceover?tileLen(P.voiceover.duration)+(isDoc?' · original':' · narration'):'Import from Setup'}</span></span>`;
- $('#srt-status').className='audio-card '+(P?.srt?'ready':'missing');$('#srt-status').innerHTML=`<strong>${P?.srt?P.srt.blocks.length:0} original SRT blocks</strong><span>Timing reference · captions not baked in</span>`;
- renderProgram();renderTimeline();renderInspector();renderChecks();renderExport();updateTrackMuteControls();updatePosition();
+ const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));
+ if($('#source-count'))$('#source-count').textContent=visibleAssets.length+(P?.voiceover?1:0)+(P?.srt?1:0);
+ const want=(typeof poolFilter==='string'?poolFilter:'all');
+ const tiles=[];
+ visibleAssets.forEach((a,i)=>{tiles.push(mediaTileHTML(a,i))});
+ if(P?.voiceover)tiles.push(poolAudioTile(P.voiceover));
+ if(P?.srt)tiles.push(poolSrtTile(P.srt));
+ // Filtering only hides tiles; the pool order never changes underneath.
+ const shown=tiles.filter(t=>want==='all'||t.kind===want||(want==='audio'&&t.kind==='srt'));
+ $('#media-list').innerHTML=shown.map(t=>t.html).join('');
+ if($('#pool-empty'))$('#pool-empty').hidden=shown.length>0;
+ if($('#footage-requirements-pool'))$('#footage-requirements-pool').hidden=shown.length===0;
+ // A quiet footer keeps narration and SRT timing visible without spending a
+ // whole card on each: the same facts, one line.
+ if($('#pool-foot')){
+  const bits=[];
+  if(P?.voiceover)bits.push(`<strong>${tileLen(P.voiceover.duration)}</strong> narration`);
+  if(P?.srt)bits.push(`<strong>${P.srt.blocks.length}</strong> SRT blocks`);
+  if(visibleAssets.length)bits.push(`<strong>${visibleAssets.length}</strong> source${visibleAssets.length===1?'':'s'}`);
+  $('#pool-foot').hidden=!bits.length;
+  $('#pool-foot').innerHTML=bits.join('<span aria-hidden="true">·</span>');
+ }
+renderProgram();renderTimeline();renderInspector();renderChecks();renderExport();updateTrackMuteControls();updatePosition();
 }
 function missingVisualHTML(s){return s?.replacement_issue?`<strong>Replaced footage needs attention</strong><span>${E(s.replacement_issue)} No substitute was chosen.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:s?.missing_video_out?`<strong>Still placement not shown in video review</strong><span>${E(s.plan_row?.shot_id||'This shot')} specifies a still or freeze. No screenshot, extracted frame or guessed video is being shown.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:s?.plan_row?.strict_production?`<strong>Scripted video unavailable</strong><span>${E(s.plan_row.shot_id||'This shot')} requires ${E(s.plan_row.source_file||'a source file')} at ${E(mapClock(s.plan_row.source_in_ms))}–${E(mapClock(s.plan_row.source_out_ms))}. ${E((P?.script_application?.issues||[]).find(x=>x.startsWith('Beat '+s.plan_row.shot_id+':'))||'The file may be missing, too short, or overlap another shot.')} No substitute was chosen.</span><button class="button secondary" onclick="goToNextVideo()">Go to next available video</button>`:'<strong>No visual assigned to this scene</strong><span>Choose uploaded media in the shot inspector, or import case footage.</span><button class="button secondary" onclick="manage(\'assets\')">Import media</button>'}
 function goToNextVideo(){const ss=scenes(),video=s=>assets().some(a=>a.id===s.asset_id&&a.kind==='video');let index=ss.findIndex((s,i)=>i>sceneIndex&&video(s));if(index<0)index=ss.findIndex(video);if(index>=0)selectEditorScene(index);else toast('No playable scripted video is available.') }

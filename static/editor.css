@@ -26,9 +26,9 @@
    the inspector stayed a narrow strip. Proportional shares make the three panes
    hold that balance at any width; the minmax floors stop a pane collapsing. */
 .editor-grid{grid-template-columns:
-  minmax(200px,26fr)
-  minmax(0,39fr)
-  minmax(280px,35fr);
+  minmax(240px,34fr)
+  minmax(0,40fr)
+  minmax(250px,26fr);
   overflow:hidden}
 .inspector-panel{display:flex!important;min-width:0}.monitor-panel{overflow:auto;min-width:0}
 
@@ -518,3 +518,72 @@
 .audio-tile .tile-body strong{font-size:10.5px;font-weight:650;color:#e6edf5;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .audio-tile .tile-body span{font-size:9px;color:#8b96a6}
+
+/* ---- Media pool, single grid with the toolbar on top ---------------------
+   The pool used to be two labelled sections of stacked cards, and the media
+   itself was a separate list again. Everything is one grid now: the toolbar,
+   then every upload — video, photograph, narration, captions — as the same
+   sort of tile. Checks moved to the shot inspector, which is where a pass/fail
+   verdict belongs; the pool is only media. */
+.pool-toolbar{display:flex;align-items:center;gap:8px;padding:9px 10px 7px;flex-wrap:wrap}
+.pool-import{display:inline-flex;align-items:center;gap:6px;border:1px solid #33404d;
+  background:#1b2129;color:#e3ebf4;border-radius:6px;padding:7px 12px;font-size:11px;
+  font-weight:700;cursor:pointer}
+.pool-import span{font-size:14px;line-height:1;color:#8fd8c1}
+.pool-import:hover{background:#232b35;border-color:#445465}
+.pool-filter{display:flex;gap:2px;margin-left:auto}
+.pool-chip{border:1px solid transparent;background:transparent;color:#8f9bad;
+  font-size:10px;font-weight:650;padding:4px 7px;border-radius:5px;cursor:pointer}
+.pool-chip:hover{color:#d6e0ea;background:#1b2129}
+.pool-chip.is-on{background:#2a3340;color:#eaf1f8;border-color:#3b4757}
+
+.pool-empty{display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:28px 16px;text-align:center;color:#7d8898}
+.pool-empty strong{color:#cfd8e3;font-size:12px}
+.pool-empty span{font-size:10.5px;line-height:1.5}
+.pool-empty[hidden]{display:none}
+
+.pool-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:8px 12px;margin-top:auto;border-top:1px solid #222932;
+  color:#7d8898;font-size:9.5px}
+.pool-foot strong{color:#b9c5d3;font-weight:700}
+.pool-foot[hidden]{display:none}
+
+/* The grid itself: two columns on a wide pool, more when it is wider. */
+.media-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));
+  gap:10px 9px;padding:4px 10px 10px;align-content:start}
+.pool-tile{display:flex;flex-direction:column;gap:5px;padding:0;border:0;
+  background:transparent;text-align:left;cursor:pointer;min-width:0;
+  font:inherit;color:inherit;border-radius:7px}
+.pool-tile:hover .tile-shot{border-color:#5a6a7d}
+.pool-tile.selected .tile-shot{border-color:#8fa3bd;box-shadow:0 0 0 1px #8fa3bd}
+.pool-tile:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.tile-shot{position:relative;display:block;width:100%;aspect-ratio:16/9;
+  border-radius:6px;overflow:hidden;background:#0a0d12;border:1px solid #2b323d}
+.tile-shot img{width:100%;height:100%;object-fit:cover;display:block}
+.pool-tile.is-photo .tile-shot img{object-fit:contain;background:#080a0e}
+.tile-shot.no-poster{background:repeating-linear-gradient(45deg,#12161d,#12161d 6px,#171c24 6px,#171c24 12px)}
+.tile-shot.no-poster img{display:none}
+.tile-shot em{position:absolute;left:4px;top:4px;font-style:normal;font-size:7.5px;
+  font-weight:800;letter-spacing:.6px;color:#e6eef7;background:#0a0e14c4;
+  padding:2px 5px;border-radius:3px}
+.tile-shot b{position:absolute;right:4px;bottom:4px;font-size:8.5px;font-weight:700;
+  color:#f2f6fb;background:#0a0e14d0;padding:2px 5px;border-radius:3px}
+.tile-shot .ready-dot{position:absolute;right:4px;top:4px;width:6px;height:6px;
+  border-radius:50%;box-shadow:0 0 0 2px #0a0d12}
+.tile-name{font-size:10px;font-weight:600;color:#c9d4e0;line-height:1.25;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 1px}
+
+/* Narration and captions reuse the poster window so every tile is the same
+   height; only what is drawn inside it differs. */
+.pool-audio .tile-shot,.pool-srt .tile-shot{background:#0d1218}
+.pool-audio .wave{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:space-between;gap:1.5px;padding:0 8px}
+.pool-audio .wave i{display:block;flex:1 1 0;min-width:1px;background:#5fd3a6;
+  border-radius:1px;opacity:.9}
+.pool-srt .srt-plate{position:absolute;inset:0;display:grid;place-items:center;
+  font-size:15px;font-weight:800;letter-spacing:2px;color:#6fb6c4}
+
+/* Checks now sits at the foot of the shot inspector: a verdict, not media. */
+.inspector-panel .validation-card{margin:0;border:0;border-top:1px solid #252b34;
+  border-radius:0;background:#12161c;padding:10px 12px;flex:0 0 auto}
