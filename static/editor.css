@@ -552,6 +552,14 @@
   font-weight:700;cursor:pointer}
 .pool-import span{font-size:14px;line-height:1;color:#8fd8c1}
 .pool-import:hover{background:#232b35;border-color:#445465}
+/* Add music sits beside Import, the same weight and shape, because it is the same
+   kind of action: one import button that brings in media. Music keeps a warm mark
+   rather than the import green, so the two are told apart at a glance without a
+   different box. The toolbar's chips take the remaining width on the right; when the
+   pool is too narrow for both rows the chips wrap under the buttons rather than
+   squeezing the labels into an ellipsis. */
+.pool-music-button span{color:#e8c477}
+.pool-music-button[hidden]{display:none}
 .pool-filter{display:flex;gap:2px;margin-left:auto}
 .pool-chip{border:1px solid transparent;background:transparent;color:#8f9bad;
   font-size:10px;font-weight:650;padding:4px 7px;border-radius:5px;cursor:pointer}
@@ -644,17 +652,6 @@
 #render-button[data-mode="download"]:hover{background:#5ce3ad}
 #render-button[data-mode="error"]{background:#5a2530;color:#ffc9d3;border-color:#8c3a48}
 #render-button[data-mode="error"]:hover{background:#6d2c39}
-
-/* Music in the pool. Empty it is an import card with a dashed edge, so it reads as a
-   place to put something rather than as a clip that already exists. Once a file is
-   chosen the same card becomes the clip, with the name and its length. */
-.pool-music .music-plate{position:absolute;inset:0;display:grid;place-items:center;
-  font-size:17px;font-weight:800;color:#e0b877}
-.pool-music .tile-shot{background:#14100a;border-color:#4a3a24}
-.pool-music.is-empty .tile-shot{background:transparent;border-style:dashed;border-color:#4a3a24}
-.pool-music.is-empty .music-plate{color:#a8895a;font-size:19px}
-.pool-music.is-empty .tile-name{color:#9a8b74}
-.pool-music:hover .tile-shot{border-color:#7a5a2c}
 
 /* An empty music bed takes no space at all. The row and its label are mounted so the
    track maths keeps working, but with no file there is nothing to show: collapsing

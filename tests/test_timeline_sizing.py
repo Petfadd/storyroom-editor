@@ -1439,22 +1439,44 @@ class AssetPosterTest(unittest.TestCase):
         self.assertIn('if(!duration){', body)
         self.assertIn("clip.style.width='0px'", body)
 
-    def test_music_appears_in_the_pool_as_an_import_card(self):
-        """The pool is where an importer looks, so music lives there too.
+    def test_music_is_a_button_beside_import_not_a_pool_tile(self):
+        """The view asked for this, and the tile was the wrong shape for the job.
 
-        Empty it is an import card that opens the picker; filled it is the clip, with
-        its own name, length and on/off state.
+        The pool tile existed so an importer would find music where the footage is.
+        But a documentary ALWAYS has a bed, so the tile was always present, and with
+        no file chosen it drew a poster plate reading IMPORT over Music -- two labels
+        in one 16:16 window, with the filename elided to "Add musi..." underneath. A
+        tile is something that was uploaded; music is a slot to fill. It is now a
+        toolbar button beside Import, which is where the same action lives.
         """
-        js = __import__('pathlib').Path('static/editor.js').read_text()
-        start = js.index('function poolMusicTile(')
-        body = js[start:js.index('function poolSrtTile(', start)]
-        self.assertIn('is-empty', body, 'the empty state must read as an import card')
-        self.assertIn('docPickMusic()', body, 'importing from the pool uses the same picker')
-        self.assertIn('docMusic.name', body, 'a placed bed shows its own name')
-        self.assertIn('docMusic.duration_s', body, 'and its own length')
-        self.assertIn("docMusic.enabled?'MUSIC':'OFF'", body)
-        # Only documentary projects have a bed to fill.
-        self.assertIn("P?.edit_mode==='documentary'&&P)tiles.push(poolMusicTile())", js)
+        editor = __import__('pathlib').Path('static/editor.js').read_text()
+        template = __import__('pathlib').Path('templates/index.html').read_text()
+        # The tile and its builder are gone, not merely unused.
+        self.assertNotIn('poolMusicTile', editor,
+                         'the music pool tile is still being built')
+        self.assertNotIn('tiles.push(poolMusicTile())', editor)
+        # The button sits directly after Import and is labelled the same way.
+        toolbar = template[template.index('pool-toolbar'):template.index('pool-filter')]
+        self.assertLess(toolbar.index('Import</button>'), toolbar.index('id="pool-add-music"'),
+                        'Add music must follow Import in the toolbar')
+        self.assertIn('>+</span> Add music', toolbar.replace('\n', ' '))
+
+    def test_the_music_button_says_what_it_will_do(self):
+        """One control, two states: add a file, or open the bed that exists."""
+        editor = __import__('pathlib').Path('static/editor.js').read_text()
+        start = editor.index('function syncPoolMusicButton(')
+        body = editor[start:editor.index('function poolSrtTile(', start)]
+        self.assertIn("button.hidden=!documentary", body,
+                      'only documentary projects have a bed to fill')
+        self.assertIn("docMusic?.file_present", body)
+        self.assertIn('Add music', body)
+        self.assertIn('docPickMusic()', body, 'the empty state imports')
+        self.assertIn('openRenderPage()', body, 'the filled state opens the bed')
+        # The pool repaints the button, and the upload repaints the pool's button.
+        self.assertIn('syncPoolMusicButton();', editor)
+        timeline = __import__('pathlib').Path('static/documentary_timeline.js').read_text()
+        self.assertGreaterEqual(timeline.count('syncPoolMusicButton'), 2,
+                                'choosing or toggling music must update the button')
 
     def test_the_render_button_is_never_disabled_by_a_render(self):
         """The top bar must stay pressable so progress and the finished file are visible.

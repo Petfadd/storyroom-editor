@@ -4,6 +4,7 @@
 <div class="panel-title"><span>Media pool</span><span class="count" id="source-count">0</span></div>
 <div class="pool-toolbar">
   <button type="button" class="pool-import" onclick="manage('assets')" title="Import video, photographs, narration and SRT"><span aria-hidden="true">+</span> Import</button>
+  <button type="button" class="pool-import pool-music-button" id="pool-add-music" onclick="docPickMusic()" title="Add background music or SFX" hidden><span aria-hidden="true">+</span> Add music</button>
   <div class="pool-filter" role="group" aria-label="Filter the pool">
     <button type="button" class="pool-chip is-on" data-pool-filter="all" onclick="setPoolFilter('all')">All</button>
     <button type="button" class="pool-chip" data-pool-filter="video" onclick="setPoolFilter('video')">Video</button>

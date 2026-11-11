@@ -91,6 +91,47 @@ class PoolGridTest(unittest.TestCase):
                          'the retired template is still being rendered somewhere')
 
 
+class PoolMusicButtonTest(unittest.TestCase):
+    """Music is a toolbar button beside Import, not a tile among the footage.
+
+    The tile it replaces was always present -- every documentary has a music bed --
+    and with no file chosen it drew a poster plate reading IMPORT over Music, two
+    labels in a window the size of a thumbnail, with its filename elided underneath.
+    """
+
+    HTML = (ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    def test_the_button_sits_beside_import(self):
+        toolbar = self.HTML[self.HTML.index('pool-toolbar'):self.HTML.index('pool-filter')]
+        self.assertIn('id="pool-add-music"', toolbar)
+        self.assertLess(toolbar.index('Import</button>'), toolbar.index('id="pool-add-music"'),
+                        'Add music must come after Import, not at the far end of the bar')
+        self.assertIn('docPickMusic()', toolbar,
+                      'the button must open the picker, like the tile did')
+
+    def test_it_looks_like_the_import_button_it_sits_next_to(self):
+        """Same box, same weight; only the mark differs. The view asked for that."""
+        self.assertIn('class="pool-import pool-music-button"', self.HTML)
+        spans = _blocks('.pool-music-button span')
+        self.assertTrue(spans, 'the music button has no mark of its own')
+
+    def test_it_starts_hidden_until_the_workspace_says_otherwise(self):
+        """Hidden in the markup, shown only for a documentary.
+
+        Without the attribute it would flash on screen in a review project before the
+        first render pass had decided whether that workspace has a bed to fill.
+        """
+        tag = self.HTML[self.HTML.index('id="pool-add-music"'):
+                        self.HTML.index('>', self.HTML.index('id="pool-add-music"'))]
+        self.assertIn('hidden', tag)
+
+    def test_the_removed_tile_left_no_styling_behind(self):
+        for selector in ('.pool-music .music-plate', '.pool-music.is-empty .tile-shot',
+                         '.pool-music.is-empty .tile-name'):
+            self.assertFalse(_blocks(selector),
+                             f'{selector} styles an element that is no longer rendered')
+
+
 class TimelineDiagnosticsTest(unittest.TestCase):
     """A track is part of the film's surface, not a log file."""
 

@@ -549,6 +549,10 @@ window.docPickMusic=async function(){
   // file, or a previous name keeps sitting in Setup after the swap.
   docMusic=data;
   window.docMusicCard=data;
+  // The pool's Add music button has to stop saying "Add music" the moment a file
+  // exists -- it now opens the bed instead. It is painted by the pool's own render
+  // pass, which this upload does not otherwise trigger.
+  if(typeof window.syncPoolMusicButton==='function')window.syncPoolMusicButton();
   toast(`${data.name||'Music'} saved — it replaces the previous track.`);
   await window.docLoadMusic?await window.docLoadMusic():0;
   if($('#manage-dialog')?.open)renderManagement();
@@ -564,6 +568,7 @@ window.docToggleMusic=async function(){
   // Setup shows the same on/off state; leave it behind and it contradicts the strip.
   window.docMusicCard=docMusic;
   docApplyPreviewVolumes();docRenderMusicTrack();
+  if(typeof window.syncPoolMusicButton==='function')window.syncPoolMusicButton();
   if($('#manage-dialog')?.open)renderManagement();
  }catch(e){toast(e.message)}
 };

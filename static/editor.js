@@ -67,19 +67,22 @@ function poolAudioTile(vo){
   const bars=[38,62,84,48,72,96,58,80,44,68,92,54,76,60,88,46,70,94,56,82,50,74,66,90,52,78];
   return {kind:'audio',html:`<button type="button" class="pool-tile pool-audio" onclick="manage('brief')" title="${E(vo.name)}"><span class="tile-shot"><span class="wave" aria-hidden="true">${bars.map(h=>`<i style="height:${h}%"></i>`).join('')}</span><em>AUDIO</em><b>${tileLen(vo.duration)}</b></span><span class="tile-name">${E(vo.name.replace(/\.[^.]+$/,''))}</span></button>`};
 }
-// Music appears in the pool whether or not a file has been chosen, because that is
-// where an importer looks for something to import. Empty it is an IMPORT card, and
-// clicking it opens the same picker the setup page uses. Once a file exists the card
-// becomes the clip itself -- name, length, state -- and clicking it opens the export
-// page, where the bed is decided.
-function poolMusicTile(){
+/* The toolbar's music button says what it will do: add a file, or open the bed that
+   already exists. It is documentary-only, so it is hidden in other workspaces -- the
+   same condition that used to gate the pool tile. */
+function syncPoolMusicButton(){
+ const button=$('#pool-add-music');if(!button)return;
+ const documentary=P?.edit_mode==='documentary';
+ button.hidden=!documentary;
+ if(!documentary)return;
  const present=!!docMusic?.file_present;
- if(!present){
-  return {kind:'audio',html:`<button type="button" class="pool-tile pool-music is-empty" onclick="docPickMusic()" title="Import background music or SFX"><span class="tile-shot"><span class="music-plate" aria-hidden="true">＋</span><em>IMPORT</em><b>Music</b></span><span class="tile-name">Add music or SFX</span></button>`};
- }
- const name=docMusic.name||'Background music';
- const len=docMusic.duration_s?tileLen(docMusic.duration_s):'';
- return {kind:'audio',html:`<button type="button" class="pool-tile pool-music" onclick="openRenderPage()" title="${E(name)} · ${docMusic.enabled?'on':'off'}"><span class="tile-shot"><span class="music-plate" aria-hidden="true">♪</span><em>${docMusic.enabled?'MUSIC':'OFF'}</em><b>${len||'—'}</b></span><span class="tile-name">${E(name.replace(/\.[^.]+$/,''))}</span></button>`};
+ button.innerHTML=present
+  ? '<span aria-hidden="true">♪</span> Music'
+  : '<span aria-hidden="true">+</span> Add music';
+ button.title=present
+  ? `Background music: ${E(docMusic.name||'chosen')} · open the export page`
+  : 'Add background music or SFX';
+ button.onclick=present?()=>openRenderPage():()=>docPickMusic();
 }
 function poolSrtTile(srt){
   return {kind:'srt',html:`<button type="button" class="pool-tile pool-srt" onclick="manage('brief')" title="${E(srt.name||'captions')}"><span class="tile-shot"><span class="srt-plate" aria-hidden="true">SRT</span><em>TIMING</em><b>${srt.blocks.length}</b></span><span class="tile-name">${E((srt.name||'captions').replace(/\.[^.]+$/,''))}</span></button>`};
@@ -107,6 +110,7 @@ $('#project-name').textContent=P?.title||'Untitled production';document.title=(P
  const reqClean=requirement?.status==='found'&&!requirement.missing&&!requirement.ambiguous;
  if(reqPool)reqPool.hidden=!!reqClean;
  reqPool.textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
+ syncPoolMusicButton();
  const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));
  if($('#source-count'))$('#source-count').textContent=visibleAssets.length+(P?.voiceover?1:0)+(P?.srt?1:0);
  const want=(typeof poolFilter==='string'?poolFilter:'all');
@@ -115,7 +119,13 @@ $('#project-name').textContent=P?.title||'Untitled production';document.title=(P
  if(P?.voiceover)tiles.push(poolAudioTile(P.voiceover));
  if(P?.srt)tiles.push(poolSrtTile(P.srt));
  // The bed is a documentary idea; other workspaces have no music track to fill.
- if(P?.edit_mode==='documentary'&&P)tiles.push(poolMusicTile());
+ // The music bed is NOT a tile in the pool. A documentary always has one, so the
+ // tile was always there, and when no file was chosen it rendered as a poster plate
+ // reading IMPORT over Music -- two labels fighting inside a 16:9 window, with the
+ // filename elided to "Add musi..." underneath. A tile is a thing that was uploaded;
+ // music is a slot to fill, so it lives on the toolbar's Add music button, beside
+ // Import. Nothing is lost: the render page still offers replace/on/off, and the
+ // timeline still draws the bed.
  // Filtering only hides tiles; the pool order never changes underneath.
  const shown=tiles.filter(t=>want==='all'||t.kind===want||(want==='audio'&&t.kind==='srt'));
  $('#media-list').innerHTML=shown.map(t=>t.html).join('');
