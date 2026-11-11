@@ -60,6 +60,10 @@ class ScenePlan:
     manual: bool = False
     locked: bool = False
     follow: int | None = None
+    subjects: list[int] = field(default_factory=list)   # people found, best first
+    alternative: dict | None = None
+    # One keyframe list per person found, so switching who is followed is immediate.
+    paths: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def expression(self) -> str:
@@ -86,6 +90,18 @@ class ScenePlan:
             frames.append(Keyframe(self.duration, frames[-1].left, frames[-1].width))
         return frames
 
+    def follow_person(self, subject: int | None) -> bool:
+        """Adopt the stored path for `subject`. False when there is no such path."""
+        self.follow = subject
+        self.manual = True
+        if subject is None:
+            return False
+        path = self.paths.get(int(subject))
+        if not path:
+            return False
+        self.keyframes = [Keyframe(k.t, k.left, k.width) for k in path]
+        return True
+
     def width(self) -> int:
         frames = self._anchored()
         return int(round(frames[0].width)) if frames else 0
@@ -95,6 +111,9 @@ class ScenePlan:
                 'duration': round(self.duration, 4),
                 'keyframes': [k.as_dict() for k in self.keyframes],
                 'manual': self.manual, 'locked': self.locked, 'follow': self.follow,
+                'subjects': self.subjects, 'alternative': self.alternative,
+                'paths': {str(k): [kf.as_dict() for kf in v]
+                          for k, v in self.paths.items()},
                 'notes': self.notes}
 
 
@@ -138,7 +157,14 @@ class ReframePlan:
                               manual=bool(raw.get('manual')),
                               locked=bool(raw.get('locked')),
                               follow=raw.get('follow'),
+                              subjects=list(raw.get('subjects') or []),
+                              alternative=raw.get('alternative'),
                               notes=list(raw.get('notes') or []))
+            for key, path in (raw.get('paths') or {}).items():
+                scene.paths[int(key)] = [Keyframe(float(k['t']), float(k['x']),
+                                                  float(k['w']))
+                                         for k in path
+                                         if isinstance(k, dict) and 't' in k and 'x' in k]
             for k in raw.get('keyframes') or []:
                 try:
                     scene.keyframes.append(Keyframe(float(k['t']), float(k['x']),
@@ -160,7 +186,10 @@ def plan_from_scenes(results: list[SceneReframe], mode: str, out_w: int, out_h: 
         keys = sorted(result.keyframes, key=lambda k: k.t)
         duration = (keys[-1].t - keys[0].t) if keys else 0.0
         scene = ScenePlan(index=result.scene_index, start=clock, duration=duration,
-                          keyframes=list(keys), notes=list(result.notes))
+                          keyframes=list(keys), notes=list(result.notes),
+                          subjects=list(result.subject_ids),
+                          alternative=result.alternative,
+                          paths=dict(result.paths))
         plan.scenes.append(scene)
         clock += duration
     return plan

@@ -891,7 +891,12 @@ def update_reframe_plan(pid):
    if scene is None:raise BadRequest('That scene is not in the framing plan.')
    if 'locked' in d:scene.locked=bool(d['locked'])
    if 'follow' in d:
-    scene.follow=None if d['follow'] in (None,'','any') else int(d['follow'])
+    # Uses the path stored for that person at analysis time, so the frame really moves
+    # to them rather than only recording a preference.
+    subject=None if d['follow'] in (None,'','any') else int(d['follow'])
+    if subject is None:scene.follow=None
+    elif not scene.follow_person(subject):
+     raise BadRequest('No framing was stored for that person. Analyse the footage again.')
    if 'shift' in d:
     # Nudging the whole scene is the correction people reach for first.
     delta=float(d['shift'])

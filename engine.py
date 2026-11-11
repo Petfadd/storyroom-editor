@@ -266,6 +266,9 @@ class RenderJob:
                                                   ow, oh)
         if plan.mode == 'blurred':
             chart = reframe_render.blurred_extension_filter(ow, oh, min(ow, width))
+        elif plan.mode == 'cinematic':
+            chart = reframe_render.cinematic_filter(expression, width, height,
+                                                    height, ow, oh, fps)
         else:
             chart = reframe_render.smart_reframe_filter(expression, width, height,
                                                         height, ow, oh, fps)

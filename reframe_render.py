@@ -28,7 +28,7 @@ from reframe_geometry import window_width_for_aspect
 
 def smart_reframe_filter(path_expression: str, window_width: int, window_height: int,
                          source_height: int, out_width: int, out_height: int,
-                         fps: int, aspect: str = 'crop') -> str:
+                         fps: int) -> str:
     """The filter chain replacing the plain scale, for one scene.
 
     `path_expression` is x(t) in source pixels, already generated from the plan.
@@ -73,3 +73,35 @@ def window_for(source_width: int, source_height: int,
     """The fixed window a plan's coordinates are expressed in."""
     width = window_width_for_aspect(source_height, out_width, out_height)
     return min(width, source_width), source_height
+
+
+def cinematic_filter(path_expression: str, window_width: int, window_height: int,
+                     source_height: int, out_width: int, out_height: int,
+                     fps: int) -> str:
+    """Mode C: the subject-aware window, composed over an extended background.
+
+    Different from mode A in what happens at the edges rather than in the middle. Mode A
+    fills the frame completely with a tight crop. This keeps the same subject-aware
+    window but insets it, so the composition reads as deliberate rather than as a crop
+    that happened to land off-centre -- and the space around it is the source's own
+    footage, enlarged and softened, never generated.
+
+    The inset is a tenth of the output width on each side, which leaves the window at
+    80% and keeps the person large enough to read on a phone.
+    """
+    inset = int(out_width * 0.10) // 2 * 2
+    inner_width = out_width - inset * 2
+    if inner_width <= 0:
+        raise ValueError('The output is too narrow for a cinematic inset.')
+    if window_width % 2:
+        window_width += 1
+    return (
+        f'setsar=1,split=2[cinsrc][cinfill];'
+        f'[cinfill]scale={out_width}:{out_height}:force_original_aspect_ratio=increase,'
+        f'crop={out_width}:{out_height},gblur=sigma=30,eq=brightness=-0.16:saturation=0.65[cinbg];'
+        f'[cinsrc]scale=-2:{source_height}[cinfull];'
+        f'color=c=black:s={window_width}x{window_height}:r={fps}[cinwin];'
+        f'[cinwin][cinfull]overlay=x=\'-({path_expression})\':y=0:eval=frame:shortest=1,'
+        f'scale={inner_width}:-2:flags=lanczos,setsar=1[cinsubject];'
+        f'[cinbg][cinsubject]overlay=(W-w)/2:(H-h)/2:shortest=1'
+    )

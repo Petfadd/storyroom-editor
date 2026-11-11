@@ -60,6 +60,9 @@ class SceneReframe:
     notes: list[str] = field(default_factory=list)
     still: bool = False
     pan_per_second: float = 0.0       # measured camera speed limit for this scene
+    # Keyframes for every person found, keyed by subject. Storing all of them means
+    # "follow a different person" is instant and needs no second pass over the footage.
+    paths: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {'scene': self.scene_index,
@@ -68,7 +71,8 @@ class SceneReframe:
                 'alternative': self.alternative,
                 'notes': self.notes,
                 'still': self.still,
-                'pan_per_second': round(self.pan_per_second, 2)}
+                'pan_per_second': round(self.pan_per_second, 2),
+                'paths': {str(k): [kf.as_dict() for kf in v] for k, v in self.paths.items()}}
 
 
 def group_by_scene(samples: list[tuple[float, list[Box]]],
@@ -206,6 +210,14 @@ def plan_scene(samples: list[tuple[float, list[Box]]], scene_index: int,
         clamped = Window(width=desired_width, left=middle).clamped(source_width, source_width)
         result.keyframes = [Keyframe(t, clamped.left, desired_width) for t in times]
         result.notes.append('subject is still; the frame is locked for this scene')
+        # A still scene still needs a path for everyone else: two people standing apart
+        # is exactly the case where the user has to say who matters.
+        for person in ranked:
+            if person == primary:
+                result.paths[person] = list(result.keyframes)
+            else:
+                result.paths[person] = _path_for(samples, person, desired_width,
+                                                 source_width)
         return result
 
     raw: list[tuple[float, float]] = []
@@ -260,7 +272,39 @@ def plan_scene(samples: list[tuple[float, list[Box]]], scene_index: int,
     for t, left in capped:
         window = Window(width=desired_width, left=left).clamped(source_width, source_width)
         result.keyframes.append(Keyframe(t, window.left, desired_width))
+
+    # Every other person gets the path this scene would use if they were followed.
+    # Computed here from detections already taken, so switching costs nothing at the
+    # moment the user asks for it.
+    for person in ranked:
+        if person == primary:
+            continue
+        result.paths[person] = _path_for(samples, person, desired_width, source_width)
+    if primary is not None:
+        result.paths[primary] = list(result.keyframes)
     return result
+
+
+def _path_for(samples, person, desired_width, source_width):
+    """A simple follow path for one person: aim, smooth, clamp."""
+    aimed = []
+    for t, boxes in samples:
+        mine = boxes_for([(t, boxes)], person)
+        if mine:
+            aimed.append((t, place_window(mine, desired_width, source_width).left))
+    if not aimed:
+        middle = (source_width - desired_width) / 2
+        return [Keyframe(t, middle, desired_width) for t, _ in samples]
+    smoothed = []
+    for i, (t, value) in enumerate(aimed):
+        if i == 0 or i == len(aimed) - 1:
+            smoothed.append((t, value))
+            continue
+        pool = (aimed[i - 1][1], value, aimed[i + 1][1])
+        smoothed.append((t, (pool[0] + 2 * pool[1] + pool[2]) / 4))
+    return [Keyframe(t, Window(width=desired_width, left=left).clamped(
+                source_width, source_width).left, desired_width)
+            for t, left in smoothed]
 
 
 

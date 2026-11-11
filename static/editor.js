@@ -868,9 +868,14 @@ function reframeHTML(){
 function reframeSceneHTML(scene,i){
  const x=scene.keyframes?.[0]?.x??0,w=scene.keyframes?.[0]?.w??0;
  const note=(scene.notes||[]).join(' · ');
+ const people=scene.subjects||[];
+ // Offering the other people is what makes "avoid cropping out the person being
+ // discussed" correctable: the user says who matters, not the ranking.
+ const follow=people.length>1?`<label>Follow<select onchange="followPerson(${scene.scene},this.value)">${people.map(id=>`<option value="${id}"${id===scene.follow?' selected':''}>${id===people[0]?'Main person':'Person '+(people.indexOf(id)+1)}</option>`).join('')}</select></label>`:'';
  return `<div class="reframe-scene">
   <div class="reframe-scene-head"><span>Shot ${scene.scene+1}</span>
    <button type="button" class="btn-quiet" onclick="lockFraming(${scene.scene},${!scene.locked})">${scene.locked?'Unlock':'Lock'}</button></div>
+  ${follow}
   <label>Move frame <input type="range" min="-400" max="400" step="4" value="0" oninput="shiftFraming(${scene.scene},this.value)" onchange="this.value=0"></label>
   <label>Zoom <input type="range" min="240" max="1200" step="8" value="${Math.round(w)}" onchange="zoomFraming(${scene.scene},this.value)"></label>
   ${note?`<p class="small">${E(note)}</p>`:''}
@@ -915,6 +920,7 @@ function lockAllFraming(on){patchFraming({locked:!!on})}
 function lockFraming(index,on){patchFraming({scene:index,locked:!!on})}
 function shiftFraming(index,delta){patchFraming({scene:index,shift:+delta})}
 function zoomFraming(index,width){patchFraming({scene:index,zoom:+width})}
+function followPerson(index,subject){patchFraming({scene:index,follow:+subject})}
 async function saveExportSetting(patch){if(!P)return;try{P=await api('/api/projects/'+P.id,'PATCH',patch);renderRenderPage()}catch(e){toast(e.message)}}
 function setExportResolution(key){if(!P)return;if(key===currentResolutionKey())return;saveExportSetting({size:key})}
 function setExportFraming(value){saveExportSetting({framing:value})}

@@ -147,6 +147,53 @@ class SceneIsolationTest(unittest.TestCase):
                            "the second scene inherited the first scene's crop")
 
 
+class FollowAnotherPersonTest(unittest.TestCase):
+    """Two people apart is the case where the user must be able to say who matters."""
+
+    def two_people(self):
+        samples = []
+        for i in range(4):
+            samples.append((float(i), [Box(120, 260, 230, 620, kind='body', subject=0),
+                                       Box(1520, 260, 230, 620, kind='body', subject=1)]))
+        return samples
+
+    def test_a_still_scene_still_stores_a_path_for_everyone(self):
+        result = T.plan_scene(self.two_people(), 0, 608, 1920)
+        self.assertTrue(result.still)
+        self.assertEqual(set(result.paths), {0, 1},
+                         'a still scene dropped the other person entirely')
+
+    def test_switching_subject_moves_the_frame_to_them(self):
+        result = T.plan_scene(self.two_people(), 0, 608, 1920)
+        import reframe_plan
+        plan = reframe_plan.plan_from_scenes([result], 'smart_crop', 1080, 1920, 1920, 1080)
+        scene = plan.scenes[0]
+        # Which person is followed by default depends on the ranking, so pick the one
+        # that is not already being followed rather than assuming an order.
+        current = scene.subjects[0]
+        other = [s for s in scene.subjects if s != current][0]
+        first = scene.keyframes[0].left
+        self.assertTrue(scene.follow_person(other))
+        self.assertGreater(abs(scene.keyframes[0].left - first), 900,
+                           'following the other person barely moved the frame')
+        self.assertTrue(scene.manual)
+
+    def test_switching_to_an_unknown_person_is_refused(self):
+        result = T.plan_scene(self.two_people(), 0, 608, 1920)
+        import reframe_plan
+        scene = reframe_plan.plan_from_scenes([result], 'smart_crop', 1080, 1920,
+                                              1920, 1080).scenes[0]
+        self.assertFalse(scene.follow_person(99))
+
+    def test_a_moving_scene_also_stores_a_path_for_everyone(self):
+        samples = []
+        for i in range(5):
+            samples.append((float(i), [Box(60 + i * 300, 260, 230, 620, subject=0),
+                                       Box(1700 - i * 30, 260, 230, 620, subject=1)]))
+        result = T.plan_scene(samples, 0, 608, 1920)
+        self.assertEqual(set(result.paths), {0, 1})
+
+
 class ExpressionTest(unittest.TestCase):
     def test_a_static_path_has_no_ramps(self):
         self.assertEqual(P.ramp_expression([0.0, 5.0], [100.0, 100.0]), '100.0000')
