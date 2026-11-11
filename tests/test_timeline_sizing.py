@@ -285,15 +285,42 @@ class TimelineSizingTest(unittest.TestCase):
                          f'expected three proportional columns, got {cols!r}')
         left, middle, right = nums
         share = [n / sum(nums) for n in nums]
-        # The reference is 26 / 39 / 35.
-        self.assertAlmostEqual(share[0], 0.26, places=2)
-        self.assertAlmostEqual(share[1], 0.39, places=2)
-        self.assertAlmostEqual(share[2], 0.35, places=2)
-        self.assertGreater(right, 25,
-                           'the inspector must stay a real column, not a strip')
+        # The pool carries the media, so it takes the largest share; the
+        # inspector is the narrowest because it only holds scale and volume.
+        self.assertAlmostEqual(share[0], 0.34, places=2)
+        self.assertAlmostEqual(share[1], 0.40, places=2)
+        self.assertAlmostEqual(share[2], 0.26, places=2)
+        self.assertGreater(left, right,
+                           'the media pool must be wider than the inspector')
+        self.assertGreater(right, 20,
+                           'the inspector must stay usable, not a strip')
         # Every column needs a floor so none of them can collapse.
         self.assertEqual(cols.count('minmax('), 3,
                          f'each column needs a minimum, got {cols!r}')
+
+    def test_the_transport_is_exactly_as_wide_as_the_monitor(self):
+        """The strip must not be narrower than the picture it belongs to.
+
+        A 10px side margin and rounded bottom corners made the transport a
+        separate floating bar, inset from the dark field above it, so the media
+        pool and the inspector stepped in and out at that seam. Both now reach
+        their column edges, which is what makes left panel, monitor and right
+        panel meet at one line.
+        """
+        css = Path('static/editor.css').read_text()
+        rules = [r for r in re.findall(r'\.transport\{[^}]*\}', css) if 'background' in r]
+        self.assertTrue(rules, 'no transport rule found')
+        base = rules[0]
+        self.assertIn('margin:0;', base,
+                      'a side margin makes the strip narrower than the monitor')
+        self.assertIsNone(re.search(r'margin:\s*0\s+\d+px', base),
+                          'the transport must have no side inset')
+        self.assertIn('border-radius:0', base,
+                      'rounded corners turn the strip into a floating bar')
+        # The short-screen override keeps it flush as well.
+        narrow = [r for r in re.findall(r'\.transport\{[^}]*\}', css) if '38px' in r]
+        self.assertTrue(narrow)
+        self.assertIn('margin:0 0', narrow[0])
 
     def test_the_picture_is_not_forced_wider_than_its_frame(self):
         """width:100% plus a side margin overflows the card by the margin."""
@@ -1337,10 +1364,35 @@ class AssetPosterTest(unittest.TestCase):
         # Both paths must still be confined to the project folder.
         self.assertIn('is_relative_to', body)
 
-    def test_the_pool_renders_tiles_not_rows(self):
+    def test_the_pool_renders_one_grid_of_tiles(self):
         js = __import__('pathlib').Path('static/editor.js').read_text()
-        self.assertIn("class=\"media-tile", js)
+        self.assertIn('class="pool-tile', js)
         self.assertIn('/poster', js)
+        # Narration and captions share the same grid, not separate cards.
+        self.assertIn('poolAudioTile', js)
+        self.assertIn('poolSrtTile', js)
         css = __import__('pathlib').Path('static/editor.css').read_text()
-        self.assertIn('.media-tile{', css)
+        self.assertIn('.pool-tile{', css)
         self.assertIn('grid-template-columns:repeat(auto-fill', css)
+
+    def test_the_pool_has_import_and_filters_on_top(self):
+        """Import sits above the media, with a filter row beside it."""
+        html = __import__('pathlib').Path('templates/index.html').read_text()
+        pool = html[html.index('media-panel'):html.index('</aside>', html.index('media-panel'))]
+        self.assertIn('pool-toolbar', pool)
+        self.assertIn('pool-import', pool)
+        self.assertLess(pool.index('pool-toolbar'), pool.index('id="media-list"'),
+                        'the toolbar must sit above the grid')
+        for name in ('all', 'video', 'photo', 'audio'):
+            self.assertIn(f'data-pool-filter="{name}"', pool)
+        # Neither old section label may come back.
+        self.assertNotIn('Case footage &amp; photographs', pool)
+        self.assertNotIn('audio-label', pool)
+
+    def test_checks_live_in_the_inspector(self):
+        """The pool is media only; the pass/fail verdict belongs with the shot."""
+        html = __import__('pathlib').Path('templates/index.html').read_text()
+        pool = html[html.index('media-panel'):html.index('</aside>', html.index('media-panel'))]
+        self.assertNotIn('validation-list', pool, 'Checks must leave the media pool')
+        insp = html[html.index('inspector-panel'):]
+        self.assertIn('validation-list', insp[:insp.index('</aside>')])
