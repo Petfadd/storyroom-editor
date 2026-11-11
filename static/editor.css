@@ -320,10 +320,13 @@
 .monitor-menu:hover{background:#3d3d3d;color:#fff}
 
 /* The frame: the picture sits flush in a dark surround, as in the reference. */
-.monitor{width:auto;max-width:none;margin:10px 10px 0;
-  /* The header that used to round the top of the card is gone, so the picture
-     rounds it instead and starts at the same 10px inset the transport uses. */
-  border-radius:8px 8px 0 0;background:#0d0d0d;
+.monitor{width:auto;max-width:none;margin:0;
+  /* The dark surround bleeds to the edges of its column instead of sitting in a
+     lighter card. The 10px margin and rounded corners made the black look like a
+     floating box with grey gaps above and beside it; the surrounding panels now
+     meet the black directly, so the wide dark field reads as the monitor's own
+     background. The picture keeps its height above the transport either way. */
+  border-radius:0;background:#0d0d0d;
   /* The picture takes ALL the height left above the transport, so the monitor
      and the timeline meet at one shared border with nothing empty in between. */
   flex:1 1 auto;min-height:0;
@@ -420,9 +423,9 @@
    timeline, and the picture never forces the transport off screen. */
 .monitor-panel{min-height:0;overflow:hidden;background:#1c1c1c}
 @media(max-height:820px){
-  /* The transport tightens to 8px on a short screen; the picture has to tighten
-     with it or the frame steps out by the difference. */
-  .monitor{margin:8px 8px 0}
+  /* The transport tightens its side inset on a short screen, and the stage keeps
+     its zero margin so the black field still meets the panels edge to edge. */
+  .monitor{margin:0}
   .transport{height:38px;flex-basis:38px;margin:0 8px 6px;gap:7px;padding:0 9px}
   .timecode{font-size:10px}
   .transport-buttons button{width:29px;height:26px;font-size:13px}

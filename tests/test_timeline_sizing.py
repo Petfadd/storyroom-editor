@@ -230,36 +230,42 @@ class TimelineSizingTest(unittest.TestCase):
         self.assertIn('display:flex', row)
         self.assertNotIn('flex-wrap:wrap', row, 'the transport must stay a single row')
 
-    def test_the_monitor_card_shares_one_side_margin(self):
-        """The picture and the transport must sit on the same left and right edge.
+    def test_the_dark_field_runs_edge_to_edge(self):
+        """The surround must reach the panel edges, not float as a lighter card.
 
-        The header band was removed, so the picture now rounds the top of the
-        card itself. Its side margin still has to match the transport's or the
-        frame steps out at the join.
+        A 10px margin and rounded corners left grey strips above and beside the
+        black, so the picture looked like a floating box rather than the one wide
+        dark field the reference shows. The stage therefore carries no margin and
+        no corner radius; the adjacent panels meet the black directly.
         """
         css = Path('static/editor.css').read_text()
-        monitor = [r for r in re.findall(r'\.monitor\{[^}]*\}', css) if 'margin' in r]
-        transport = [r for r in re.findall(r'\.transport\{[^}]*\}', css) if 'margin' in r]
-        self.assertTrue(monitor and transport)
-        # Both inset by the same amount on the sides.
-        self.assertIn('10px 10px', monitor[0])
-        self.assertIn('0 10px', transport[0])
+        monitor = [r for r in re.findall(r'\.monitor\{[^}]*\}', css) if 'background' in r]
+        self.assertTrue(monitor, 'the monitor has no stage rule')
+        stage = monitor[0]
+        self.assertIn('margin:0', stage,
+                      'the dark field must bleed to the panel edges')
+        self.assertNotIn('margin:10px', stage,
+                         'a side margin puts a lighter card around the black')
+        self.assertIn('border-radius:0', stage,
+                      'rounded corners expose the lighter panel behind')
+        # The picture still owns all the height above the transport.
+        self.assertIn('flex:1 1 auto', stage)
         # The removed header must not be laid out any more.
         blocks = [b for b in re.findall(r'@media\(max-height:820px\)\{(.*?)\n\}', css, re.S)
                   if '.transport' in b]
         self.assertEqual(len(blocks), 1)
         self.assertNotIn('.monitor-tabs', blocks[0],
                          'the header is hidden and must not be sized')
-        self.assertIn('.monitor{margin:8px 8px 0}', blocks[0])
+        self.assertIn('.monitor{margin:0}', blocks[0])
 
     def test_the_picture_is_not_forced_wider_than_its_frame(self):
         """width:100% plus a side margin overflows the card by the margin."""
         css = Path('static/editor.css').read_text()
-        card = [r for r in re.findall(r'\.monitor\{[^}]*\}', css) if 'margin' in r]
-        self.assertTrue(card, 'the monitor has no margin rule')
+        card = [r for r in re.findall(r'\.monitor\{[^}]*\}', css) if 'background' in r]
+        self.assertTrue(card, 'the monitor has no stage rule')
         self.assertNotIn('width:100%', card[0],
                          'the monitor must size to its inset, not to 100%')
-        self.assertIn('margin:10px 10px 0', card[0])
+        self.assertIn('margin:0', card[0])
 
 if __name__ == '__main__':
     unittest.main()
