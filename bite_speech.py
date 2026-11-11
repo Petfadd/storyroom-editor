@@ -19,8 +19,17 @@ LOCAL_LIBS = Path(__file__).resolve().parent / '.cache' / 'pylibs'
 
 
 def _local_import_path():
+    """Make the private library copy importable.
+
+    APPENDED, not prepended. The folder contains its own numpy, av and packaging, and
+    putting it at the front of sys.path let those shadow the application's own
+    dependencies for the whole process: after any speech check, `import numpy` resolved
+    to the private copy instead of the one the rest of the editor was tested against.
+    At the end of sys.path the private copy still satisfies `from faster_whisper import
+    ...` while anything already installed keeps winning.
+    """
     if LOCAL_LIBS.is_dir() and str(LOCAL_LIBS) not in sys.path:
-        sys.path.insert(0, str(LOCAL_LIBS))
+        sys.path.append(str(LOCAL_LIBS))
 
 
 def _import_whisper():
@@ -31,14 +40,22 @@ def _import_whisper():
 
 
 def available():
+    """Is local speech ready? Returns (ready, why not).
+
+    The message names which of the two halves is missing and how to get it, because
+    "not installed" on its own leaves the user with a button they cannot press. Nothing
+    is ever downloaded from here.
+    """
     folder = model_dir()
     try:
         _import_whisper()
     except Exception:
-        return False, 'The local faster-whisper package is not installed. No download was attempted.'
+        return False, ('The faster-whisper package is not installed. Install it from '
+                       'Processing and storage, or run: python tools/install_local_package.py')
     if not all((folder / name).is_file() for name in MODEL_FILES):
-        return False, ('No local speech model is installed. Put a Faster-Whisper model (model.bin, config.json, '
-                       'tokenizer.json) in ' + str(folder) + ' or set STORYROOM_WHISPER_MODEL_DIR.')
+        return False, ('The speech model is not installed (about 484 MB, one download). '
+                       'Install it from Processing and storage, or run: '
+                       'python tools/install_local_whisper.py')
     return True, ''
 
 

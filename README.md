@@ -24,6 +24,80 @@ A local Flask application that builds an SRT-driven video storyboard from upload
 - Source audio is muted; added captions are off.
 - Document/validator checks are separate from semantic identity or rights verification.
 
+## Performance and processing
+
+On a machine with an editor open, the expensive work is the problem: a 4K source is
+sixteen times the pixels of 1080p, and several operations that each want every core will
+between them make the interface stop responding.
+
+**Editing copies (proxies).** Uploaded video above 900 pixels high is copied once to 540p
+or 720p and that copy is what playback and scrubbing use. Measured on a 4K source:
+43.07 MB becomes 0.51 MB, 1.2% of the original, with duration, frame rate and audio
+preserved. Export never sees a proxy -- the renderer opens `sources/` directly and never
+reads over HTTP, so a delivered frame cannot come from one. The quality is chosen in
+Processing and storage, and changing it rebuilds the existing copies.
+
+**One queue.** Every heavy operation -- proxy making, media analysis, reframing, AI
+enhancement -- is submitted to a single dispatcher instead of starting its own threads.
+The order is: playback and editing, essential media loading, background analysis, AI
+enhancement, thumbnails. One heavy and one AI job run at a time, because two of them on
+16 GB is slower than one after the other. Pause, resume, cancel, retry and the queue
+itself are in Processing and storage. Pause and cancel both reach the work rather than
+only the label: pausing suspends the child encode and resuming continues it, and
+cancelling stops the whole process tree, so the machine is never still busy with
+something the queue has forgotten. Measured on a 180-second 4K source: 398 CPU ticks per
+two seconds while running, 0 while paused, 386 after resuming.
+
+**Hardware.** Encoders are tested rather than assumed: a build can list `h264_nvenc` on a
+machine with no NVIDIA driver, so each one is checked with a real one-frame encode.
+Hardware encoding is used for proxies only. Delivery stays on the software encoder,
+because at equal bitrate the hardware path is visibly worse. The graphics card itself is
+identified separately from encoder support -- Windows is asked through WMI, Linux through
+nvidia-smi or the DRM driver, macOS through `system_profiler` -- because a card can be
+present while this ffmpeg build has no encoder for it, and those are two different
+answers. Video memory is shown when the driver reports it and shown as unavailable when
+it does not, never as a zero that would look like an idle GPU.
+
+**Caching.** Everything expensive is cached under a key built from the source file's size,
+its modification time and the settings that shaped the result, so an entry cannot go
+stale and two scenes asking for the same frame share one file. Processing and storage
+shows what each kind holds, frees unused entries, or clears the cache. Cleanup only ever
+touches the cache folder; original footage and project files are outside it and a test
+plants a file beside it to prove it survives.
+
+**Recovery.** The project file was already written atomically, so a crash during a save
+could not corrupt it. Every save now also keeps a copy in `.history` inside the project,
+so a bad bulk edit can be undone. Jobs record their state, and a job interrupted by a
+crash comes back marked interrupted with a retry, rather than restarting by itself.
+
+**Where caches live.** Default is the local application data folder on Windows or the home
+folder elsewhere. Set another location in Processing and storage if the system drive is
+not an SSD; the folder is write-tested before it is accepted.
+
+### What was measured
+
+The acceptance tests below were run on the development machine — two cores, no graphics
+card, so the figures are a floor rather than a target. Every number is a measurement, not
+an estimate.
+
+| Check | Result |
+|---|---|
+| Four videos uploaded, four editing copies made at once | p95 response **53 ms**, worst 99 ms, **0 failed requests** (idle 2 ms) |
+| Memory during that work | **18–19%** of 16 GB, two encoders at 100% CPU |
+| Re-requesting four existing editing copies | **149 ms**, no bytes added to the cache: nothing rebuilt |
+| 4K 6-second source → editing copy | 43.07 MB → 0.51 MB (**1.2%**), 1.9 s, duration/fps/audio preserved |
+| A 180-second 1.3 GB 4K source, paused mid-encode | encoder stopped (**T**), **0 CPU ticks** over 3 s, progress held; **+201 ticks** after resume |
+| Same source, cancelled | encoder gone 2 s later, job marked cancelled, retry accepted and running again |
+| Two jobs mid-encode, server killed | both came back **interrupted**, not restarted, retry accepted |
+| Export path with ten editing copies in the cache | all four sources resolve the **full-resolution original** |
+| Whole test suite | **595 tests, OK** (11 skipped without optional pieces) |
+
+**What is not proven here.** The development machine has no graphics card, so `h264_amf`,
+Quick Sync and `nvidia-smi` readings were never exercised — the fallback to software
+encoding was, and it is what runs when a card or driver is missing. Hardware acceleration
+therefore reports itself only when a real one-frame encode succeeds on the actual machine.
+The Windows-specific graphics query is written but untested on Windows.
+
 ## Requirements
 
 - Python 3.10+
@@ -425,6 +499,8 @@ Setup on the computer running Storyroom:
    `pip install -r requirements-local-ai.txt`. FFmpeg is supplied by imageio-ffmpeg.
 2. Install the pinned CPU Whisper-small model with
    `python tools/install_local_whisper.py` (about 484 MB, one-time GitHub download).
+   This can also be done from the app: Processing and storage reports which of the two
+   halves -- the package or the model -- is missing, and installs it on request.
    The installer verifies SHA-256 hashes and stores it under `.cache/storyroom-models`;
    Storyroom detects that location automatically. Alternatively download a CTranslate2
    Faster-Whisper model yourself and set `STORYROOM_WHISPER_MODEL_DIR` to its directory

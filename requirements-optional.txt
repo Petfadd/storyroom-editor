@@ -1,0 +1,15 @@
+# Optional. Everything here is off unless installed, and the editor reports which
+# backends it actually has rather than assuming.
+#
+# mediapipe  Apache 2.0. Better face and pose detection than the OpenCV fallback, but
+#            it needs model files that MediaPipe normally downloads on first use, so it
+#            cannot be relied on offline without shipping them. The app works without it
+#            using OpenCV's HOG people detector and Haar face cascades.
+#
+#            Redistributing the model files requires shipping the Apache 2.0 licence and
+#            NOTICE with them. Do not bundle the weights without those files.
+#
+# Note: never install `opencv-python` or `opencv-contrib-python` alongside the headless
+# build. The GUI build replaces the headless one and the app then fails to import cv2
+# with a missing libGL.so.1, which breaks the whole editor rather than just this feature.
+mediapipe>=0.10

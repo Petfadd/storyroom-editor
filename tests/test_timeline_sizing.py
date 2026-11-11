@@ -758,9 +758,12 @@ class SidebarContentsTest(unittest.TestCase):
         self.assertIn('Case footage', text)
 
     def test_script_in_line_only_when_it_differs(self):
+        # The disclosure has to survive, but not as a sentence: it is now a bare
+        # "Script:" figure that appears only when it disagrees with what is saved.
         index = self.editor.index('function sourceTimingHTML')
         body = self.editor[index:index + 2000]
-        self.assertIn('Script asked for', body)
+        self.assertIn('Script: ', body)
+        self.assertIn("moved?", body, 'the line is conditional, not always printed')
         self.assertNotIn('<p>Script IN: ', body)
 
 
@@ -1408,6 +1411,76 @@ class AssetPosterTest(unittest.TestCase):
         self.assertGreater(render.index('validation-list'), body_end,
                            'Checks must survive a render-page rebuild')
 
+    def test_an_empty_music_bed_draws_nothing_inside_the_row(self):
+        """No music means no bar, no prompt and no sliver -- but the row stays.
+
+        The empty bed used to paint a full-width amber strip reading "Add background
+        music", which looked like a clip had already been placed. The row itself must
+        remain in the track stack: removing it shifted every track underneath it, and
+        the movement was worse than the placeholder. So the row and its label are
+        present, and the clip inside is empty.
+        """
+        js = __import__('pathlib').Path('static/documentary_timeline.js').read_text()
+        start = js.index('function docRenderMusicTrack(')
+        body = js[start:js.index('\n}', start)]
+        self.assertIn("const hasMusic=!!docMusic.file_present;", body)
+        # The row is unconditional in a documentary; the clip is what is conditional.
+        self.assertIn("track.style.display=documentary?'block':'none'", body)
+        self.assertIn("label.style.display=documentary?'flex':'none'", body)
+        # The prompt text is gone entirely.
+        self.assertNotIn('Add background music', body)
+        self.assertIn("clip.innerHTML=''", body)
+        # A loaded timeline with no music must draw no strip at all, not a 3px stub.
+        self.assertIn('if(!duration){', body)
+        self.assertIn("clip.style.width='0px'", body)
+
+    def test_music_appears_in_the_pool_as_an_import_card(self):
+        """The pool is where an importer looks, so music lives there too.
+
+        Empty it is an import card that opens the picker; filled it is the clip, with
+        its own name, length and on/off state.
+        """
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function poolMusicTile(')
+        body = js[start:js.index('function poolSrtTile(', start)]
+        self.assertIn('is-empty', body, 'the empty state must read as an import card')
+        self.assertIn('docPickMusic()', body, 'importing from the pool uses the same picker')
+        self.assertIn('docMusic.name', body, 'a placed bed shows its own name')
+        self.assertIn('docMusic.duration_s', body, 'and its own length')
+        self.assertIn("docMusic.enabled?'MUSIC':'OFF'", body)
+        # Only documentary projects have a bed to fill.
+        self.assertIn("P?.edit_mode==='documentary'&&P)tiles.push(poolMusicTile())", js)
+
+    def test_the_render_button_is_never_disabled_by_a_render(self):
+        """The top bar must stay pressable so progress and the finished file are visible.
+
+        It used to be disabled while an export ran, which made the one control that
+        reports progress unreachable -- the only way to know whether a render had
+        finished was to open the export page and look.
+        """
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function renderExport(')
+        body = js[start:js.index('\n}', start)]
+        # The only disabling condition is "no production at all".
+        self.assertIn('button.disabled=!P;', body,
+                      'only an empty workspace may disable the button')
+        for forbidden in ('busy||pictureScaleSaving', 'button.disabled=!P||', '||busy;'):
+            self.assertNotIn(forbidden, body,
+                             f'a render must not disable the button ({forbidden})')
+
+    def test_the_render_button_reports_every_state(self):
+        """Four labels, one per outcome: render, progress, download, stopped."""
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function renderButtonState(')
+        body = js[start:js.index('function openRenderPage(', start)]
+        self.assertIn("Rendering ${Math.round(Number(s.r.progress)||0)}%", body)
+        self.assertIn("button.textContent='⬇ Download MP4'", body)
+        self.assertIn("button.textContent='Render stopped'", body)
+        self.assertIn("button.textContent='Render MP4'", body)
+        # A finished-but-out-of-date export must not masquerade as downloadable.
+        self.assertIn('downloading:!busy&&!!r.url&&isCurrentRender(r)', body)
+        self.assertIn('failed:!busy&&r.status===\'error\'', body)
+
     def test_the_export_page_offers_exactly_three_resolutions(self):
         """1080p, 2K and 4K, named the way the delivery spec names them."""
         js = __import__('pathlib').Path('static/editor.js').read_text()
@@ -1446,3 +1519,46 @@ class AssetPosterTest(unittest.TestCase):
                 result, report = upscale.prepare(source, canvas, framing=framing, prefer_ai=False)
                 self.assertEqual(result.size, canvas, f'{framing} did not fill {canvas}')
                 self.assertEqual(report['source'], [900, 1600])
+
+
+class HeaderLayoutTest(unittest.TestCase):
+    """The top bar has one job: name the production, and offer the two looks.
+
+    It used to open with a generic "Storyboard editor" title, then a sentence of
+    workspace statistics, then two boxes reading "Transition / Library" and
+    "Caption / Library". The name belongs in the middle where a title is read, the
+    two controls belong on the left, and neither box needs the word "Library" --
+    the button already opens one.
+    """
+
+    def setUp(self):
+        self.template = __import__('pathlib').Path('templates/index.html').read_text()
+        self.editor = __import__('pathlib').Path('static/editor.js').read_text()
+        start = self.template.index('<header')
+        self.header = self.template[start:self.template.index('</header>', start)]
+
+    def test_the_header_reads_brand_tools_name_actions(self):
+        order = [self.header.index('class="brand"'),
+                 self.header.index('class="head-tools"'),
+                 self.header.index('class="project-heading"'),
+                 self.header.index('class="top-actions"')]
+        self.assertEqual(order, sorted(order),
+                         'the name must sit between the two controls and the actions')
+
+    def test_the_two_boxes_are_named_without_the_word_library(self):
+        self.assertIn('>Transition<', self.header)
+        self.assertIn('>Caption<', self.header)
+        # The function names still say "Library" -- that is the dialog they open. What
+        # must not appear is the word on the button, which is what a reader sees.
+        visible = __import__('re').sub(r'<[^>]+>', ' ', self.header)
+        self.assertNotIn('Library', visible)
+
+    def test_no_generic_workspace_title_or_status_sentence(self):
+        self.assertNotIn('Storyboard editor', self.template)
+        self.assertNotIn('project-status', self.template)
+        # And the editor must not write to a status line that no longer exists.
+        self.assertNotIn("$('#project-status')", self.editor)
+
+    def test_the_name_is_the_productions_own(self):
+        self.assertIn("$('#project-name').textContent=P?.title", self.editor)
+        self.assertNotIn('Documentary', self.editor.split("$('#project-name').textContent")[1][:120])

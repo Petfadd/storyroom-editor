@@ -67,13 +67,32 @@ function poolAudioTile(vo){
   const bars=[38,62,84,48,72,96,58,80,44,68,92,54,76,60,88,46,70,94,56,82,50,74,66,90,52,78];
   return {kind:'audio',html:`<button type="button" class="pool-tile pool-audio" onclick="manage('brief')" title="${E(vo.name)}"><span class="tile-shot"><span class="wave" aria-hidden="true">${bars.map(h=>`<i style="height:${h}%"></i>`).join('')}</span><em>AUDIO</em><b>${tileLen(vo.duration)}</b></span><span class="tile-name">${E(vo.name.replace(/\.[^.]+$/,''))}</span></button>`};
 }
+// Music appears in the pool whether or not a file has been chosen, because that is
+// where an importer looks for something to import. Empty it is an IMPORT card, and
+// clicking it opens the same picker the setup page uses. Once a file exists the card
+// becomes the clip itself -- name, length, state -- and clicking it opens the export
+// page, where the bed is decided.
+function poolMusicTile(){
+ const present=!!docMusic?.file_present;
+ if(!present){
+  return {kind:'audio',html:`<button type="button" class="pool-tile pool-music is-empty" onclick="docPickMusic()" title="Import background music or SFX"><span class="tile-shot"><span class="music-plate" aria-hidden="true">＋</span><em>IMPORT</em><b>Music</b></span><span class="tile-name">Add music or SFX</span></button>`};
+ }
+ const name=docMusic.name||'Background music';
+ const len=docMusic.duration_s?tileLen(docMusic.duration_s):'';
+ return {kind:'audio',html:`<button type="button" class="pool-tile pool-music" onclick="openRenderPage()" title="${E(name)} · ${docMusic.enabled?'on':'off'}"><span class="tile-shot"><span class="music-plate" aria-hidden="true">♪</span><em>${docMusic.enabled?'MUSIC':'OFF'}</em><b>${len||'—'}</b></span><span class="tile-name">${E(name.replace(/\.[^.]+$/,''))}</span></button>`};
+}
 function poolSrtTile(srt){
   return {kind:'srt',html:`<button type="button" class="pool-tile pool-srt" onclick="manage('brief')" title="${E(srt.name||'captions')}"><span class="tile-shot"><span class="srt-plate" aria-hidden="true">SRT</span><em>TIMING</em><b>${srt.blocks.length}</b></span><span class="tile-name">${E((srt.name||'captions').replace(/\.[^.]+$/,''))}</span></button>`};
 }
 function renderEditor(){
  const isDoc=P?.edit_mode==='documentary';if(window.ensureDocTimeline)window.ensureDocTimeline();if(window.refreshDocumentaryDraft)window.refreshDocumentaryDraft();document.body.classList.toggle('documentary-workspace',isDoc);$('#documentary-button').hidden=!isDoc;$('#documentary-timeline-label').hidden=!isDoc;$('#documentary-prepare-timeline').hidden=!isDoc;$('#doc-source-track').hidden=!isDoc;$('#doc-source-label').hidden=!isDoc;
- const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));$('#project-name').textContent=P?.title?(P.title+(isDoc?' · Documentary':'')):'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null;$('#project-status').textContent=P?`${cueGroups?`${cueGroups.length} cue shots · ${ss.length} picture slots`:ss.length+' scenes'} · ${totalTime().toFixed(3)}s · ${P.scenes.filter(s=>s.approved).length} ${cueGroups?'slots approved':'approved'}${P.script_application?.issues.length?' · '+P.script_application.issues.length+' script gaps':''}`:'Same timeline workflow · create a production to begin';
- // Clicking a source opens it, so the pool carries that instruction on the list
+ const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));// The header shows the production's own name and nothing else. The workspace type,
+// scene count and approval tally used to sit under it; they are gone, and the name
+// carries no "Documentary" suffix because that is a workspace, not a title.
+// The header shows the production's own name, and nothing else when there is no
+// production to name. "Storyboard editor" here read as though it were the name of a
+// project, which is exactly what the bar must never imply.
+$('#project-name').textContent=P?.title||'Untitled production';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null; // Clicking a source opens it, so the pool carries that instruction on the list
  // itself. It used to be written through `.media-hint`, which matched the
  // footage-count line first and wiped that count on every render.
  const pool=$('#media-list');
@@ -95,6 +114,8 @@ function renderEditor(){
  visibleAssets.forEach((a,i)=>{tiles.push(mediaTileHTML(a,i))});
  if(P?.voiceover)tiles.push(poolAudioTile(P.voiceover));
  if(P?.srt)tiles.push(poolSrtTile(P.srt));
+ // The bed is a documentary idea; other workspaces have no music track to fill.
+ if(P?.edit_mode==='documentary'&&P)tiles.push(poolMusicTile());
  // Filtering only hides tiles; the pool order never changes underneath.
  const shown=tiles.filter(t=>want==='all'||t.kind===want||(want==='audio'&&t.kind==='srt'));
  $('#media-list').innerHTML=shown.map(t=>t.html).join('');
@@ -116,6 +137,9 @@ function missingVisualHTML(s){return s?.replacement_issue?`<strong>Replaced foot
 function goToNextVideo(){const ss=scenes(),video=s=>assets().some(a=>a.id===s.asset_id&&a.kind==='video');let index=ss.findIndex((s,i)=>i>sceneIndex&&video(s));if(index<0)index=ss.findIndex(video);if(index>=0)selectEditorScene(index);else toast('No playable scripted video is available.') }
 function isCurrentRender(r){const o=r?.options;if(!r?.current||!o)return false;if(P?.edit_mode==='documentary')return !!o.srt_subtitles===editorCC&&!!o.enhance_picture===enhancePicture;return !!o.script_captions===exportScriptCaptions&&!!o.srt_subtitles===editorCC&&!!o.enhance_picture===enhancePicture}
 function renderProgram(){
+ // The saved caption look is applied before anything is drawn, so the preview carries
+ // the project's own style from the first frame rather than the stylesheet default.
+ applyCaptionPreset();
  if(P?.edit_mode==='documentary'){docRenderProgram();return}
  const target=editorVideoMuted?(P?.render?.status==='done'&&isCurrentRender(P.render)?P.render.url:(P?.preview?.status==='done'?P.preview.url:'')):'';
  if(editorPlaying&&masterUrl!==target)return;
@@ -272,28 +296,210 @@ async function loadNarrationWaveform(voice){
 }
 function seekAudioTrack(event){const rect=$('#audio-track').getBoundingClientRect();seekEditor((event.clientX-rect.left)/timelineZoom,true)}
 
+/* ---- caption library ----------------------------------------------------
+   Same shape as the transition library: a grid of real looks, one dialog, opened from
+   the header. Picking a card saves the preset on the project, so the editor preview and
+   the burned-in export are the same style rather than two similar ones. */
+let captionCatalogue=null;
+
+async function openCaptionLibrary(){
+  if(!P){toast('Open a production first.');return}
+  try{
+    captionCatalogue=await api(`/api/captions?pid=${encodeURIComponent(P.id)}`);
+  }catch(e){toast(e.message);return}
+  renderCaptionLibrary();
+  const dlg=$('#caption-dialog');
+  if(dlg&&!dlg.open)dlg.showModal();
+}
+window.openCaptionLibrary=openCaptionLibrary;
+window.closeCaptionLibrary=function(){const d=$('#caption-dialog');if(d?.open)d.close()};
+
+function renderCaptionLibrary(){
+  const body=$('#caption-body');if(!body||!captionCatalogue)return;
+  const selected=P?.caption_preset||captionCatalogue.selected||'clean';
+  body.innerHTML=captionCatalogue.presets.map(p=>`
+    <button type="button" class="transition-card caption-card ${p.key===selected?'current':''}"
+      onclick="chooseCaptionPreset('${p.key}')">
+      <span class="caption-preview" style="${p.css}">Sample caption</span>
+      <strong>${E(p.label)}</strong><small>${E(p.detail)}</small>
+      ${p.key===selected?'<em>In use</em>':''}
+    </button>`).join('');
+  if($('#caption-burn'))$('#caption-burn').checked=P?.burn_captions!==false;
+  if($('#caption-preview'))$('#caption-preview').checked=!!editorCC;
+}
+
+async function chooseCaptionPreset(key){
+  if(!P)return;
+  try{
+    P=await api(`/api/projects/${P.id}`,'PATCH',{caption_preset:key});
+    applyCaptionPreset();
+    renderCaptionLibrary();
+    toast('Caption style saved.');
+  }catch(e){toast(e.message)}
+}
+window.chooseCaptionPreset=chooseCaptionPreset;
+
+// Paint the preset the dialog just saved onto the live preview overlay. The export
+// reads the same key from the project, so this is a preview of the real thing.
+function applyCaptionPreset(){
+  const overlay=$('#editor-captions');if(!overlay)return;
+  const key=P?.caption_preset||'clean';
+  const preset=(captionCatalogue?.presets||[]).find(p=>p.key===key);
+  if(!preset){overlay.removeAttribute('style');return}
+  // The overlay's own positioning lives in the stylesheet; only the look is replaced.
+  overlay.setAttribute('style',preset.css);
+}
+
+async function setCaptionBurn(on){
+  if(!P)return;
+  try{
+    P=await api(`/api/projects/${P.id}`,'PATCH',{burn_captions:!!on});
+    renderCaptionLibrary();renderProgram();
+    toast(on?'Captions will be burned into the export.':'Captions will not be burned in.');
+  }catch(e){toast(e.message)}
+}
+window.setCaptionBurn=setCaptionBurn;
+
+function setCaptionPreview(on){setEditorCaptions(!!on);renderCaptionLibrary()}
+window.setCaptionPreview=setCaptionPreview;
+
+/* ---- transition library --------------------------------------------------
+   One dialog, opened either from the transport bar (which acts on the scene in the
+   inspector) or from the inspector's own transition row. It is the only place a
+   transition is chosen, so there is one list to learn rather than a dropdown plus a
+   grid that can disagree. The catalogue comes from the server, which means a card can
+   never offer a transition the renderer cannot produce. */
+let transitionCatalogue=null,transitionTarget=null;
+
+async function loadTransitionCatalogue(){
+  if(transitionCatalogue)return transitionCatalogue;
+  try{transitionCatalogue=await api('/api/transitions')}catch(e){toast(e.message)}
+  return transitionCatalogue;
+}
+
+function transitionLabel(key){
+  const c=(transitionCatalogue?.transitions||[]).find(t=>t.key===key);return c?c.label:(key||'Cut');
+}
+
+async function openTransitionLibrary(sceneId){
+  await loadTransitionCatalogue();
+  if(!transitionCatalogue)return;
+  if(!P){toast('Open a production first.');return}
+  transitionTarget=sceneId||scenes()[sceneIndex]?.id||null;
+  const dlg=$('#transition-dialog');
+  renderTransitionLibrary();
+  if(dlg&&!dlg.open)dlg.showModal();
+}
+
+window.openTransitionLibrary=openTransitionLibrary;
+window.closeTransitionLibrary=function(){const d=$('#transition-dialog');if(d?.open)d.close()};
+
+function renderTransitionLibrary(){
+  const body=$('#transition-body');if(!body)return;
+  if($('#transition-duration'))$('#transition-duration').value=transitionDuration;
+  if($('#transition-intensity'))$('#transition-intensity').value=transitionIntensity;
+  const scene=P?.scenes?.find(s=>s.id===transitionTarget);
+  const current=scene?.transition||'cut';
+  const index=P?.scenes?.findIndex(s=>s.id===transitionTarget);
+  const lastIndex=(P?.scenes?.length||1)-1;
+  const isLast=index===lastIndex;
+  const isClean=P?.transition_policy==='clean_cuts_only';
+  const target=$('#transition-target');
+  if(target){
+    if(!scene)target.textContent='Select a scene in the inspector, then choose its exit transition.';
+    else if(isLast)target.textContent=`Scene ${index+1} is the last scene. There is nothing after it to blend into.`;
+    else target.textContent=`Scene ${index+1} of ${P.scenes.length} · exit into scene ${index+2}`;
+  }
+  const grid=transitionCatalogue.transitions.map(t=>{
+    const disabled=isClean&&t.overlaps;
+    const isCurrent=t.key===current;
+    return `<button type="button" class="transition-card ${isCurrent?'current':''} ${disabled?'disabled':''}"
+      ${disabled?'disabled':''} onclick="chooseTransition('${t.key}')"
+      ${disabled?'title="This production uses clean cuts only. Allow transitions first."':''}>
+      <span class="transition-preview t-${t.key}"><span></span></span>
+      <strong>${E(t.label)}</strong><small>${E(t.detail)}</small>
+      ${isCurrent?'<em>In use</em>':''}
+    </button>`;
+  }).join('');
+  body.innerHTML=grid;
+}
+
+async function chooseTransition(key,silent){
+  if(!P||!transitionTarget)return;
+  const scene=P.scenes.find(s=>s.id===transitionTarget);if(!scene)return;
+  // The handle a blend needs is the duration itself, in frames. A cut needs none.
+  const handle=(transitionCatalogue?.durations||[]).find(d=>d.key===transitionDuration)?.frames||15;
+  try{
+    P=await api(`/api/projects/${P.id}/scenes/${scene.id}`,'PATCH',
+      {transition:key,transition_handle_frames:key==='cut'?0:handle});
+    transitionCatalogue=null; // the response carries the project, not the catalogue
+    await loadTransitionCatalogue();
+    renderTransitionLibrary();renderInspector();renderProject?.();
+    if(!silent)toast(`${transitionLabel(key)} set on scene ${P.scenes.findIndex(s=>s.id===transitionTarget)+1}.`);
+  }catch(e){toast(e.message)}
+}
+window.chooseTransition=chooseTransition;
+
+let transitionDuration='standard',transitionIntensity='balanced';
+
+function setTransitionDuration(key){
+  transitionDuration=key;
+  const scene=P?.scenes?.find(s=>s.id===transitionTarget);
+  if(scene&&scene.transition&&scene.transition!=='cut')chooseTransition(scene.transition,true);
+}
+window.setTransitionDuration=setTransitionDuration;
+
+function setTransitionIntensity(key){transitionIntensity=key}
+window.setTransitionIntensity=setTransitionIntensity;
+
+async function autoSuggestTransitions(){
+  if(!P)return;
+  try{
+    const data=await api(`/api/projects/${P.id}/transition-suggest`,'POST',
+      {intensity:transitionIntensity,duration:transitionDuration});
+    P=data.project;
+    renderInspector();renderProject?.();renderTransitionLibrary();closeTransitionLibrary();
+    const parts=Object.entries(data.summary||{}).map(([k,v])=>`${v} ${transitionLabel(k)}`);
+    toast(data.changed?`${data.changed} boundaries changed${parts.length?': '+parts.join(', '):''}.`:'Every boundary already fit its scene.');
+  }catch(e){toast(e.message)}
+}
+window.autoSuggestTransitions=autoSuggestTransitions;
+
 function renderInspector(){const s=scenes()[sceneIndex];
  if(P?.edit_mode==='documentary'&&editorPlaying){if(s){const lbl=s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('\u2013');$('#shot-number').textContent=lbl}return}$('#shot-number').textContent=s?((s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('–'))):'—';
- if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Waiting for footage links</label><p>The script refers to ${missing.map(x=>E(x.source_file)).join(', ')}. Select the correct existing videos or upload the missing files.</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?(P?.edit_mode==='documentary'&&P?.script_reading?.status==='not_detailed'?'<div class="inspector-group"><label>No picture beats yet</label><p>The SRT is imported and the Beat script was read. Build the picture from the reviewed Beat ranges; Setup cannot build this script automatically.</p><button type="button" onclick="openBeatProposal()">Review the Beat picture plan</button></div>':'<div class="inspector-group"><label>No picture beats yet</label><button type="button" onclick="manage(\'brief\')">Open setup</button></div>'):'<div class="inspector-group"><label>Ready for a new production</label></div>';return}
+ if(P?.edit_mode==='documentary'&&editorPlaying){if(s){const lbl=s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('\u2013');$('#shot-number').textContent=lbl}return}$('#shot-number').textContent=s?((s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('–'))):'—';
+ // Nothing here explains itself. A field says what it holds, a notice says what is
+ // wrong, and everything else was removed: the inspector is a control surface, not a
+ // manual. Where a sentence used to justify a value, the value now stands alone.
+ if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Unlinked source files</label><p>${missing.map(x=>E(x.source_file)).join(', ')}</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?`<div class="inspector-group"><label>No picture beats</label><button type="button" onclick="manage('brief')">Open setup</button></div>`:'<div class="inspector-group"><label>No production open</label></div>';return}
  const a=assets().find(a=>a.id===s.asset_id),m=s.motion_plan||{};
  const chosen=selectedScenes(),scaleTarget=chosen.find(x=>x.id===s.id)||chosen[0],scaleValue=scaleTarget?effectivePictureScale(scaleTarget):100,scaleMixed=new Set(chosen.map(effectivePictureScale)).size>1;
  const flow=s.picture_flow,cut=s.cut_sync;
- const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous beat',continued_running_take:'continued take',slid_inside_a_shot:'conformed inside a shot',slid_far_inside_a_shot:'moved far — check it',repeats_recent_footage:'repeats recent footage',jump_cut_within_shot:'deliberate jump cut',no_single_shot_fits:'no shot fits this beat',not_decoded:'source not decoded'};
- const cutLabel={in_a_breath:'cut in a breath',on_a_block_boundary:'cut on a line break',over_speech:'cut over a spoken word',between_blocks:'cut between blocks'};
- const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Picture flow</span><span title="${E(flow.note||'')}">${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · shot ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut to next</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · moved from ${cut.moved_from_s}s`:''}</span></div>`:''}`;
- $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+ const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous',continued_running_take:'continued take',slid_inside_a_shot:'conformed',slid_far_inside_a_shot:'moved far',repeats_recent_footage:'repeats footage',jump_cut_within_shot:'jump cut',no_single_shot_fits:'no shot fits',not_decoded:'not decoded'};
+ const cutLabel={in_a_breath:'in a breath',on_a_block_boundary:'on a line break',over_speech:'over speech',between_blocks:'between blocks'};
+ // Three terse fact rows. No prose, no tooltips that restate the label.
+ const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Flow</span><span>${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · ${cut.moved_from_s}s`:''}</span></div>`:''}`;
+ const transitionKey=s.transition||'cut';
+ const transitionOptions=(transitionCatalogue?.transitions||[{key:'cut',label:'Cut'},{key:'fade',label:'Cross Fade'},{key:'dissolve',label:'Dissolve'}]).map(t=>[t.key,t.label]);
+ $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed':''):'none selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Project scale (${Number(P.picture_scale)||100}%)</button></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration</label><p class="narration-excerpt">${E(s.narration)}</p></div>${meta}${s.plan_row?.native_static_interval?'<div class="notice warn">Native static interval · review only</div>':''}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Visual<select name="asset_id">${options([['','Choose media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Source time (n/a)':'In-point · s'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}"></label><label>Exit transition<div class="transition-row"><select name="transition">${options(transitionOptions,transitionKey)}</select><button type="button" onclick="openTransitionLibrary('${s.id}')" title="Open the transition library">Library</button></div></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Wide context, not the named person</label><label>Notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+
+ // The library dropdown needs the catalogue; fetching it once per session is cheaper
+ // than a hard-coded list that can drift from what the renderer supports.
+ if(!transitionCatalogue){loadTransitionCatalogue().then(()=>{if($('#scene-form'))renderInspector()})}
  if(a?.kind==='video')loadSceneUnderstanding(s.id);
  $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
- if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
+ // An automatic match hides the three fields it has already answered. The notice that
+ // used to explain this said only that, so it is gone; the fields simply are not there.
+ if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}}
 }
-function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
+function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Still · ${((s.frame_out-s.frame_in)/30).toFixed(3)}s</label><p>${E(a.original_name||a.name)}</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Source</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
  // The script's IN/OUT is only worth a line when it disagrees with what is saved.
  // On a conformed beat the two are identical, so printing both just invited the
  // reader to hunt for a difference that is not there.
  const plannedIn=planned?(planned.extracted_frame_ms??planned.source_in_ms)/1000:null;
  const plannedOut=planned?.source_out_ms!=null?planned.source_out_ms/1000:null;
  const moved=plannedIn!=null&&(Math.abs(plannedIn-actual)>0.0005||(plannedOut!=null&&Math.abs(plannedOut-(actual+(s.frame_out-s.frame_in)/30))>0.0005));
- return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p>Script asked for: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s (exclusive)':''}</p>`:''}${planned?'':'<p>Source timing selected in the editor.</p>'}<p id="source-clock" class="small"></p></div>`}
+ return `<div class="inspector-group"><label>Source</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p class="small">Script: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s':''}</p>`:''}<p id="source-clock" class="small"></p></div>`}
 
 
 async function loadSceneUnderstanding(sceneId){
@@ -510,12 +716,64 @@ function renderDocumentaryChecks(){
  $('#validation-list').innerHTML=`<div class="validation-item">${groups?`${groups.length} cue shots · `:''}${scenes().length} picture slots · original narration and SRT unchanged.</div>${other.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${other.length>3?`<div class="validation-item">${other.length-3} more items under Review / export checks.</div>`:''}${pending.length?`<div class="validation-item">${pending.length} scene approval${pending.length===1?'':'s'} and reuse-rights decisions remain before export; the timeline is ready to review.</div>`:''}${state.state==='error'?`<div class="validation-item warning">△ ${E(state.error)} <button type="button" onclick="retryDocumentaryCheck()">Retry</button></div>`:''}${state.state==='ready'?'<div class="validation-item ok">✓ Source, timing and approval checks passed. Content, identity and rights still require your review.</div>':''}`;
 }
 function renderChecks(){if(P?.edit_mode==='documentary'&&P?.documentary_beat_review){renderDocumentaryChecks();return}const ss=scenes(),errors=P?.validation?.errors||[],unresolved=P?.script_application?.issues||[];$('#validation-summary').textContent=!P?'No production selected':errors.length?`${errors.length} item${errors.length===1?'':'s'} to review`:(P?.picture_policy==='clips_only'?'Ready · automatic checks passed':'Ready for review export');$('#validation-summary').style.color=errors.length?'var(--amber)':'var(--green)';$('#validation-list').innerHTML=P?`<div class="validation-item ok">✓ ${ss.length} picture beats · original narration / SRT timing preserved.</div>${unresolved.length?`<div class="validation-item warning">△ ${unresolved.length} unassigned script shots. Select a gap to see its required source and range.</div>`:''}${errors.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${errors.length>3?`<div class="validation-item">${errors.length-3} more items under Review / export checks.</div>`:''}${!editorMaster&&ss.length?(P?.review_only_draft?'<div class="validation-item">Review-only timeline. Rendering remains blocked until outstanding checks are resolved.</div>':''):''}`:'<div class="validation-item">Create a new production, then import the voiceover, SRT and source MP4s.</div>'}
+// One place reads the render state, so the button and its click handler can never
+// disagree about what the button says.
+function renderButtonState(){
+ const r=P?.render||{},doc=P?.edit_mode==='documentary',beat=doc&&!!P?.documentary_beat_review;
+ const busy=['running','queued'].includes(r.status);
+ return {r,doc,beat,busy,
+  downloading:!busy&&!!r.url&&isCurrentRender(r),
+  failed:!busy&&r.status==='error',
+  stale:!busy&&!!r.output&&!isCurrentRender(r)};
+}
 function renderExport(){
- const r=P?.render||{},doc=P?.edit_mode==='documentary',beat=doc&&!!P?.documentary_beat_review,busy=['running','queued'].includes(r.status);
+ const s=renderButtonState();
  const dialog=$('#render-dialog');
  if(dialog?.open)renderRenderPage();
  const button=$('#render-button');
- if(button){button.disabled=!P||busy||pictureScaleSaving||(doc&&!beat)||!scenes().length;button.title=doc?(beat?'Open the export page and render MP4':'Documentary export requires a Beat storyboard'):'Open the export page and render a clean MP4'}
+ if(!button)return;
+ // The button is never disabled by a render. During an export it is the only control
+ // visible from anywhere in the editor that reports progress, and when the export
+ // lands it turns into the download -- so "is it finished?" is answerable at a glance
+ // without opening the export page first. Only an empty workspace disables it, because
+ // there is genuinely nothing to export.
+ button.disabled=!P;
+ button.dataset.mode='page';
+ if(s.busy){
+  button.textContent=`Rendering ${Math.round(Number(s.r.progress)||0)}%`;
+  button.dataset.mode='progress';
+  button.title='Open the export page to follow this export or cancel it';
+ }else if(s.downloading){
+  button.textContent='⬇ Download MP4';
+  button.dataset.mode='download';
+  button.title='Download the finished MP4';
+ }else if(s.failed){
+  button.textContent='Render stopped';
+  button.dataset.mode='error';
+  button.title='The last export stopped. Open the export page for the reason.';
+ }else if(s.stale){
+  button.textContent='Render again';
+  button.title='The timeline changed since the last MP4. Render again to include it.';
+ }else{
+  button.textContent='Render MP4';
+  button.title='Open the export page and render a clean MP4';
+ }
+}
+// Downloading from the top bar does not replace the export page: the page is where a
+// resolution is chosen and a render started, so the toast names the way back to it
+// rather than leaving the download button as a dead end.
+function renderButtonClick(){
+ if(!P){toast('Open or create a production first.');return}
+ const s=renderButtonState();
+ if(s.downloading&&s.r.url){
+  const link=document.createElement('a');
+  link.href=s.r.url+(s.r.url.includes('?')?'&':'?')+'download=1';
+  link.download='';
+  document.body.appendChild(link);link.click();link.remove();
+  toast('Download started. Setup → Review & delivery can render again.');
+  return;
+ }
+ openRenderPage();
 }
 function openRenderPage(){
  if(!P)return;pauseEditor();
@@ -580,11 +838,89 @@ function resolutionHTML(){
 function pictureHTML(){
  const framing=P?.framing||'auto',upscaler=P?.upscaler||'auto',quality=P?.quality||'standard';
  const opt=(value,label,current)=>`<option value="${value}"${value===current?' selected':''}>${E(label)}</option>`;
- return `<label>Framing when the source is a different shape<select onchange="setExportFraming(this.value)">${opt('auto','Fit, crop or blur by source',framing)}${opt('fit','Fit whole frame',framing)}${opt('crop','Crop to fill',framing)}${opt('blur','Blurred background',framing)}</select></label>
+ return `<label>Framing when the source is a different shape<select onchange="setExportFraming(this.value)">${opt('auto','Fit, crop or blur by source',framing)}${opt('smart','Follow the subject',framing)}${opt('fit','Fit whole frame',framing)}${opt('crop','Crop to fill',framing)}${opt('blur','Blurred background',framing)}</select></label>
  <label>Upscaling<select onchange="setExportUpscaler(this.value)">${opt('auto','Decide from the source',upscaler)}${opt('realesrgan','Real-ESRGAN (AI)',upscaler)}${opt('lanczos','Lanczos (no AI)',upscaler)}</select></label>
  <label>Quality and bitrate<select onchange="setExportQuality(this.value)">${opt('high','High · CRF 18 · 256k audio',quality)}${opt('standard','Standard · CRF 20 · 192k audio',quality)}${opt('compact','Compact · CRF 23 · 160k audio',quality)}</select></label>
- <p class="small">${E(window.AI_UPSCALE?.detail||'Framing and resolution never stretch or distort; only the source shape decides how the spare space is filled.')}</p>`
+ <p class="small">${E(window.AI_UPSCALE?.detail||'Framing and resolution never stretch or distort; only the source shape decides how the spare space is filled.')}</p>${reframeHTML()}`
 }
+function reframeHTML(){
+ // Only shown when the project asks to follow the subject. The panel exists so that an
+ // automatic decision can always be overruled; nothing here is required.
+ if((P?.framing||'auto')!=='smart')return '';
+ const plan=P?.reframe||{},scenes=plan.scenes||[],job=P?.reframe_job||{};
+ if(!scenes.length){
+  const running=job.status==='running'||job.status==='queued';
+  return `<div class="reframe-panel"><div class="reframe-head"><strong>Subject framing</strong>
+   <button type="button" class="btn-quiet" onclick="startReframe()" ${running?'disabled':''}>${running?'Analysing…':'Analyse footage'}</button></div>
+   ${running?`<p class="small">${E(job.detail||'Working')} · ${job.progress||0}%</p>`:''}
+   ${!running&&job.detail?`<p class="small">${E(job.detail)}</p>`:''}
+   <p class="small">Looks for people and scene changes, then sets where the frame sits for each shot. It never cuts audio or changes the length.</p></div>`;
+ }
+ const mode=plan.mode||'smart_crop';
+ const option=(v,t)=>`<option value="${v}"${v===mode?' selected':''}>${E(t)}</option>`;
+ return `<div class="reframe-panel"><div class="reframe-head"><strong>Subject framing</strong>
+   <button type="button" class="btn-quiet" onclick="startReframe()">Analyse again</button></div>
+  <label>Composition<select onchange="setComposition(this.value)">${option('smart_crop','Smart subject crop')}${option('blurred','Full scene, blended background')}${option('cinematic','Cinematic composition')}</select></label>
+  <label class="reframe-lock"><input type="checkbox" ${scenes.every(s=>s.locked)?'checked':''} onchange="lockAllFraming(this.checked)"> Lock the frame for every shot</label>
+  ${scenes.map((scene,i)=>reframeSceneHTML(scene,i)).join('')}
+ </div>`;
+}
+function reframeSceneHTML(scene,i){
+ const x=scene.keyframes?.[0]?.x??0,w=scene.keyframes?.[0]?.w??0;
+ const note=(scene.notes||[]).join(' · ');
+ const people=scene.subjects||[];
+ // Offering the other people is what makes "avoid cropping out the person being
+ // discussed" correctable: the user says who matters, not the ranking.
+ const follow=people.length>1?`<label>Follow<select onchange="followPerson(${scene.scene},this.value)">${people.map(id=>`<option value="${id}"${id===scene.follow?' selected':''}>${id===people[0]?'Main person':'Person '+(people.indexOf(id)+1)}</option>`).join('')}</select></label>`:'';
+ return `<div class="reframe-scene">
+  <div class="reframe-scene-head"><span>Shot ${scene.scene+1}</span>
+   <button type="button" class="btn-quiet" onclick="lockFraming(${scene.scene},${!scene.locked})">${scene.locked?'Unlock':'Lock'}</button></div>
+  ${follow}
+  <label>Move frame <input type="range" min="-400" max="400" step="4" value="0" oninput="shiftFraming(${scene.scene},this.value)" onchange="this.value=0"></label>
+  <label>Zoom <input type="range" min="240" max="1200" step="8" value="${Math.round(w)}" onchange="zoomFraming(${scene.scene},this.value)"></label>
+  ${note?`<p class="small">${E(note)}</p>`:''}
+ </div>`;
+}
+async function startReframe(){
+ if(!P)return;const videos=(P.assets||[]).filter(a=>a.kind==='video');
+ if(!videos.length)return toast('Add a video before analysing framing.');
+ const [width,height]=exportDims();
+ try{
+  const r=await api('/api/projects/'+P.id+'/reframe/analyse','POST',{asset_id:videos[0].id,width,height,mode:'smart_crop'});
+  P.reframe_job=r.job;renderRenderPage();watchReframe();
+ }catch(e){toast(e.message)}
+}
+let reframeTimer=null;
+function watchReframe(){
+ clearInterval(reframeTimer);
+ reframeTimer=setInterval(async()=>{
+  if(!P)return clearInterval(reframeTimer);
+  try{
+   const d=await api('/api/projects/'+P.id+'/reframe/analyse');
+   P.reframe_job=d.job;
+   if(d.plan&&d.plan.scenes)P.reframe=d.plan;
+   renderRenderPage();
+   if(d.job?.status==='done'||d.job?.status==='failed'){clearInterval(reframeTimer);toast(d.job.detail||'Framing ready.')}
+  }catch(e){clearInterval(reframeTimer);toast(e.message)}
+ },1500);
+}
+function exportDims(){
+ const r=document.querySelector('.resolution-choice.is-on');
+ const text=r?r.textContent:'';
+ const m=text.match(/(\d{3,4})\s*×\s*(\d{3,4})/);
+ return m?[+m[1],+m[2]]:[1080,1920];
+}
+async function patchFraming(payload){
+ if(!P)return;
+ try{const d=await api('/api/projects/'+P.id+'/reframe','PATCH',payload);P.reframe=d.plan;renderRenderPage()}
+ catch(e){toast(e.message)}
+}
+function setComposition(mode){patchFraming({mode})}
+function lockAllFraming(on){patchFraming({locked:!!on})}
+function lockFraming(index,on){patchFraming({scene:index,locked:!!on})}
+function shiftFraming(index,delta){patchFraming({scene:index,shift:+delta})}
+function zoomFraming(index,width){patchFraming({scene:index,zoom:+width})}
+function followPerson(index,subject){patchFraming({scene:index,follow:+subject})}
 async function saveExportSetting(patch){if(!P)return;try{P=await api('/api/projects/'+P.id,'PATCH',patch);renderRenderPage()}catch(e){toast(e.message)}}
 function setExportResolution(key){if(!P)return;if(key===currentResolutionKey())return;saveExportSetting({size:key})}
 function setExportFraming(value){saveExportSetting({framing:value})}
@@ -722,7 +1058,15 @@ async function setBurnCaptions(enabled){
 }
 function setEditorCaptions(enabled){editorCC=!!enabled;$('#caption-toggle').textContent=editorCC?'CC On':'CC Off';$('#caption-toggle').setAttribute('aria-pressed',String(editorCC));const c=$('#burn-srt-subtitles');if(c)c.checked=editorCC;renderProgram();updatePosition();renderExport();if($('#manage-dialog').open)renderManagement()}
 function toggleEditorCaptions(){setEditorCaptions(!editorCC)}
-function setEditorZoom(v){timelineZoom=Number(v);renderTimeline();updatePosition()}
+function setEditorZoom(v){
+ // The slider is the fine control; the two buttons beside it exist so the timeline can
+ // be zoomed without dragging at all. Both write through the same value, so the slider
+ // always shows the zoom the buttons reached.
+ timelineZoom=Math.max(2,Math.min(35,Number(v)||12));
+ const slider=$('#zoom');if(slider&&Number(slider.value)!==timelineZoom)slider.value=timelineZoom;
+ renderTimeline();updatePosition();
+}
+function stepEditorZoom(direction){setEditorZoom(timelineZoom+(direction>0?2:-2))}
 masterNode.addEventListener('ended',pauseEditor);narrNode.addEventListener('ended',pauseEditor);
 $('#manage-dialog').addEventListener('cancel',e=>{e.preventDefault();closeManagement()});
 $('#ruler-track').onclick=e=>{const r=$('#ruler-track').getBoundingClientRect();seekEditor((e.clientX-r.left)/timelineZoom,true)};
@@ -903,3 +1247,154 @@ window.stepTrackVolume=function(track,delta){
  if(P?.edit_mode==='documentary'&&window.docStepVolume)return window.docStepVolume(track,delta);
  if(track==='music'&&window.docStepVolume)return window.docStepVolume('music',delta);
 };
+
+/* ---------------------------------------------------------------------------
+   Processing and storage. One panel for the queue, the machine and the cache,
+   so the user can always answer "what is it doing and why is it slow".
+--------------------------------------------------------------------------- */
+let perfTimer=null;
+function openPerformance(){
+ const d=$('#performance-dialog');if(!d)return;
+ d.showModal();refreshPerformance();
+ clearInterval(perfTimer);perfTimer=setInterval(refreshPerformance,2000);
+}
+function closePerformance(){
+ const d=$('#performance-dialog');if(!d)return;
+ clearInterval(perfTimer);perfTimer=null;d.close();
+}
+function fmtBytes(n){
+ if(n==null)return '–';
+ if(n<1024)return n+' B';
+ if(n<1024**2)return (n/1024).toFixed(0)+' KB';
+ if(n<1024**3)return (n/1024**2).toFixed(1)+' MB';
+ return (n/1024**3).toFixed(2)+' GB';
+}
+// Graphics, in the three states that actually differ: a card we can name and read,
+// a card we can name but whose memory the driver will not report, and no card found.
+// Memory is only shown when it is real -- a made-up zero would read as an idle GPU.
+function gpuRow(sys,caps){
+ const gpu=(caps&&caps.gpu)||{};
+ const name=gpu.name||sys.gpu_name||'';
+ if(!name)return '';
+ const total=gpu.vram_mb||sys.vram_total_mb;
+ const used=sys.vram_used_mb;
+ let detail='';
+ if(total&&used!=null)detail=`${(used/1024).toFixed(1)} of ${(total/1024).toFixed(1)} GB in use`;
+ else if(total)detail=`${(total/1024).toFixed(1)} GB`;
+ else detail='memory not reported by the driver';
+ const pct=total&&used!=null?Math.min(100,used*100/total):0;
+ return `<div class="perf-row"><span>Graphics</span><span>${E(name)}</span></div>
+   ${total&&used!=null?`<div class="perf-bar"><i style="width:${pct}%"></i></div>`:''}
+   <p class="small">${E(detail)}</p>`;
+}
+function fmtTime(seconds){
+ if(seconds==null)return '';
+ if(seconds<60)return Math.max(1,Math.round(seconds))+'s left';
+ const m=Math.floor(seconds/60),s=Math.round(seconds%60);
+ return m+'m '+s+'s left';
+}
+async function refreshPerformance(){
+ if(!$('#performance-dialog')?.open)return;
+ try{
+  const s=await api('/api/system/status');
+  try{s.speech=await api('/api/speech/setup')}catch{s.speech=null}
+  P&&(P.system_status=s);
+  $('#performance-body').innerHTML=performanceHTML(s);
+ }catch(e){$('#performance-body').innerHTML=`<p class="small">${E(e.message)}</p>`}
+}
+function performanceHTML(s){
+ const q=s.queue,sys=s.queue.system||{},caps=s.encoders||{};
+ const bar=v=>`<div class="perf-bar"><i style="width:${Math.max(0,Math.min(100,v||0))}%"></i></div>`;
+ const job=j=>`<div class="perf-job">
+   <div class="perf-job-top"><strong>${E(j.title)}</strong>
+    <span class="perf-state ${j.status}">${E(j.status)}</span></div>
+   ${j.detail?`<p class="small">${E(j.detail)}</p>`:''}
+   ${j.status==='running'||j.status==='paused'?bar(j.progress):''}
+   <p class="small">${j.status==='running'?Math.round(j.progress)+'%':''}
+    ${fmtTime(j.remaining_seconds)?' · '+fmtTime(j.remaining_seconds):''}
+    ${j.error?' · '+E(j.error):''}</p>
+   <div class="perf-actions">
+    ${j.status==='running'?`<button type="button" class="btn-quiet" onclick="queueAction('pause',${JSON.stringify(j.id)})">Pause</button>`:''}
+    ${j.status==='paused'?`<button type="button" class="btn-quiet" onclick="queueAction('resume',${JSON.stringify(j.id)})">Resume</button>`:''}
+    ${['failed','cancelled','interrupted'].includes(j.status)?`<button type="button" class="btn-quiet" onclick="queueAction('retry',${JSON.stringify(j.id)})">Retry</button>`:''}
+    ${['running','queued','paused'].includes(j.status)?`<button type="button" class="btn-quiet" onclick="queueAction('cancel',${JSON.stringify(j.id)})">Cancel</button>`:''}
+   </div></div>`;
+ const running=q.running.concat(q.queued).map(job).join('')||'<p class="small">Nothing is processing.</p>';
+ const finished=(q.finished||[]).slice(0,6).map(job).join('');
+ const cache=(s.cache||{}),kinds=cache.kinds||{};
+ // Only kinds that hold something: a list of dashes tells the user nothing.
+ const cacheRows=Object.entries(kinds).filter(([,v])=>v.files)
+   .map(([,v])=>`<div class="perf-row"><span>${E(v.label)}</span><span>${fmtBytes(v.bytes)}</span></div>`).join('')
+   ||'<p class="small">Nothing cached yet.</p>';
+ const hw=(caps.hardware||[]).map(h=>h.vendor).join(', ');
+ return `<section class="perf-section">
+   <h3>Now${q.paused?' · paused':''}</h3>
+   ${q.paused?`<button type="button" class="btn-quiet" onclick="queueAction('resume')">Resume all</button>`:`<button type="button" class="btn-quiet" onclick="queueAction('pause')">Pause all</button>`}
+   ${running}
+  </section>
+  <section class="perf-section">
+   <h3>This computer</h3>
+   <div class="perf-row"><span>Processor</span><span>${Math.round(sys.cpu_percent||0)}%</span></div>${bar(sys.cpu_percent)}
+   <div class="perf-row"><span>Memory</span><span>${Math.round(sys.memory_percent||0)}% · ${fmtBytes((sys.memory_available_mb||0)*1024*1024)} free</span></div>${bar(sys.memory_percent)}
+   <div class="perf-row"><span>Load</span><span>${E(sys.pressure||'')}</span></div>
+   ${sys.disk_free_gb!=null?`<div class="perf-row"><span>Disk</span><span>${sys.disk_free_gb} GB free</span></div>`:''}
+   ${gpuRow(sys,caps)}
+   <p class="small">${hw?`Hardware encoding available: ${E(hw)}. Used for editing copies only; delivery always uses the software encoder.`:'No hardware encoder detected; processing uses the processor.'}</p>
+  </section>
+  <section class="perf-section">
+   <h3>Editing copies</h3>
+   <label>Quality<select onchange="savePerfSetting({proxy_quality:this.value})">
+     ${['540p','720p'].map(v=>`<option value="${v}"${s.settings.proxy_quality===v?' selected':''}>${v}</option>`).join('')}
+   </select></label>
+   <label class="perf-check"><input type="checkbox" ${s.settings.proxies_enabled?'checked':''} onchange="savePerfSetting({proxies_enabled:this.checked})"> Use editing copies for playback</label>
+  </section>
+  <section class="perf-section">
+   <h3>Storage</h3>
+   <label>Cache folder<input value="${E(s.settings.cache_root||'')}" placeholder="${E(s.settings.cache_root_resolved||'')}" onchange="savePerfSetting({cache_root:this.value})"></label>
+   <p class="small">${E(s.settings.cache_detail||'')}</p>
+   <div class="perf-row"><span>Free on that drive</span><span>${s.disk&&s.disk.free_gb!=null?s.disk.free_gb+' GB':'–'}</span></div>
+   ${cacheRows}
+   <div class="perf-row"><span>Total cached</span><span>${fmtBytes(cache.total_bytes||0)}</span></div>
+   <div class="perf-actions">
+    <button type="button" class="btn-quiet" onclick="cacheAction(false)">Clean unused</button>
+    <button type="button" class="btn-quiet" onclick="cacheAction(true)">Clear cache</button>
+   </div>
+   <p class="small">Only cached copies are removed. Original footage and project files are never touched.</p>
+  </section>
+  ${speechSection(s.speech)}
+  ${finished?`<section class="perf-section"><h3>Finished</h3>${finished}</section>`:''}`;
+}
+function speechSection(sp){
+ if(!sp)return '';
+ const prog=sp.progress||{};
+ const busy=prog.status==='running';
+ const label=sp.step==='both'?'Install both':'Install the '+({package:'package',model:'model'}[sp.step]||'rest');
+ return `<section class="perf-section">
+  <h3>Speech recognition</h3>
+  <p class="small">${E(sp.message)}</p>
+  ${busy?`<div class="perf-row"><span>${E(prog.detail||'Installing')}</span><span>…</span></div>`:''}
+  ${sp.ready?'':`<div class="perf-actions"><button type="button" class="btn-quiet" onclick="installSpeech()" ${busy?'disabled':''}>${E(label)}</button></div>`}
+  ${prog.status==='failed'?`<p class="small">${E(prog.detail||'')}</p>`:''}
+  <p class="small">Runs on this computer. Nothing is uploaded.</p>
+ </section>`;
+}
+async function queueAction(action,id){
+ try{await api('/api/queue/'+action,'POST',id?{id}:{})}catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function savePerfSetting(patch){
+ try{await api('/api/settings','PATCH',patch);toast('Saved.')}catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function installSpeech(){
+ try{await api('/api/speech/setup','POST',{kind:'auto'});toast('Installing. This can take a few minutes.')}
+ catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function cacheAction(all){
+ const label=all?'Clear every cached copy? Originals are untouched.':'Remove cached copies that have not been used recently?';
+ if(!confirm(label))return;
+ try{const r=await api('/api/cache/cleanup','POST',{all:!!all});toast('Removed '+fmtBytes(r.removed.bytes)+'.')}
+ catch(e){toast(e.message)}
+ refreshPerformance();
+}

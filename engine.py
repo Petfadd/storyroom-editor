@@ -4,6 +4,7 @@ import hashlib, json, os, re, shutil, signal, subprocess, threading, time
 from pathlib import Path
 import cv2
 import imageio_ffmpeg
+import captions as caption_library
 from PIL import Image
 
 # Bump when the picture pipeline changes so cached segments are not reused blindly.
@@ -28,6 +29,16 @@ def picture_encoder(crf=DEFAULT_CRF):
     return ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', str(int(crf))]
 
 QUALITY_PRESETS = {'high': (18, 256), 'standard': (20, 192), 'compact': (23, 160)}
+
+# Transition key -> ffmpeg xfade filter. Kept here rather than imported from
+# transitions.py so the renderer has no dependency on the catalogue's UI payload; the
+# two lists are checked against each other by the tests.
+XFADE_NAMES = {
+    'cut': '', 'fade': 'fade', 'fadeblack': 'fadeblack', 'fadewhite': 'fadewhite',
+    'dissolve': 'dissolve', 'distance': 'distance', 'pixelize': 'pixelize',
+    'circleopen': 'circleopen', 'slideleft': 'slideleft', 'smoothup': 'smoothup',
+    'zoomin': 'zoomin', 'fadefast': 'fadefast', 'fadeslow': 'fadeslow',
+}
 
 
 def quality_settings(story):
@@ -220,6 +231,64 @@ class RenderJob:
             return {'type':'video','path':path,'in_ms':shot['video_in_ms'],'out_ms':shot['video_out_ms']}
         raise RuntimeError(f'Unknown visual media type for event {shot["shot"]}.')
 
+    def _smart_reframe_graph(self, shot, visual, prefix, frames, fps, ow, oh):
+        """The analysed reframe path, or None when this shot has no usable plan.
+
+        Returning None is the normal case and leaves the existing framing branch
+        untouched, so a project without a plan renders exactly as it did before.
+        """
+        plan_data = self.story.get('reframe') or {}
+        if not plan_data.get('scenes'):
+            return None
+        framing = shot.get('framing') or self.story['settings'].get('framing') or 'auto'
+        # Only an explicit request activates a plan. "auto" counts because it is the
+        # untouched default and the editor sets "smart" the moment a plan is stored.
+        # A stored plan must never override a deliberate "Fit", "Crop to fill" or
+        # "Blurred background" choice: those are the user answering the question.
+        if framing not in ('auto','smart'):
+            return None
+        import reframe_plan, reframe_render
+        plan = reframe_plan.ReframePlan.from_dict(plan_data)
+        if not plan.scenes or not plan.width or not plan.height:
+            return None
+        scene = self._reframe_scene_for(plan, shot, visual)
+        if scene is None:
+            return None
+        if scene.locked and scene.keyframes:
+            # A locked frame keeps one position for the whole shot, hand-set or not.
+            keys = scene.keyframes
+            left = keys[0].left
+            expression = f'{left:.4f}'
+        else:
+            expression = scene.expression()
+        width, height = reframe_render.window_for(self._dimensions(visual['path'])[0],
+                                                  self._dimensions(visual['path'])[1],
+                                                  ow, oh)
+        if plan.mode == 'blurred':
+            chart = reframe_render.blurred_extension_filter(ow, oh, min(ow, width))
+        elif plan.mode == 'cinematic':
+            chart = reframe_render.cinematic_filter(expression, width, height,
+                                                    height, ow, oh, fps)
+        else:
+            chart = reframe_render.smart_reframe_filter(expression, width, height,
+                                                        height, ow, oh, fps)
+        return f'[0:v]{prefix},{chart},trim=end_frame={frames}[picture]'
+
+    def _reframe_scene_for(self, plan, shot, visual):
+        """The scene in the plan that covers this shot's interval of its source."""
+        start = (visual.get('in_ms') or 0) / 1000.0
+        end = (visual.get('out_ms') or 0) / 1000.0
+        for scene in plan.scenes:
+            left = scene.start
+            right = scene.start + scene.duration
+            if end > left and start < right:
+                return scene
+        # A shot that starts before the analysed material still gets that material's
+        # framing rather than a silent fall back to the centre.
+        if plan.scenes and start <= plan.scenes[0].start:
+            return plan.scenes[0]
+        return None
+
     def _picture_segment_command(self, shot, index, segment, extra_frames=0):
         settings=self.story['settings'];fps=settings['fps'];frames=shot['duration_frames']+extra_frames;duration=frames/fps
         visual=self._resolve_visual(shot);ow,oh=settings['width'],settings['height']
@@ -257,7 +326,10 @@ class RenderJob:
             # every one keeps the source's own aspect ratio and only chooses what
             # happens in the space that is left over.
             framing=shot.get('framing') or settings.get('framing') or 'auto'
-            if abs(ratio-ow/oh)>.05:
+            smart=self._smart_reframe_graph(shot,visual,prefix,frames,fps,ow,oh)
+            if smart is not None:
+                graph=smart
+            elif abs(ratio-ow/oh)>.05:
                 if framing=='fit':
                     graph=(f'[0:v]{prefix},scale={ow}:{oh}:force_original_aspect_ratio=decrease,'
                            f'pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:color=black,trim=end_frame={frames}[picture]')
@@ -282,12 +354,6 @@ class RenderJob:
         cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads',str(self.threads)]+self.encoder+['-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
         return cmd
 
-    def _xfade_command(self, segments, output):
-        """Blend pictures at original frame boundaries without overlapping narration."""
-        listing=self.work_dir/'picture_concat.txt'
-        listing.write_text(''.join("file '"+str(Path(x).resolve())+"'\n" for x in segments))
-        return [self.ffmpeg,'-y','-hide_banner','-loglevel','warning','-f','concat','-safe','0','-i',str(listing),'-an','-c:v','copy','-movflags','+faststart',str(output)]
-
     def _concat_command(self, segments, output):
         """Join clean-cut segments without re-encoding or re-timing a single frame."""
         listing=self.work_dir/'picture_concat.txt'
@@ -295,20 +361,70 @@ class RenderJob:
         return [self.ffmpeg,'-y','-hide_banner','-loglevel','warning','-f','concat','-safe','0','-i',str(listing),
                 '-an','-c:v','copy','-movflags','+faststart',str(output)]
 
-    def _smooth_transition_chunks(self, segments):
-        chunks=[];i=0;shots=self.story['shots'];fps=self.story['settings']['fps']
-        while i<len(shots):
-            n=shots[i].get('transition_handle_frames',0)
-            if not n: chunks.append(segments[i]);i+=1;continue
-            if i+1>=len(shots):raise RuntimeError('A transition cannot extend past the final scene.')
-            out=self.work_dir/f'flow_{i+1:03d}_{i+2:03d}.mp4';frames=shots[i]['duration_frames']+shots[i+1]['duration_frames']
-            graph=f'[0:v]settb=1/{fps},setpts=N[a];[1:v]settb=1/{fps},setpts=N[b];[a][b]xfade=transition=fade:duration={n/fps:.9f}:offset={shots[i]["duration_frames"]/fps:.9f},setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[picture]'
-            cmd=[self.ffmpeg,'-y','-v','warning','-i',str(segments[i]),'-i',str(segments[i+1]),'-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads','2']+self.encoder+['-pix_fmt','yuv420p','-video_track_timescale','90000',str(out)]
-            self.update(stage='Blending short, handle-backed picture transitions',progress=82+i/len(shots)*3)
-            self._run_process(cmd);cap=cv2.VideoCapture(str(out));actual=int(cap.get(7));cap.release()
-            if actual!=frames:raise RuntimeError('A picture transition changed the timeline length; export stopped.')
-            chunks.append(out);i+=2
-        return chunks
+    def _transition_chain(self, segments):
+        """Blend every boundary in one pass, each with its own transition.
+
+        The old model paired scenes and blended each pair with a single filter. That
+        could only ever work when every other boundary happened to be a cut: a pair
+        consumes both of its scenes, so two adjacent blends had nothing left to join.
+        Chaining instead gives each boundary its own xfade, applied to the running
+        result, so a film can move cut -> circle open -> cut -> long fade and every
+        one of those choices is honoured.
+
+        The length arithmetic follows the filter, not the edit. Each segment carries an
+        outgoing `handle`; every xfade consumes exactly that many frames from the
+        running stream; a concat consumes none. So the picture stays exactly as long as
+        the scene durations, which is what keeps narration in sync. That total is
+        checked before the filter runs and again against the encoded file afterwards,
+        because a transition that silently changes programme length would desynchronise
+        the rest of the film.
+        """
+        shots=self.story['shots'];fps=self.story['settings']['fps']
+        if not any(shot.get('transition_handle_frames',0) for shot in shots):
+            return None                     # nothing to blend: the copy path is exact
+        for i,shot in enumerate(shots[:-1]):
+            n=shot.get('transition_handle_frames',0)
+            if n>shots[i+1]['duration_frames']+shots[i+1].get('transition_handle_frames',0):
+                raise RuntimeError(f'Scene {i+1}: the transition is longer than the scene it leads into.')
+        inputs=[];filters=[]
+        seg_frames=[]
+        for i,segment in enumerate(segments):
+            inputs+=['-i',str(segment)]
+            seg_frames.append(shots[i]['duration_frames']+shots[i].get('transition_handle_frames',0))
+            filters.append(f'[{i}:v]settb=1/{fps},setpts=N[v{i}]')
+        label='v0';running=seg_frames[0]
+        for i,shot in enumerate(shots[:-1]):
+            n=shot.get('transition_handle_frames',0)
+            key=shot.get('transition') or 'dissolve'
+            name=XFADE_NAMES.get(key,'fade')
+            out=f'n{i}'
+            if not n or not name:
+                # A cut is a concat, not a transition. Joining two already-timed streams
+                # costs nothing and, unlike xfade, cannot drop a frame at the seam.
+                filters.append(f'[{label}][v{i+1}]concat=n=2:v=1:a=0[cv{i}]')
+                running+=seg_frames[i+1]
+            else:
+                offset=(running-n)/fps
+                filters.append(f'[{label}][v{i+1}]xfade=transition={name}:'
+                               f'duration={n/fps:.9f}:offset={offset:.9f}[cv{i}]')
+                running+=seg_frames[i+1]-n
+            # concat rewrites the timebase to 1/1000000 and xfade refuses that on its next
+            # input, so every stage hands on a clean 1/fps stream.
+            filters.append(f'[cv{i}]settb=1/{fps},setpts=N[{out}]')
+            label=out
+        filters.append(f'[{label}]setparams=range=limited:color_primaries=bt709:'
+                       'color_trc=bt709:colorspace=bt709[picture]')
+        total=running
+        expected=sum(shot['duration_frames'] for shot in shots)
+        if total!=expected:
+            raise RuntimeError('The transitions would change the programme length; export stopped.')
+        output=self.work_dir/'picture_chain.mp4'
+        cmd=[self.ffmpeg,'-y','-v','warning']+inputs+[
+            '-filter_complex_threads','1','-filter_complex',';'.join(filters),
+            '-map','[picture]','-an','-frames:v',str(total),'-threads','2']+self.encoder+[
+            '-pix_fmt','yuv420p','-video_track_timescale','90000',str(output)]
+        return cmd,total,output
+
 
     # ---- segment reuse -------------------------------------------------------
     # A scene's picture is a pure function of its source interval, its treatment and the
@@ -424,23 +540,35 @@ class RenderJob:
             self.log(f'Reused {reused} already-rendered scene segments from an earlier render; only changed scenes were re-encoded.')
             self.update(detail=f'{reused} of {len(shots)} scenes reused from the previous render')
         end_transitions = self._stage('transitions')
-        segments=self._smooth_transition_chunks(segments)
+        # One pass for the whole film. Every boundary names its own transition, so this
+        # is where "each scene gets a different transition" becomes pictures rather than
+        # a list of labels that all render as the same cross fade.
+        chain=self._transition_chain(segments)
         end_transitions()
-        self.update(stage='Joining narration-timed scenes', progress=85.0, detail='Short picture dissolves and clean action cuts · narration remains continuous')
-        # The join exists to blend handle-backed dissolves. With clean cuts there is nothing
-        # to blend, so the segments ARE the picture timeline: joining them would write the
-        # same frames twice - once into an intermediate file and again into the master -
-        # which on a 30-minute programme is 42s of pure copy for no change in output. The
-        # renderer's only transition policy is clean cuts, so this is the normal path.
-        any_handles = any(shot.get('transition_handle_frames', 0) for shot in shots)
+        self.update(stage='Joining narration-timed scenes', progress=85.0,
+                    detail='Per-scene transitions and clean action cuts · narration remains continuous')
         end_join = self._stage('join')
-        if any_handles:
-            self._run_process(self._xfade_command(segments, base_path))
-        else:
+        if chain is None:
+            # No boundary blends, so the segments ARE the picture timeline. Copying them
+            # into an intermediate would write the same frames twice for no change.
             self._run_process(self._concat_command(segments, base_path))
+        else:
+            cmd,total,produced=chain
+            self._run_process(cmd)
+            cap=cv2.VideoCapture(str(produced));actual=int(cap.get(cv2.CAP_PROP_FRAME_COUNT));cap.release()
+            if actual!=total:
+                raise RuntimeError('The picture transitions changed the programme length; export stopped.')
+            # The chain is the picture master from here on; base_path was only ever the
+            # name the rest of the render expects to read.
+            base_path=produced
         end_join()
         if not base_path.exists() or base_path.stat().st_size < 10000: raise RuntimeError('The cross-dissolve pass did not produce a usable picture timeline.')
-        subtitle_style = 'FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=1.5,Shadow=0,Alignment=2,MarginV=34,MarginL=85,MarginR=85'
+        # The caption look is a project preset, and the same record drives the editor
+        # preview, so what is chosen is what is burned in. Sizes scale with the master
+        # height: a 4K render that kept 1080p numbers would draw quarter-size text.
+        subtitle_style = caption_library.ass_style_for_size(
+            (self.story.get('settings') or {}).get('caption_preset') or caption_library.DEFAULT,
+            settings['height'])
         filters = []
         # Both files are generated or uploaded locally; escape paths for libavfilter.
         def subtitle_filter(path, style=None):

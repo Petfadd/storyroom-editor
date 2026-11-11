@@ -108,11 +108,35 @@ def enqueue(root, target, path, kind, duration):
         data = {'status': 'queued', 'source_signature': _signature(path), 'source': path.name,
                 'kind': kind, 'duration_s': duration, 'stages': {}, 'started_at': time.time(), 'audio_timing_version': 2}
         _write(result_path(root, target), data)
-        threading.Thread(target=_run, args=(root, target, path, data), daemon=True).start()
+        # Through the shared queue rather than its own thread. Analysis is heavy and
+        # must not compete with a render, which is precisely what it used to do.
+        import jobqueue
+        jobqueue.QUEUE.submit(jobqueue.Job(
+            'understanding-%s-%s' % (root.name, target),
+            'Media analysis · %s' % (target or 'source'),
+            lambda context: _run_queued(root, target, path, data, context),
+            priority=jobqueue.PRIORITY_ANALYSIS, weight='heavy',
+            project=root.name, meta={'target': target}))
         return True
     except Exception:
         with _GUARD: _RUNNING.discard(key)
         raise
+
+
+def _run_queued(root, target, path, data, context):
+    """Run the analysis inside the queue, reporting progress and honouring pause.
+
+    `_run` streams stage updates into the report file as it goes, so the queue only has
+    to hold the slot, report liveness and let cancellation through.
+    """
+    def note(stage, detail=None):
+        if context is not None and detail:
+            context.set(detail=str(detail)[:200])
+    try:
+        return _run(root, target, path, data, observer=note)
+    finally:
+        with _GUARD:
+            _RUNNING.discard((str(root), target))
 
 
 def enqueue_sound_events(root, target, path):
@@ -466,8 +490,13 @@ def _vision(path, scenes, on_progress=None):
             except (OSError, urllib.error.URLError): pass
 
 
-def _run(root, target, source, data):
+def _run(root, target, source, data, observer=None):
+    """Analyse one source. `observer(stage, detail)` reports progress to the queue."""
     key = (str(root), target); report = result_path(root, target)
+    def announce(stage, detail=None):
+        if observer:
+            try: observer(stage, detail)
+            except Exception: pass
     try:
         with _WORKER:
             data['status'] = 'running'; _write(report, data)
@@ -483,7 +512,9 @@ def _run(root, target, source, data):
                     def checkpoint_transcript(result):
                         data['stages']['transcript'] = {'status': 'running', 'result': result}
                         _write(report, data)
+                    announce('transcript', 'Reading speech')
                     _stage(data, report, 'transcript', lambda: _transcribe(wav, checkpoint_transcript))
+                    announce('audio_features', 'Measuring the audio')
                     _stage(data, report, 'audio_features', lambda: _audio_features(wav))
                     if _yamnet_model_path() and Path(_yamnet_model_path()).is_file():
                         _stage(data, report, 'sound_events', lambda: _sound_events(wav))
@@ -496,12 +527,14 @@ def _run(root, target, source, data):
                     else:
                         data['stages']['speakers'] = {'status': 'not_requested', 'detail': 'Optional local pyannote speaker diarization is not configured.'}
             if data['kind'] == 'video':
+                announce('scene_changes', 'Finding scene changes')
                 _stage(data, report, 'scene_changes', lambda: _scenes(source, data['duration_s']))
                 cuts = data['stages']['scene_changes']
                 if cuts['status'] == 'complete':
                     def checkpoint_visual(result):
                         data['stages']['visual'] = {'status': 'running', 'result': result}
                         _write(report, data)
+                    announce('visual', 'Examining frames')
                     _stage(data, report, 'visual', lambda: _vision(source, cuts['result'], checkpoint_visual))
                 else:
                     data['stages']['visual'] = {'status':'unavailable','detail':'Scene detection failed; no visual frames analysed.'}

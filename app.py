@@ -11,6 +11,8 @@ import cv2, imageio_ffmpeg
 BASE=Path(__file__).resolve().parent
 from engine import RenderJob
 import upscale
+import transitions
+import captions
 # Verified playback schedules, keyed by project. Rebuilt only when the project or
 # plan revision changes.
 SCHEDULE_CACHE={}
@@ -41,6 +43,14 @@ PROJECTS=BASE/'projects';PROJECTS.mkdir(exist_ok=True)
 MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
+# Machine-wide settings and the single job queue. The queue is created here so every
+# feature submits into the same dispatcher instead of starting its own threads.
+import settings_store, jobqueue, proxy as proxy_module
+SETTINGS=settings_store.Settings(BASE/'settings.json');SETTINGS.load()
+QUEUE=jobqueue.QUEUE
+QUEUE_DISK_STATE=BASE/'.cache'/'queue_state.json'
+jobqueue.QUEUE._state_path=QUEUE_DISK_STATE
+jobqueue.QUEUE.start()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
 # Output geometry is a project setting, not a constant. `format` picks an aspect; `size`
 # picks the pixel target. Anything the engine can encode is allowed, so the same build
@@ -208,6 +218,13 @@ def save(p):
  for scene in p['scenes']:
   asset=by_id.get(scene.get('asset_id'));scene['source_label']=asset['source_label'] if asset else '';scene['source_role']='reserve' if asset and asset['reserve'] else 'primary' if asset else ''
  p['updated']=time.time();write(folder(p['id'])/'project.json',p)
+ # Keep a recoverable copy after every successful save. Best effort by design: a
+ # project that cannot write history must still save. The snapshot is taken after the
+ # write so it always records a state the app has already accepted.
+ try:
+  import project_history, os as _os
+  if not _os.environ.get('STORYROOM_NO_HISTORY'):project_history.snapshot(folder(p['id']),p)
+ except Exception:pass
 def project_io_lock(func):
  @wraps(func)
  def locked(pid,*args,**kwargs):
@@ -305,7 +322,7 @@ def source_overlap_interval(scene, asset, project=None):
   interval=verified_source_interval(project,scene,asset)
   if interval is not None:return interval
  start=float(scene.get('in_s') or 0)
- end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene.get('transition')=='dissolve' else 0))/30
+ end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if transitions.is_transition(scene.get('transition')) else 0))/30
  row=scene.get('plan_row') or {}
  if (row.get('strict_production') and scene.get('transition')=='cut' and
      asset.get('original_name',asset.get('name','')).casefold()==str(row.get('source_file','')).casefold() and
@@ -362,16 +379,21 @@ def scene_review(p,i,s,a,ranges,last,final=False):
   if not(s['context_only'] and s['notes'].strip() and a['category']!='person' and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
   else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
  lastscene=i==len(p['scenes'])-1
- if s['transition']=='dissolve' and lastscene:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
- if s['transition']=='dissolve' and not lastscene and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
- if s['transition']=='dissolve' and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
+ blended=transitions.is_transition(s.get('transition'))
+ lastscene=lastscene
+ if blended and lastscene:errors.append(pre+'the last scene cannot blend into a nonexistent next scene.')
+ # Adjacent blends are allowed and render correctly: the chain applies each boundary to
+ # the running result, so a scene can open on one transition and close on another. The
+ # only real limit is room -- a blend may not be longer than the scene it leads into,
+ # checked below -- because the handle has to come from somewhere.
+ if blended and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the transition is longer than the incoming picture beat.')
  still=is_still(p,a)
  if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
  if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
  if a.get('derived_from'):errors.append(pre+'extracted frames are not permitted; use original uploaded media.')
  if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
  if a['kind']=='video':
-  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
+  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if transitions.is_transition(s.get('transition')) else 0))/30
   if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
   compare_in,compare_out=source_overlap_interval(s,a,p)
   approved_pairs,approved_beats=beat_approvals(p)
@@ -518,6 +540,8 @@ def public(p):
  d['export_plan']=export_plan(p)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
+ import reframe_jobs
+ d['reframe_job']=reframe_jobs.snapshot(p['id'])
  if p['id'] not in JOBS and d['render']['status'] in ['running','queued']:d['render'].update(status='interrupted',stage='Previous export interrupted; start a new export',progress=0)
  if d['render'].get('output'):
   d['render']['url']=f'/api/projects/{p["id"]}/exports/{d["render"]["output"]}'
@@ -587,6 +611,54 @@ def home():
  return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options,
                         ai_upscale=upscale.describe())
 
+@app.get('/api/transitions')
+def transition_library():
+ # The library dialog is built from this, so a transition cannot be offered in the UI
+ # that the renderer has no filter for.
+ return jsonify(transitions.catalogue())
+
+
+@app.post('/api/projects/<pid>/transition-suggest')
+def suggest_transitions(pid):
+ """Assign a transition to every boundary, each from that scene's own content.
+
+ Rewrites only `transition` and its handle. Nothing about timing, source, approval or
+ narration is touched, so this is safe to run on an approved timeline -- and it says
+ up front what it changed, because an automatic rewrite of editorial choices should
+ never be silent.
+ """
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('scenes'):raise BadRequest('Build a storyboard before suggesting transitions.')
+  data=request.get_json(silent=True) or {}
+  intensity=data.get('intensity') or transitions.DEFAULT_INTENSITY
+  if intensity not in transitions.INTENSITY:raise BadRequest('Choose an intensity: '+', '.join(transitions.INTENSITY))
+  frames=transitions.DURATION.get(data.get('duration') or transitions.DEFAULT_DURATION,(None,15))[1]
+  if p.get('transition_policy')=='clean_cuts_only' and frames:
+   # Suggesting blends on a clean-cuts production would produce a timeline that fails
+   # its own validation. Allowing dissolves is the human's decision, not this call's.
+   raise BadRequest('This production uses clean cuts only. Allow transitions before suggesting them.')
+  keys=transitions.suggest_all(p['scenes'],intensity)
+  changed=0
+  for scene,key in zip(p['scenes'],keys):
+   if scene.get('transition')!=key:
+    changed+=1
+   scene['transition']=key
+   scene['transition_handle_frames']=frames if transitions.is_transition(key) else 0
+  p['manual_scene_edits']=True
+  save(p)
+  return jsonify({'project':public(p),'changed':changed,
+                  'summary':{k:keys.count(k) for k in set(keys) if k!='cut'}})
+
+
+@app.get('/api/captions')
+def caption_library():
+ # The dialog is built from this, so it can only offer looks the renderer can burn in.
+ data=captions.catalogue()
+ data['selected']=(load(request.args.get('pid')) if request.args.get('pid') else {}).get('caption_preset') or captions.DEFAULT
+ return jsonify(data)
+
+
 @app.get('/api/picture-tools')
 def picture_tools():
  # Reported to the browser so the export page can say plainly whether AI upscaling is
@@ -641,6 +713,32 @@ def create():
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
+def queue_proxy(pid,project,source):
+ """Queue an editing copy for one uploaded video, at priority 2.
+
+ Priority 2 rather than 3 because a proxy is what makes the clip editable at all:
+ scrubbing the original while it is being made is the slow experience this exists to
+ remove. It is still queue work, so it waits behind anything already running.
+ """
+ import cache, proxy as proxy_module
+ settings=SETTINGS.load()
+ if not settings.get('proxies_enabled'):return None
+ store,_detail=SETTINGS.cache_store()
+ try:info=proxy_module.probe(FFMPEG,source)
+ except OSError:return None
+ if not proxy_module.needs_proxy(info):return None
+ quality=settings.get('proxy_quality') or proxy_module.DEFAULT_QUALITY
+ needed=int((info.get('height') or 0)*(info.get('duration') or 0)*0.02*1024**2)
+ warning=cache.would_fill_disk(store,max(needed,50*1024**2))
+ if warning:return None
+ def work(context):
+  return proxy_module.ensure(FFMPEG,store,source,quality,context=context)
+ job=jobqueue.Job('proxy-'+cache.entry_key(source,'proxy',quality),
+                  'Editing copy · '+Path(source).name,
+                  work,priority=jobqueue.PRIORITY_MEDIA,weight='light',
+                  project=pid,meta={'asset':str(Path(source).name),'quality':quality})
+ return QUEUE.submit(job)
+
 @app.get('/api/projects/<pid>')
 def get_project(pid):
  with LOCKS[pid]:
@@ -743,6 +841,12 @@ def update_project(pid):
   if 'burn_captions' in d:
    if not isinstance(d['burn_captions'],bool):raise BadRequest('On-screen captions must be on or off.')
    p['burn_captions']=d['burn_captions']
+  if 'caption_preset' in d:
+   # The preset is a project setting so the preview and the export read the same value;
+   # an unknown key is refused rather than silently rendered as the default, because a
+   # caption style the editor cannot show is worse than an error.
+   if d['caption_preset'] not in captions.PRESETS:raise BadRequest('Choose a caption style from the library.')
+   p['caption_preset']=d['caption_preset']
   # The script's Cut Action fade. A fade ramps brightness on existing frames, so
   # it never changes a cut, a frame count or the reviewed timing.
   if 'documentary_fades' in d:
@@ -764,6 +868,271 @@ def update_project(pid):
   save(p);body=public(p)
   if response_extra:body.update(response_extra)
   return jsonify(body)
+@app.get('/api/reframe/capabilities')
+def reframe_capabilities():
+ # Reported honestly so the editor never offers a detector this machine cannot run.
+ from reframe_detect import describe
+ return jsonify(describe())
+
+@app.post('/api/projects/<pid>/reframe/analyse')
+def start_reframe_analysis(pid):
+ import reframe_jobs
+ from reframe_render import window_for
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if reframe_jobs.running(pid):raise BadRequest('Analysis is already running for this production.')
+  asset_id=d.get('asset_id')
+  assets=[a for a in p['assets'] if a.get('kind')=='video']
+  if asset_id:
+   assets=[a for a in assets if a['id']==asset_id]
+  if not assets:raise BadRequest('Add a video before analysing framing.')
+  asset=assets[0]
+  path=folder(pid)/asset['path']
+  if not path.is_file():raise BadRequest('The video for this analysis is missing from the production folder.')
+  width,height=int(d.get('width') or p.get('output_width') or 1080),int(d.get('height') or p.get('output_height') or 1920)
+  if (width,height) not in ((1080,1920),(1920,1080),(1080,1080),(1440,2560),(2560,1440),(2160,3840),(3840,2160),(2160,2160)):
+   raise BadRequest('Reframing is available for 9:16, 16:9 and 1:1 at 1080p, 2K or 4K.')
+  mode=str(d.get('mode') or 'smart_crop')
+  if mode not in ('smart_crop','blurred','cinematic'):raise BadRequest('Choose smart subject crop, full scene with blended background, or cinematic composition.')
+  def persist(payload):
+   with LOCKS[pid]:
+    fresh=load(pid)
+    fresh['reframe']=payload
+    fresh['framing']='blur' if payload.get('mode')=='blurred' else 'smart'
+    save(fresh)
+  try:job=reframe_jobs.start(pid,path,width,height,mode,persist)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify({'job':job,'asset':asset['id']}),202
+
+@app.get('/api/projects/<pid>/reframe/analyse')
+def reframe_analysis_status(pid):
+ import reframe_jobs
+ p=load(pid)
+ return jsonify({'job':reframe_jobs.snapshot(pid),'plan':(p.get('reframe') or {})})
+
+@app.patch('/api/projects/<pid>/reframe')
+def update_reframe_plan(pid):
+ # Manual correction. Every one of these edits exists so that an automatic framing
+ # decision can be overruled without leaving the editor.
+ import reframe_plan
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  plan=reframe_plan.ReframePlan.from_dict(p.get('reframe') or {})
+  if not plan.scenes:raise BadRequest('Analyse the footage before adjusting framing.')
+  d=request.get_json(silent=True) or {}
+  if 'mode' in d:
+   if d['mode'] not in ('smart_crop','blurred','cinematic'):raise BadRequest('Unknown framing mode.')
+   plan.mode=d['mode'];p['framing']='blur' if d['mode']=='blurred' else 'smart'
+  if 'locked' in d:
+   for scene in plan.scenes:scene.locked=bool(d['locked'])
+   if plan.scenes:plan.scenes[0].manual=True
+  scene_index=d.get('scene')
+  if scene_index is not None:
+   scene=next((s for s in plan.scenes if s.index==int(scene_index)),None)
+   if scene is None:raise BadRequest('That scene is not in the framing plan.')
+   if 'locked' in d:scene.locked=bool(d['locked'])
+   if 'follow' in d:
+    # Uses the path stored for that person at analysis time, so the frame really moves
+    # to them rather than only recording a preference.
+    subject=None if d['follow'] in (None,'','any') else int(d['follow'])
+    if subject is None:scene.follow=None
+    elif not scene.follow_person(subject):
+     raise BadRequest('No framing was stored for that person. Analyse the footage again.')
+   if 'shift' in d:
+    # Nudging the whole scene is the correction people reach for first.
+    delta=float(d['shift'])
+    if abs(delta)>plan.source_width:raise BadRequest('That moves the frame further than the picture is wide.')
+    for key in scene.keyframes:key.left+=delta
+   if 'zoom' in d:
+    width=float(d['zoom'])
+    if width<=0:raise BadRequest('Zoom must be a positive window width.')
+    for key in scene.keyframes:key.width=width
+   if 'keyframes' in d:
+    from reframe_track import Keyframe
+    rebuilt=[]
+    for raw in d['keyframes']:
+     try:rebuilt.append(Keyframe(float(raw['t']),float(raw['x']),float(raw.get('w') or (scene.keyframes[0].width if scene.keyframes else 0))))
+     except (KeyError,TypeError,ValueError):raise BadRequest('Each keyframe needs a time and an x position.')
+    if not rebuilt:raise BadRequest('A scene needs at least one keyframe.')
+    rebuilt.sort(key=lambda k:k.t);scene.keyframes=rebuilt
+   scene.manual=True
+  p['reframe']=plan.as_dict()
+  save(p)
+  return jsonify({'plan':p['reframe']})
+
+@app.delete('/api/projects/<pid>/reframe')
+def clear_reframe_plan(pid):
+ import reframe_jobs
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  p.pop('reframe',None);p['framing']='auto'
+  reframe_jobs.forget(pid)
+  save(p)
+  return jsonify(public(p))
+
+@app.get('/api/system/status')
+def system_status():
+ """What the machine is doing, what is queued, and what the queue can do."""
+ import resources
+ caps=resources.capabilities()
+ return jsonify({'queue':QUEUE.snapshot(),'encoders':caps,
+                 'settings':SETTINGS.as_dict(),
+                 'disk':settings_store.disk_report(SETTINGS.cache_store()[0]),
+                 'cache':SETTINGS.cache_store()[0].usage()})
+
+@app.get('/api/speech/setup')
+def speech_setup_status():
+ """Whether local speech is ready, and what is missing if not."""
+ import speech_setup
+ state=speech_setup.status()
+ state['progress']=speech_setup.install_progress()
+ return jsonify(state)
+
+@app.post('/api/speech/setup')
+def speech_setup_start():
+ """Download and verify the missing half. Only ever runs because someone asked."""
+ import speech_setup
+ d=request.get_json(silent=True) or {}
+ result=speech_setup.start(str(d.get('kind') or 'auto'))
+ if not result.get('started'):raise BadRequest(result.get('reason') or 'Nothing to install.')
+ return jsonify(result),202
+
+@app.get('/api/settings')
+def get_settings():
+ return jsonify(SETTINGS.as_dict())
+
+@app.patch('/api/settings')
+def update_settings():
+ d=request.get_json(silent=True) or {}
+ before=SETTINGS.load()
+ try:saved=SETTINGS.save(d)
+ except ValueError as e:raise BadRequest(str(e))
+ # Changing the quality of the editing copies should actually change them. Without
+ # this the new setting would apply only to future uploads, and every existing clip
+ # would keep playing at the old quality with no explanation.
+ requeued=0
+ if saved.get('proxies_enabled') and saved.get('proxy_quality')!=before.get('proxy_quality'):
+  for project in PROJECTS.iterdir():
+   if not (project/'project.json').exists():continue
+   try:
+    p=json.loads((project/'project.json').read_text())
+   except (OSError,ValueError):continue
+   for asset in p.get('assets') or []:
+    if asset.get('kind')!='video':continue
+    source=project/asset['path']
+    if not source.is_file():continue
+    try:
+     if queue_proxy(p.get('id') or project.name,p,source):requeued+=1
+    except Exception:pass
+ fresh=SETTINGS.as_dict();fresh['disk']=settings_store.disk_report(SETTINGS.cache_store()[0])
+ fresh['proxies_requeued']=requeued
+ return jsonify(fresh)
+
+@app.get('/api/cache')
+def cache_usage():
+ store,detail=SETTINGS.cache_store()
+ return jsonify({'usage':store.usage(),'disk':settings_store.disk_report(store),
+                 'detail':detail,'root':str(store.root)})
+
+@app.post('/api/cache/cleanup')
+def cache_cleanup():
+ """Remove cached entries that have not been used recently.
+
+ Only this app's cache directories are touched. Originals live in sources/ and
+ assets/, which no cache routine can reach.
+ """
+ store,_detail=SETTINGS.cache_store()
+ d=request.get_json(silent=True) or {}
+ if d.get('all') is True:removed=store.clear()
+ else:removed=store.cleanup(keep_seconds=int(SETTINGS.load().get('keep_cache_days') or 14)*86400)
+ return jsonify({'removed':removed,'usage':store.usage(),
+                 'disk':settings_store.disk_report(store)})
+
+@app.post('/api/queue/pause')
+def queue_pause():
+ d=request.get_json(silent=True) or {}
+ return jsonify(QUEUE.snapshot()) if QUEUE.pause(d.get('id')) else (jsonify({'error':'That job is not running.'}),400)
+
+@app.post('/api/queue/resume')
+def queue_resume():
+ d=request.get_json(silent=True) or {}
+ return jsonify(QUEUE.snapshot()) if QUEUE.resume(d.get('id')) else (jsonify({'error':'That job is not paused.'}),400)
+
+@app.post('/api/queue/cancel')
+def queue_cancel():
+ d=request.get_json(silent=True) or {}
+ if not d.get('id'):raise BadRequest('Choose a job to cancel.')
+ if not QUEUE.cancel(d['id']):raise BadRequest('That job has already finished.')
+ return jsonify(QUEUE.snapshot())
+
+@app.post('/api/queue/retry')
+def queue_retry():
+ d=request.get_json(silent=True) or {}
+ if not d.get('id'):raise BadRequest('Choose a job to retry.')
+ if not QUEUE.retry(d['id']):raise BadRequest('Only a failed, cancelled or interrupted job can be retried.')
+ return jsonify(QUEUE.snapshot())
+
+@app.post('/api/queue/clear')
+def queue_clear():
+ removed=QUEUE.clear_finished()
+ return jsonify({'removed':removed,'queue':QUEUE.snapshot()})
+
+@app.post('/api/projects/<pid>/proxies')
+def build_proxies(pid):
+ """Queue editing copies for every video in this production."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);root=folder(pid)
+  queued=[]
+  for asset in p['assets']:
+   if asset.get('kind')!='video':continue
+   source=root/asset['path']
+   if not source.is_file():continue
+   job=queue_proxy(pid,p,source)
+   if job:queued.append({'asset':asset['id'],'job':job.id})
+  store,_detail=SETTINGS.cache_store()
+  return jsonify({'queued':queued,'queue':QUEUE.snapshot(),
+                  'usage':store.usage()}),202
+
+@app.get('/api/projects/<pid>/proxies')
+def proxy_status(pid):
+ p=load(pid);root=folder(pid);store,_detail=SETTINGS.cache_store()
+ items=[]
+ for asset in p['assets']:
+  if asset.get('kind')!='video':continue
+  source=root/asset['path']
+  meta=proxy_module.metadata(store,source) if source.is_file() else None
+  items.append({'asset':asset['id'],'name':asset.get('original_name') or asset.get('name'),
+                'ready':bool(meta),'height':(meta or {}).get('height'),
+                'quality':(meta or {}).get('quality')})
+ return jsonify({'proxies':items,'enabled':SETTINGS.load().get('proxies_enabled'),
+                 'quality':SETTINGS.load().get('proxy_quality')})
+
+@app.get('/api/projects/<pid>/history')
+def project_history_list(pid):
+ import project_history
+ root=folder(pid)
+ return jsonify({'versions':project_history.versions(root)[:40],
+                 'size_bytes':project_history.size_bytes(root)})
+
+@app.post('/api/projects/<pid>/history/<ident>/restore')
+def project_history_restore(pid,ident):
+ import project_history
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);root=folder(pid)
+  state=project_history.restore(root,ident,p)
+  if state is None:raise NotFound('That saved version is no longer available.')
+  # Keep identity and timestamps of the project being recovered, and nothing else.
+  state['id']=p['id']
+  save(state)
+  return jsonify(public(load(pid)))
+
+@app.delete('/api/projects/<pid>/history')
+def project_history_clear(pid):
+ import project_history
+ with LOCKS[pid]:
+  editable(pid);removed=project_history.clear(folder(pid))
+  return jsonify({'cleared':removed})
+
 @app.get('/api/projects/<pid>/imports/<key>')
 def import_status(pid,key):
  from import_status import token,get
@@ -946,7 +1315,7 @@ def perform_upload(pid,key=''):
      old_id=scene.get('asset_id')
      if old_id not in duplicate_ids|derived_ids:continue
      affected+=1;scene['approved']=False;scene['source_replacement_pending']=name;scene.pop('thumbnail',None)
-     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if scene.get('transition')=='dissolve' else 0))/30
+     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if transitions.is_transition(scene.get('transition')) else 0))/30
      if old_id in derived_ids or float(scene.get('in_s') or 0)+length>duration+.001:
       scene['review_previous_asset_id']=old_id;scene['asset_id']=None;unassigned+=1
       scene['replacement_issue']='The replacement video is too short for this shot, or this shot used a frame derived from the previous upload.'
@@ -991,6 +1360,13 @@ def perform_upload(pid,key=''):
   except Exception:
    if kind=='asset':dest.unlink(missing_ok=True)
    raise
+  # Queue an editing copy. Never inline: an upload of a long 4K file must return as
+  # soon as the bytes are on disk, and the encode waits for its turn. A failure here
+  # must not fail the upload -- the original is already safely stored, and a proxy is
+  # a convenience that can always be made later.
+  if kind=='asset' and dest.suffix.lower() in ('.mp4','.mov'):
+   try:queue_proxy(pid,p,dest)
+   except Exception:app.logger.exception('Could not queue an editing copy for %s',dest.name)
   replacement_warnings=remove_local_files(root,old_paths) if kind=='asset' and old_paths else []
   from automatic import maybe_queue
   maybe_queue(sys.modules[__name__],p)
@@ -1518,14 +1894,21 @@ def edit_scene(pid,sid):
    s['motion']=d['motion']
   if d.get('focus_position') in ['left','center','right']:s['focus_position']=d['focus_position']
   if d.get('motion_strength') in ['subtle','purposeful','strong']:s['motion_strength']=d['motion_strength']
-  if d.get('transition') in ['cut','dissolve']:
-   # A dissolve is refused while the production is clean-cuts-only rather than silently
-   # rewritten to a cut. Silently forcing it meant the request appeared to succeed and the
-   # scene then validated as a cut, so the policy error it should have produced could never
-   # be reached and there was nothing to explain why the dissolve never appeared.
-   if d['transition']=='dissolve' and p.get('transition_policy')=='clean_cuts_only':
-    raise BadRequest('This production uses clean cuts only. Allow dissolves for it before setting a dissolve on a scene.')
-   s['transition']=d['transition'];s['transition_handle_frames']=(s.get('transition_handle_frames') or 4) if s['transition']=='dissolve' else 0
+  if 'transition' in d and d['transition'] not in transitions.LIBRARY:
+   # An unknown name used to be dropped silently, so the request looked accepted and the
+   # boundary quietly stayed as it was. Refusing is the only honest answer: the caller
+   # picked a transition the renderer cannot produce.
+   raise BadRequest('Choose a transition from the library: '+', '.join(transitions.LIBRARY))
+  if d.get('transition') in transitions.LIBRARY:
+   # A blended transition is refused while the production is clean-cuts-only rather than
+   # silently rewritten to a cut. Silently forcing it meant the request appeared to succeed
+   # and the scene then validated as a cut, so the policy error it should have produced
+   # could never be reached and there was nothing to explain why it never appeared.
+   blended=transitions.is_transition(d['transition'])
+   if blended and p.get('transition_policy')=='clean_cuts_only':
+    raise BadRequest('This production uses clean cuts only. Allow transitions for it before setting one on a scene.')
+   s['transition']=d['transition']
+   s['transition_handle_frames']=(int(d.get('transition_handle_frames') or 0) or 4) if blended else 0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
   if s['approved'] and s.get('asset_id'):
@@ -1606,7 +1989,13 @@ def manifest(p, strict=None, enhance_picture=False):
  for i,s in enumerate(p['scenes']):
   a=assets[s['asset_id']];frames=s['frame_out']-s['frame_in'];m=motion(s,i);signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
   while signature in signatures and m.get('move')!='static':m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
-  signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
+  signatures.add(signature)
+  # The final scene has no boundary after it, so a handle on it would reserve source
+  # frames and add picture frames that no transition ever consumes -- which lengths the
+  # programme by the handle and pushes the narration out of sync. The handle exists only
+  # where a transition will actually use it.
+  last_scene=i==len(p['scenes'])-1
+  extra=s.get('transition_handle_frames',4) if (transitions.is_transition(s.get('transition')) and not last_scene) else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
    # A photograph is prepared once per (source revision, canvas, framing, mode) and then
@@ -1635,9 +2024,11 @@ def manifest(p, strict=None, enhance_picture=False):
   # Framing is per shot so a single differently-shaped insert can be fitted without
   # changing how the rest of the film is framed.
   shot['framing']=s.get('framing') or p.get('framing','auto')
+  # The engine blends whatever this names. `cut` carries no handle, so it costs nothing.
+  shot['transition']=s.get('transition','cut')
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture,'framing':p.get('framing','auto'),'quality':p.get('quality','standard')},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture,'framing':p.get('framing','auto'),'quality':p.get('quality','standard'),'caption_preset':p.get('caption_preset') or captions.DEFAULT},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
 @app.post('/api/projects/<pid>/continuous-preview')
 def prepare_continuous_preview(pid):
@@ -1891,17 +2282,21 @@ def update_documentary_music(pid):
   if 'enabled' in data:
    if not isinstance(data['enabled'],bool):raise BadRequest('Music on/off must be true or false.')
    music['enabled']=data['enabled']
-  # The bed is continuous: it plays under the narration and under every sound
-  # bite, at the one volume the user set. Saved requests that still ask for a
-  # duck or a mute are accepted and stored as 'full', so an old client cannot
-  # reintroduce either behaviour.
-  if 'duck_under_speech' in data and data['duck_under_speech'] is not False:
-   raise BadRequest('The background music plays continuously; it is not ducked or cut.')
+  # The bed ducks under speech. It is one continuous piece for the whole film -- it is
+  # never cut, and it comes back up wherever the speaking stops -- but while narration or
+  # a sound bite is carrying words it sits underneath them, which is what makes speech
+  # intelligible. `duck` is therefore the only accepted mode, and an old client asking
+  # for a flat 'full' bed is stored as a duck rather than being honoured.
+  if 'duck_under_speech' in data:
+   if not isinstance(data['duck_under_speech'],bool):raise BadRequest('Ducking must be true or false.')
+   if data['duck_under_speech'] is False:
+    raise BadRequest('The background music ducks under speech; it cannot be switched to play flat.')
   for key in ('narration_level','speech_mode'):
    if key in data:
-    if data[key] not in ('full','mute','duck'):raise BadRequest('Music plays continuously, under narration and sound bites alike.')
-    music['narration_level']='full'
+    if data[key] not in ('full','mute','duck'):raise BadRequest('Choose ducked music, or turn the bed off.')
+    music['narration_level']='duck'
   music.pop('duck_under_speech',None)
+  music['narration_level']='duck'
   if 'volume_percent' in data:
    value=data['volume_percent']
    if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Music volume must be a whole percentage from 0 to 100.')
@@ -2061,7 +2456,14 @@ def documentary_bite_speech_status(pid):
   if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite speech is available only in a documentary project.')
   plan=annotate_plan(p,folder(pid),load_plan(folder(pid)))
  ok,reason=bite_speech.available()
- return jsonify({'available':ok,'detail':reason,'model':bite_speech.model_dir().name if ok else '',
+ # Speech needs two separate things -- the package and the model -- and saying only
+ # "not installed" leaves the user with nowhere to go. The setup state names which half
+ # is missing and whether it can be installed from here.
+ import speech_setup
+ setup=speech_setup.status()
+ return jsonify({'available':ok,'detail':reason or setup['message'],
+                 'setup':setup,
+                 'model':bite_speech.model_dir().name if ok else '',
                  'revision':plan['revision'],'captions':int(p.get('captions') or 0),
                  'bites':[{'id':b['id'],'script_beat':b.get('script_beat'),'has_speech':bool(b.get('speech'))} for b in plan['bites']]})
 
@@ -2407,6 +2809,24 @@ def asset_file(pid,aid):
  root=folder(pid)
  if a.get('kind')=='video' and str(a.get('path','')).lower().endswith(('.mp4','.mov')):
   source=root/a['path']
+  # Playback and scrubbing use the small editing copy. Export never comes through
+  # here -- engine.py opens the sources folder directly -- so a proxy can never
+  # reach a delivered frame. Only an existing proxy is used: this request must not
+  # trigger an encode, or the monitor would stall waiting for one.
+  try:
+   # Read the settings once, not twice. This runs on every video request, including
+   # every scrub, and each load re-parses settings.json from disk.
+   settings=SETTINGS.load()
+   if settings.get('proxies_enabled'):
+    store,_detail=SETTINGS.cache_store()
+    prepared=proxy_module.metadata(store,source)
+    # Only a proxy made at the CURRENTLY selected quality is used. A proxy built at a
+    # different quality is not wrong, just not what was asked for, and serving it would
+    # make the quality setting appear to do nothing.
+    wanted=settings.get('proxy_quality') or proxy_module.DEFAULT_QUALITY
+    if prepared and prepared.get('quality')==wanted:
+     return send_file(prepared['path'],conditional=True)
+  except (OSError,ValueError):pass
   # A player cannot seek a file whose index is at the end without fetching all of
   # it; that is what left the monitor black. Serve a cached fast-start copy and
   # leave the uploaded original untouched.
