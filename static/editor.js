@@ -1269,6 +1269,24 @@ function fmtBytes(n){
  if(n<1024**3)return (n/1024**2).toFixed(1)+' MB';
  return (n/1024**3).toFixed(2)+' GB';
 }
+// Graphics, in the three states that actually differ: a card we can name and read,
+// a card we can name but whose memory the driver will not report, and no card found.
+// Memory is only shown when it is real -- a made-up zero would read as an idle GPU.
+function gpuRow(sys,caps){
+ const gpu=(caps&&caps.gpu)||{};
+ const name=gpu.name||sys.gpu_name||'';
+ if(!name)return '';
+ const total=gpu.vram_mb||sys.vram_total_mb;
+ const used=sys.vram_used_mb;
+ let detail='';
+ if(total&&used!=null)detail=`${(used/1024).toFixed(1)} of ${(total/1024).toFixed(1)} GB in use`;
+ else if(total)detail=`${(total/1024).toFixed(1)} GB`;
+ else detail='memory not reported by the driver';
+ const pct=total&&used!=null?Math.min(100,used*100/total):0;
+ return `<div class="perf-row"><span>Graphics</span><span>${E(name)}</span></div>
+   ${total&&used!=null?`<div class="perf-bar"><i style="width:${pct}%"></i></div>`:''}
+   <p class="small">${E(detail)}</p>`;
+}
 function fmtTime(seconds){
  if(seconds==null)return '';
  if(seconds<60)return Math.max(1,Math.round(seconds))+'s left';
@@ -1320,7 +1338,8 @@ function performanceHTML(s){
    <div class="perf-row"><span>Memory</span><span>${Math.round(sys.memory_percent||0)}% · ${fmtBytes((sys.memory_available_mb||0)*1024*1024)} free</span></div>${bar(sys.memory_percent)}
    <div class="perf-row"><span>Load</span><span>${E(sys.pressure||'')}</span></div>
    ${sys.disk_free_gb!=null?`<div class="perf-row"><span>Disk</span><span>${sys.disk_free_gb} GB free</span></div>`:''}
-   <p class="small">${hw?`Hardware encoding available: ${E(hw)}.`:'No hardware encoder detected; processing uses the processor.'}</p>
+   ${gpuRow(sys,caps)}
+   <p class="small">${hw?`Hardware encoding available: ${E(hw)}. Used for editing copies only; delivery always uses the software encoder.`:'No hardware encoder detected; processing uses the processor.'}</p>
   </section>
   <section class="perf-section">
    <h3>Editing copies</h3>

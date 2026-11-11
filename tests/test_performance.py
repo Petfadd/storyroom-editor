@@ -703,5 +703,60 @@ def _process_state(pid: str) -> str:
 
 
 
+class GraphicsReportingTest(unittest.TestCase):
+    """The panel must be able to say what the graphics hardware is, and must not
+    invent a figure when the driver will not give one."""
+
+    def test_gpu_detection_never_raises_and_returns_a_shape(self):
+        import resources
+        info = resources.gpu_info()
+        for key in ('name', 'vram_mb', 'devices', 'source', 'detected'):
+            self.assertIn(key, info)
+        self.assertIsInstance(info['devices'], list)
+        self.assertIsInstance(info['detected'], bool)
+        # Whatever it found, a detected card must be named.
+        if info['detected']:
+            self.assertTrue(info['name'])
+
+    def test_a_machine_without_a_readable_gpu_reports_none_rather_than_zero(self):
+        import resources
+        info = resources.gpu_info()
+        if info['detected']:
+            self.skipTest('this machine has a readable GPU')
+        self.assertEqual(info['devices'], [])
+        self.assertIsNone(info['vram_mb'])
+        self.assertIsNone(resources.vram_usage_mb() or None)
+
+    def test_the_snapshot_carries_graphics_without_breaking_the_other_readings(self):
+        import resources
+        reading = resources.snapshot().as_dict()
+        for key in ('cpu_percent', 'memory_percent', 'disk_free_gb'):
+            self.assertIsNotNone(reading[key])
+        self.assertIn('vram_used_mb', reading)
+        self.assertIn('vram_total_mb', reading)
+        self.assertIn('gpu_name', reading)
+
+    def test_capabilities_report_the_gpu_separately_from_encoder_support(self):
+        """A card can be present while ffmpeg has no encoder for it. Those are two
+        different answers and the user needs to see both."""
+        import resources
+        caps = resources.capabilities(refresh=True)
+        self.assertIn('gpu', caps)
+        self.assertIn('hardware_available', caps)
+        self.assertIn('devices', caps['gpu'])
+
+    def test_detection_is_cached_so_the_panel_can_poll(self):
+        import resources, time
+        resources.reset_capabilities()
+        first = resources.gpu_info()
+        started = time.monotonic()
+        for _ in range(50):
+            resources.gpu_info()
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 0.05,
+                        f'50 calls took {elapsed*1000:.0f} ms, so detection is not cached')
+        self.assertEqual(first, resources.gpu_info())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -67,6 +67,11 @@ class Snapshot:
     load_percent: float
     pressure: str                 # 'idle' | 'busy' | 'strained'
     detail: str = ''
+    # Graphics memory, when the driver will say. None means "not readable", which is
+    # different from zero and is shown as unavailable rather than as an idle GPU.
+    vram_used_mb: float | None = None
+    vram_total_mb: float | None = None
+    gpu_name: str = ''
 
     def as_dict(self) -> dict:
         return {'cpu_percent': round(self.cpu_percent, 1),
@@ -74,7 +79,10 @@ class Snapshot:
                 'memory_available_mb': round(self.memory_available_mb),
                 'disk_free_gb': None if self.disk_free_gb is None else round(self.disk_free_gb, 1),
                 'load_percent': round(self.load_percent, 1),
-                'pressure': self.pressure, 'detail': self.detail}
+                'pressure': self.pressure, 'detail': self.detail,
+                'vram_used_mb': None if self.vram_used_mb is None else round(self.vram_used_mb),
+                'vram_total_mb': None if self.vram_total_mb is None else round(self.vram_total_mb),
+                'gpu_name': self.gpu_name}
 
 
 def _usable_cores() -> int:
@@ -84,6 +92,129 @@ def _usable_cores() -> int:
     except Exception:                                    # pragma: no cover
         total = 2
     return max(1, total - 1)
+
+
+_GPU_CACHE: dict = {'at': 0.0, 'value': None}
+_GPU_TTL_SECONDS = 60.0
+
+
+def _run_quiet(command) -> str:
+    """Run a small system query and return its output, or '' if it is unavailable."""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        return result.stdout if result.returncode == 0 else ''
+    except Exception:
+        return ''
+
+
+def gpu_info() -> dict:
+    """What graphics hardware this machine has, and how much memory it can use.
+
+    Read from the system rather than assumed: the app is told nothing about the user's
+    GPU, and a machine may have an integrated chip, a discrete card, both, or neither.
+    Windows is asked through its own tooling, Linux through nvidia-smi where it exists,
+    and anything unreadable is reported as unknown rather than guessed at.
+
+    Cached for a minute: this shells out, and the status panel asks once a second.
+    """
+    now = time.monotonic()
+    if _GPU_CACHE['value'] is not None and now - _GPU_CACHE['at'] < _GPU_TTL_SECONDS:
+        return _GPU_CACHE['value']
+
+    devices: list[dict] = []
+    name = ''
+    vram_mb = None
+    source = ''
+
+    if os.name == 'nt':
+        # Win32_VideoController gives every adapter, including the integrated one.
+        query = ('Get-CimInstance Win32_VideoController | '
+                 'Select-Object Name,AdapterRAM | ConvertTo-Json -Compress')
+        raw = _run_quiet(['powershell', '-NoProfile', '-NonInteractive', '-Command', query])
+        if raw.strip():
+            import json as _json
+            try:
+                parsed = _json.loads(raw)
+                entries = parsed if isinstance(parsed, list) else [parsed]
+                for entry in entries:
+                    label = str(entry.get('Name') or '').strip()
+                    if not label:
+                        continue
+                    ram = entry.get('AdapterRAM') or 0
+                    by_mb = round(int(ram) / (1024 * 1024)) if ram else None
+                    devices.append({'name': label, 'vram_mb': by_mb})
+                source = 'wmi'
+            except (ValueError, TypeError):
+                pass
+        # AdapterRAM is a 32-bit field and reports nonsense above 4 GB, so ask the
+        # driver registry for the real figure when one is available.
+        if devices and _run_quiet(['where', 'nvidia-smi']).strip():
+            pass
+    elif sys.platform == 'darwin':
+        raw = _run_quiet(['system_profiler', 'SPDisplaysDataType'])
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('Chipset Model:'):
+                devices.append({'name': stripped.split(':', 1)[1].strip(), 'vram_mb': None})
+        source = 'system_profiler'
+
+    if not devices:
+        raw = _run_quiet(['nvidia-smi', '--query-gpu=name,memory.total',
+                          '--format=csv,noheader,nounits'])
+        for line in raw.splitlines():
+            parts = [part.strip() for part in line.split(',')]
+            if parts and parts[0]:
+                try:
+                    memory = int(float(parts[1])) if len(parts) > 1 else None
+                except (ValueError, IndexError):
+                    memory = None
+                devices.append({'name': parts[0], 'vram_mb': memory})
+        if devices:
+            source = 'nvidia-smi'
+
+    if not devices:
+        # Any Linux driver that exposes DRM can be read here.
+        try:
+            for card in sorted(Path('/sys/class/drm').glob('card*/device/mem_info_vram_total')):
+                total = int(card.read_text().strip()) // (1024 * 1024)
+                label = ''
+                vendor = card.parent / 'uevent'
+                if vendor.exists():
+                    for row in vendor.read_text().splitlines():
+                        if row.startswith('DRIVER='):
+                            label = row.split('=', 1)[1]
+                devices.append({'name': label or card.parts[-3], 'vram_mb': total})
+            if devices:
+                source = 'drm'
+        except Exception:
+            pass
+
+    if devices:
+        name = devices[0]['name']
+        vram_mb = next((d['vram_mb'] for d in devices if d.get('vram_mb')), None)
+
+    value = {'name': name, 'vram_mb': vram_mb, 'devices': devices,
+             'source': source, 'detected': bool(devices)}
+    _GPU_CACHE['at'] = now
+    _GPU_CACHE['value'] = value
+    return value
+
+
+def vram_usage_mb() -> float | None:
+    """Video memory in use right now, where the driver can be asked.
+
+    Only nvidia-smi reports this in a way that is worth parsing. Elsewhere the answer is
+    None, and the panel says the figure is unavailable rather than showing a zero that
+    would read as "nothing is using the GPU".
+    """
+    raw = _run_quiet(['nvidia-smi', '--query-gpu=memory.used',
+                      '--format=csv,noheader,nounits'])
+    for line in raw.splitlines():
+        try:
+            return float(line.strip())
+        except ValueError:
+            continue
+    return None
 
 
 def snapshot(cache_dir: Path | None = None) -> Snapshot:
@@ -125,7 +256,16 @@ def snapshot(cache_dir: Path | None = None) -> Snapshot:
               f'({available_mb:.0f} MB free)')
     if free_gb is not None:
         detail += f', disk {free_gb:.1f} GB free'
-    return Snapshot(cpu, memory_percent, available_mb, free_gb, load, pressure, detail)
+    # Graphics is reported separately and never fails the reading: a machine without a
+    # readable driver is a normal machine, and the rest of the numbers are still true.
+    try:
+        graphics = gpu_info()
+        used = vram_usage_mb()
+    except Exception:                                    # pragma: no cover
+        graphics, used = {'name': '', 'vram_mb': None}, None
+    return Snapshot(cpu, memory_percent, available_mb, free_gb, load, pressure, detail,
+                    vram_used_mb=used, vram_total_mb=graphics.get('vram_mb'),
+                    gpu_name=graphics.get('name') or '')
 
 
 def admit(weight: str = 'heavy') -> tuple[bool, str]:
@@ -218,6 +358,10 @@ def capabilities(ffmpeg: str | None = None, refresh: bool = False) -> dict:
         'cores': os.cpu_count() or 2,
         'planning_cores': _usable_cores(),
         'platform': sys.platform,
+        # What the graphics hardware actually is, separately from whether ffmpeg can
+        # use it. The two answers differ often: a card can be present and its encoder
+        # missing from this build, which is exactly what a user needs to see.
+        'gpu': gpu_info(),
     }
     return _CAPABILITIES
 
@@ -226,6 +370,8 @@ def reset_capabilities() -> None:
     """Forget the cached answer. Used by tests and by the settings page."""
     global _CAPABILITIES
     _CAPABILITIES = None
+    _GPU_CACHE['value'] = None
+    _GPU_CACHE['at'] = 0.0
 
 
 def encoder_for(purpose: str) -> list[str]:

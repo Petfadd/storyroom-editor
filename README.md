@@ -51,7 +51,12 @@ two seconds while running, 0 while paused, 386 after resuming.
 **Hardware.** Encoders are tested rather than assumed: a build can list `h264_nvenc` on a
 machine with no NVIDIA driver, so each one is checked with a real one-frame encode.
 Hardware encoding is used for proxies only. Delivery stays on the software encoder,
-because at equal bitrate the hardware path is visibly worse.
+because at equal bitrate the hardware path is visibly worse. The graphics card itself is
+identified separately from encoder support -- Windows is asked through WMI, Linux through
+nvidia-smi or the DRM driver, macOS through `system_profiler` -- because a card can be
+present while this ffmpeg build has no encoder for it, and those are two different
+answers. Video memory is shown when the driver reports it and shown as unavailable when
+it does not, never as a zero that would look like an idle GPU.
 
 **Caching.** Everything expensive is cached under a key built from the source file's size,
 its modification time and the settings that shaped the result, so an entry cannot go
