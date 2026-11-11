@@ -1247,3 +1247,132 @@ window.stepTrackVolume=function(track,delta){
  if(P?.edit_mode==='documentary'&&window.docStepVolume)return window.docStepVolume(track,delta);
  if(track==='music'&&window.docStepVolume)return window.docStepVolume('music',delta);
 };
+
+/* ---------------------------------------------------------------------------
+   Processing and storage. One panel for the queue, the machine and the cache,
+   so the user can always answer "what is it doing and why is it slow".
+--------------------------------------------------------------------------- */
+let perfTimer=null;
+function openPerformance(){
+ const d=$('#performance-dialog');if(!d)return;
+ d.showModal();refreshPerformance();
+ clearInterval(perfTimer);perfTimer=setInterval(refreshPerformance,2000);
+}
+function closePerformance(){
+ const d=$('#performance-dialog');if(!d)return;
+ clearInterval(perfTimer);perfTimer=null;d.close();
+}
+function fmtBytes(n){
+ if(n==null)return '–';
+ if(n<1024)return n+' B';
+ if(n<1024**2)return (n/1024).toFixed(0)+' KB';
+ if(n<1024**3)return (n/1024**2).toFixed(1)+' MB';
+ return (n/1024**3).toFixed(2)+' GB';
+}
+function fmtTime(seconds){
+ if(seconds==null)return '';
+ if(seconds<60)return Math.max(1,Math.round(seconds))+'s left';
+ const m=Math.floor(seconds/60),s=Math.round(seconds%60);
+ return m+'m '+s+'s left';
+}
+async function refreshPerformance(){
+ if(!$('#performance-dialog')?.open)return;
+ try{
+  const s=await api('/api/system/status');
+  try{s.speech=await api('/api/speech/setup')}catch{s.speech=null}
+  P&&(P.system_status=s);
+  $('#performance-body').innerHTML=performanceHTML(s);
+ }catch(e){$('#performance-body').innerHTML=`<p class="small">${E(e.message)}</p>`}
+}
+function performanceHTML(s){
+ const q=s.queue,sys=s.queue.system||{},caps=s.encoders||{};
+ const bar=v=>`<div class="perf-bar"><i style="width:${Math.max(0,Math.min(100,v||0))}%"></i></div>`;
+ const job=j=>`<div class="perf-job">
+   <div class="perf-job-top"><strong>${E(j.title)}</strong>
+    <span class="perf-state ${j.status}">${E(j.status)}</span></div>
+   ${j.detail?`<p class="small">${E(j.detail)}</p>`:''}
+   ${j.status==='running'||j.status==='paused'?bar(j.progress):''}
+   <p class="small">${j.status==='running'?Math.round(j.progress)+'%':''}
+    ${fmtTime(j.remaining_seconds)?' · '+fmtTime(j.remaining_seconds):''}
+    ${j.error?' · '+E(j.error):''}</p>
+   <div class="perf-actions">
+    ${j.status==='running'?`<button type="button" class="btn-quiet" onclick="queueAction('pause',${JSON.stringify(j.id)})">Pause</button>`:''}
+    ${j.status==='paused'?`<button type="button" class="btn-quiet" onclick="queueAction('resume',${JSON.stringify(j.id)})">Resume</button>`:''}
+    ${['failed','cancelled','interrupted'].includes(j.status)?`<button type="button" class="btn-quiet" onclick="queueAction('retry',${JSON.stringify(j.id)})">Retry</button>`:''}
+    ${['running','queued','paused'].includes(j.status)?`<button type="button" class="btn-quiet" onclick="queueAction('cancel',${JSON.stringify(j.id)})">Cancel</button>`:''}
+   </div></div>`;
+ const running=q.running.concat(q.queued).map(job).join('')||'<p class="small">Nothing is processing.</p>';
+ const finished=(q.finished||[]).slice(0,6).map(job).join('');
+ const cache=(s.cache||{}),kinds=cache.kinds||{};
+ const cacheRows=Object.entries(kinds).map(([k,v])=>`<div class="perf-row"><span>${E(v.label)}</span><span>${v.files?fmtBytes(v.bytes):'–'}</span></div>`).join('');
+ const hw=(caps.hardware||[]).map(h=>h.vendor).join(', ');
+ return `<section class="perf-section">
+   <h3>Now${q.paused?' · paused':''}</h3>
+   ${q.paused?`<button type="button" class="btn-quiet" onclick="queueAction('resume')">Resume all</button>`:`<button type="button" class="btn-quiet" onclick="queueAction('pause')">Pause all</button>`}
+   ${running}
+  </section>
+  <section class="perf-section">
+   <h3>This computer</h3>
+   <div class="perf-row"><span>Processor</span><span>${Math.round(sys.cpu_percent||0)}%</span></div>${bar(sys.cpu_percent)}
+   <div class="perf-row"><span>Memory</span><span>${Math.round(sys.memory_percent||0)}% · ${fmtBytes((sys.memory_available_mb||0)*1024*1024)} free</span></div>${bar(sys.memory_percent)}
+   <div class="perf-row"><span>Load</span><span>${E(sys.pressure||'')}</span></div>
+   <p class="small">${E(sys.detail||'')}</p>
+   <p class="small">${hw?`Hardware encoding available: ${E(hw)}.`:'No hardware encoder detected; processing uses the processor.'}</p>
+  </section>
+  <section class="perf-section">
+   <h3>Editing copies</h3>
+   <label>Quality<select onchange="savePerfSetting({proxy_quality:this.value})">
+     ${['540p','720p'].map(v=>`<option value="${v}"${s.settings.proxy_quality===v?' selected':''}>${v}</option>`).join('')}
+   </select></label>
+   <label class="perf-check"><input type="checkbox" ${s.settings.proxies_enabled?'checked':''} onchange="savePerfSetting({proxies_enabled:this.checked})"> Use editing copies for playback</label>
+  </section>
+  <section class="perf-section">
+   <h3>Storage</h3>
+   <label>Cache folder<input value="${E(s.settings.cache_root||'')}" placeholder="${E(s.settings.cache_root_resolved||'')}" onchange="savePerfSetting({cache_root:this.value})"></label>
+   <p class="small">${E(s.settings.cache_detail||'')}</p>
+   <div class="perf-row"><span>Free on that drive</span><span>${s.disk&&s.disk.free_gb!=null?s.disk.free_gb+' GB':'–'}</span></div>
+   ${cacheRows}
+   <div class="perf-row"><span>Total cached</span><span>${fmtBytes(cache.total_bytes||0)}</span></div>
+   <div class="perf-actions">
+    <button type="button" class="btn-quiet" onclick="cacheAction(false)">Clean unused</button>
+    <button type="button" class="btn-quiet" onclick="cacheAction(true)">Clear cache</button>
+   </div>
+   <p class="small">Only cached copies are removed. Original footage and project files are never touched.</p>
+  </section>
+  ${speechSection(s.speech)}
+  ${finished?`<section class="perf-section"><h3>Finished</h3>${finished}</section>`:''}`;
+}
+function speechSection(sp){
+ if(!sp)return '';
+ const prog=sp.progress||{};
+ const busy=prog.status==='running';
+ const label=sp.step==='both'?'Install both':'Install the '+({package:'package',model:'model'}[sp.step]||'rest');
+ return `<section class="perf-section">
+  <h3>Speech recognition</h3>
+  <p class="small">${E(sp.message)}</p>
+  ${busy?`<div class="perf-row"><span>${E(prog.detail||'Installing')}</span><span>…</span></div>`:''}
+  ${sp.ready?'':`<div class="perf-actions"><button type="button" class="btn-quiet" onclick="installSpeech()" ${busy?'disabled':''}>${E(label)}</button></div>`}
+  ${prog.status==='failed'?`<p class="small">${E(prog.detail||'')}</p>`:''}
+  <p class="small">Runs on this computer. Nothing is uploaded.</p>
+ </section>`;
+}
+async function queueAction(action,id){
+ try{await api('/api/queue/'+action,'POST',id?{id}:{})}catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function savePerfSetting(patch){
+ try{await api('/api/settings','PATCH',patch);toast('Saved.')}catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function installSpeech(){
+ try{await api('/api/speech/setup','POST',{kind:'auto'});toast('Installing. This can take a few minutes.')}
+ catch(e){toast(e.message)}
+ refreshPerformance();
+}
+async function cacheAction(all){
+ const label=all?'Clear every cached copy? Originals are untouched.':'Remove cached copies that have not been used recently?';
+ if(!confirm(label))return;
+ try{const r=await api('/api/cache/cleanup','POST',{all:!!all});toast('Removed '+fmtBytes(r.removed.bytes)+'.')}
+ catch(e){toast(e.message)}
+ refreshPerformance();
+}

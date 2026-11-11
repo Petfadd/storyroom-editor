@@ -7,3 +7,6 @@ __pycache__/
 
 # Media delivered for review stays out of the repository
 *.mp4
+
+# Machine-local settings (cache location, proxy quality)
+settings.json

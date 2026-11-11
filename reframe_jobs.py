@@ -52,16 +52,18 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
                      'started_at': time.time(), 'updated_at': time.time(),
                      'source': str(source), 'mode': mode}
 
-    def work():
+    def work(report=None):
         try:
             import reframe_analyse
             _set(pid, status='running', detail='Looking for people and scene changes',
                  progress=1)
+            def on_sample(done, total):
+                percent=max(1, int(done * 100 / max(1, total)))
+                _set(pid, progress=percent, detail=f'Analysed {done} of {total} samples')
+                if report is not None:report.set(percent, f'Analysed {done} of {total} samples')
+
             result = reframe_analyse.analyse(
-                Path(source), out_width, out_height, mode=mode,
-                progress=lambda done, total: _set(
-                    pid, progress=max(1, int(done * 100 / max(1, total))),
-                    detail=f'Analysed {done} of {total} samples'))
+                Path(source), out_width, out_height, mode=mode, progress=on_sample)
             payload = result.plan.as_dict()
             payload['notes'] = result.notes
             save(payload)
@@ -79,7 +81,19 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
             with GUARD:
                 _PENDING.discard(pid)
 
-    threading.Thread(target=work, name=f'reframe-{pid}', daemon=True).start()
+    # Submit into the shared queue rather than a private thread. Analysis is heavy and
+    # used to run alongside renders; now it waits its turn at priority 3.
+    import jobqueue
+    def queued(context):
+        try:
+            return work(report=context)
+        finally:
+            pass
+
+    jobqueue.QUEUE.submit(jobqueue.Job(
+        f'reframe-{pid}', 'Framing analysis', queued,
+        priority=jobqueue.PRIORITY_ANALYSIS, weight='heavy', project=pid,
+        meta={'mode': mode}))
     return snapshot(pid)
 
 

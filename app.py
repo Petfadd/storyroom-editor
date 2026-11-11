@@ -43,6 +43,14 @@ PROJECTS=BASE/'projects';PROJECTS.mkdir(exist_ok=True)
 MAX_VIDEO_BYTES=8*1024**3
 app=Flask(__name__);app.config['TEMPLATES_AUTO_RELOAD']=True;app.config['MAX_CONTENT_LENGTH']=MAX_VIDEO_BYTES
 LOCKS=defaultdict(threading.RLock);THUMBNAIL_SLOTS=threading.BoundedSemaphore(2);JOBS={};FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
+# Machine-wide settings and the single job queue. The queue is created here so every
+# feature submits into the same dispatcher instead of starting its own threads.
+import settings_store, jobqueue, proxy as proxy_module
+SETTINGS=settings_store.Settings(BASE/'settings.json');SETTINGS.load()
+QUEUE=jobqueue.QUEUE
+QUEUE_DISK_STATE=BASE/'.cache'/'queue_state.json'
+jobqueue.QUEUE._state_path=QUEUE_DISK_STATE
+jobqueue.QUEUE.start()
 PROFILES=json.loads((BASE/'blueprints/style_profiles.json').read_text())
 # Output geometry is a project setting, not a constant. `format` picks an aspect; `size`
 # picks the pixel target. Anything the engine can encode is allowed, so the same build
@@ -210,6 +218,13 @@ def save(p):
  for scene in p['scenes']:
   asset=by_id.get(scene.get('asset_id'));scene['source_label']=asset['source_label'] if asset else '';scene['source_role']='reserve' if asset and asset['reserve'] else 'primary' if asset else ''
  p['updated']=time.time();write(folder(p['id'])/'project.json',p)
+ # Keep a recoverable copy after every successful save. Best effort by design: a
+ # project that cannot write history must still save. The snapshot is taken after the
+ # write so it always records a state the app has already accepted.
+ try:
+  import project_history, os as _os
+  if not _os.environ.get('STORYROOM_NO_HISTORY'):project_history.snapshot(folder(p['id']),p)
+ except Exception:pass
 def project_io_lock(func):
  @wraps(func)
  def locked(pid,*args,**kwargs):
@@ -698,6 +713,32 @@ def create():
  from approval import ensure_automatic_policy
  ensure_automatic_policy(p)
  write(root/'project.json',p);write(root/'catalog.json',{'slots':{}});return jsonify(public(p)),201
+def queue_proxy(pid,project,source):
+ """Queue an editing copy for one uploaded video, at priority 2.
+
+ Priority 2 rather than 3 because a proxy is what makes the clip editable at all:
+ scrubbing the original while it is being made is the slow experience this exists to
+ remove. It is still queue work, so it waits behind anything already running.
+ """
+ import cache, proxy as proxy_module
+ settings=SETTINGS.load()
+ if not settings.get('proxies_enabled'):return None
+ store,_detail=SETTINGS.cache_store()
+ try:info=proxy_module.probe(FFMPEG,source)
+ except OSError:return None
+ if not proxy_module.needs_proxy(info):return None
+ quality=settings.get('proxy_quality') or proxy_module.DEFAULT_QUALITY
+ needed=int((info.get('height') or 0)*(info.get('duration') or 0)*0.02*1024**2)
+ warning=cache.would_fill_disk(store,max(needed,50*1024**2))
+ if warning:return None
+ def work(context):
+  return proxy_module.ensure(FFMPEG,store,source,quality,context=context)
+ job=jobqueue.Job('proxy-'+cache.entry_key(source,'proxy',quality),
+                  'Editing copy · '+Path(source).name,
+                  work,priority=jobqueue.PRIORITY_MEDIA,weight='light',
+                  project=pid,meta={'asset':str(Path(source).name),'quality':quality})
+ return QUEUE.submit(job)
+
 @app.get('/api/projects/<pid>')
 def get_project(pid):
  with LOCKS[pid]:
@@ -929,6 +970,150 @@ def clear_reframe_plan(pid):
   save(p)
   return jsonify(public(p))
 
+@app.get('/api/system/status')
+def system_status():
+ """What the machine is doing, what is queued, and what the queue can do."""
+ import resources
+ caps=resources.capabilities()
+ return jsonify({'queue':QUEUE.snapshot(),'encoders':caps,
+                 'settings':SETTINGS.as_dict(),
+                 'disk':settings_store.disk_report(SETTINGS.cache_store()[0]),
+                 'cache':SETTINGS.cache_store()[0].usage()})
+
+@app.get('/api/speech/setup')
+def speech_setup_status():
+ """Whether local speech is ready, and what is missing if not."""
+ import speech_setup
+ state=speech_setup.status()
+ state['progress']=speech_setup.install_progress()
+ return jsonify(state)
+
+@app.post('/api/speech/setup')
+def speech_setup_start():
+ """Download and verify the missing half. Only ever runs because someone asked."""
+ import speech_setup
+ d=request.get_json(silent=True) or {}
+ result=speech_setup.start(str(d.get('kind') or 'auto'))
+ if not result.get('started'):raise BadRequest(result.get('reason') or 'Nothing to install.')
+ return jsonify(result),202
+
+@app.get('/api/settings')
+def get_settings():
+ return jsonify(SETTINGS.as_dict())
+
+@app.patch('/api/settings')
+def update_settings():
+ d=request.get_json(silent=True) or {}
+ try:saved=SETTINGS.save(d)
+ except ValueError as e:raise BadRequest(str(e))
+ fresh=SETTINGS.as_dict();fresh['disk']=settings_store.disk_report(SETTINGS.cache_store()[0])
+ return jsonify(fresh)
+
+@app.get('/api/cache')
+def cache_usage():
+ store,detail=SETTINGS.cache_store()
+ return jsonify({'usage':store.usage(),'disk':settings_store.disk_report(store),
+                 'detail':detail,'root':str(store.root)})
+
+@app.post('/api/cache/cleanup')
+def cache_cleanup():
+ """Remove cached entries that have not been used recently.
+
+ Only this app's cache directories are touched. Originals live in sources/ and
+ assets/, which no cache routine can reach.
+ """
+ store,_detail=SETTINGS.cache_store()
+ d=request.get_json(silent=True) or {}
+ if d.get('all') is True:removed=store.clear()
+ else:removed=store.cleanup(keep_seconds=int(SETTINGS.load().get('keep_cache_days') or 14)*86400)
+ return jsonify({'removed':removed,'usage':store.usage(),
+                 'disk':settings_store.disk_report(store)})
+
+@app.post('/api/queue/pause')
+def queue_pause():
+ d=request.get_json(silent=True) or {}
+ return jsonify(QUEUE.snapshot()) if QUEUE.pause(d.get('id')) else (jsonify({'error':'That job is not running.'}),400)
+
+@app.post('/api/queue/resume')
+def queue_resume():
+ d=request.get_json(silent=True) or {}
+ return jsonify(QUEUE.snapshot()) if QUEUE.resume(d.get('id')) else (jsonify({'error':'That job is not paused.'}),400)
+
+@app.post('/api/queue/cancel')
+def queue_cancel():
+ d=request.get_json(silent=True) or {}
+ if not d.get('id'):raise BadRequest('Choose a job to cancel.')
+ if not QUEUE.cancel(d['id']):raise BadRequest('That job has already finished.')
+ return jsonify(QUEUE.snapshot())
+
+@app.post('/api/queue/retry')
+def queue_retry():
+ d=request.get_json(silent=True) or {}
+ if not d.get('id'):raise BadRequest('Choose a job to retry.')
+ if not QUEUE.retry(d['id']):raise BadRequest('Only a failed, cancelled or interrupted job can be retried.')
+ return jsonify(QUEUE.snapshot())
+
+@app.post('/api/queue/clear')
+def queue_clear():
+ removed=QUEUE.clear_finished()
+ return jsonify({'removed':removed,'queue':QUEUE.snapshot()})
+
+@app.post('/api/projects/<pid>/proxies')
+def build_proxies(pid):
+ """Queue editing copies for every video in this production."""
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);root=folder(pid)
+  queued=[]
+  for asset in p['assets']:
+   if asset.get('kind')!='video':continue
+   source=root/asset['path']
+   if not source.is_file():continue
+   job=queue_proxy(pid,p,source)
+   if job:queued.append({'asset':asset['id'],'job':job.id})
+  store,_detail=SETTINGS.cache_store()
+  return jsonify({'queued':queued,'queue':QUEUE.snapshot(),
+                  'usage':store.usage()}),202
+
+@app.get('/api/projects/<pid>/proxies')
+def proxy_status(pid):
+ p=load(pid);root=folder(pid);store,_detail=SETTINGS.cache_store()
+ items=[]
+ for asset in p['assets']:
+  if asset.get('kind')!='video':continue
+  source=root/asset['path']
+  meta=proxy_module.metadata(store,source) if source.is_file() else None
+  items.append({'asset':asset['id'],'name':asset.get('original_name') or asset.get('name'),
+                'ready':bool(meta),'height':(meta or {}).get('height'),
+                'quality':(meta or {}).get('quality')})
+ return jsonify({'proxies':items,'enabled':SETTINGS.load().get('proxies_enabled'),
+                 'quality':SETTINGS.load().get('proxy_quality')})
+
+@app.get('/api/projects/<pid>/history')
+def project_history_list(pid):
+ import project_history
+ root=folder(pid)
+ return jsonify({'versions':project_history.versions(root)[:40],
+                 'size_bytes':project_history.size_bytes(root)})
+
+@app.post('/api/projects/<pid>/history/<ident>/restore')
+def project_history_restore(pid,ident):
+ import project_history
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);root=folder(pid)
+  state=project_history.restore(root,ident,p)
+  if state is None:raise NotFound('That saved version is no longer available.')
+  # Keep identity and timestamps of the project being recovered, and nothing else.
+  state['id']=p['id']
+  save(state)
+  return jsonify(public(load(pid)))
+
+@app.delete('/api/projects/<pid>/history')
+def project_history_clear(pid):
+ import project_history
+ with LOCKS[pid]:
+  editable(pid);removed=project_history.clear(folder(pid))
+  return jsonify({'cleared':removed})
+
 @app.get('/api/projects/<pid>/imports/<key>')
 def import_status(pid,key):
  from import_status import token,get
@@ -1156,6 +1341,13 @@ def perform_upload(pid,key=''):
   except Exception:
    if kind=='asset':dest.unlink(missing_ok=True)
    raise
+  # Queue an editing copy. Never inline: an upload of a long 4K file must return as
+  # soon as the bytes are on disk, and the encode waits for its turn. A failure here
+  # must not fail the upload -- the original is already safely stored, and a proxy is
+  # a convenience that can always be made later.
+  if kind=='asset' and dest.suffix.lower() in ('.mp4','.mov'):
+   try:queue_proxy(pid,p,dest)
+   except Exception:app.logger.exception('Could not queue an editing copy for %s',dest.name)
   replacement_warnings=remove_local_files(root,old_paths) if kind=='asset' and old_paths else []
   from automatic import maybe_queue
   maybe_queue(sys.modules[__name__],p)
@@ -2245,7 +2437,14 @@ def documentary_bite_speech_status(pid):
   if p.get('edit_mode','review')!='documentary':raise BadRequest('Sound-bite speech is available only in a documentary project.')
   plan=annotate_plan(p,folder(pid),load_plan(folder(pid)))
  ok,reason=bite_speech.available()
- return jsonify({'available':ok,'detail':reason,'model':bite_speech.model_dir().name if ok else '',
+ # Speech needs two separate things -- the package and the model -- and saying only
+ # "not installed" leaves the user with nowhere to go. The setup state names which half
+ # is missing and whether it can be installed from here.
+ import speech_setup
+ setup=speech_setup.status()
+ return jsonify({'available':ok,'detail':reason or setup['message'],
+                 'setup':setup,
+                 'model':bite_speech.model_dir().name if ok else '',
                  'revision':plan['revision'],'captions':int(p.get('captions') or 0),
                  'bites':[{'id':b['id'],'script_beat':b.get('script_beat'),'has_speech':bool(b.get('speech'))} for b in plan['bites']]})
 
@@ -2591,6 +2790,20 @@ def asset_file(pid,aid):
  root=folder(pid)
  if a.get('kind')=='video' and str(a.get('path','')).lower().endswith(('.mp4','.mov')):
   source=root/a['path']
+  # Playback and scrubbing use the small editing copy. Export never comes through
+  # here -- engine.py opens the sources folder directly -- so a proxy can never
+  # reach a delivered frame. Only an existing proxy is used: this request must not
+  # trigger an encode, or the monitor would stall waiting for one.
+  try:
+   if SETTINGS.load().get('proxies_enabled'):
+    store,_detail=SETTINGS.cache_store()
+    prepared=proxy_module.metadata(store,source)
+    if prepared and Path(prepared.get('path','')).is_file():
+     requested=request.args.get('quality')
+     if requested in proxy_module.QUALITY_HEIGHTS and prepared.get('quality')!=requested:
+      pass
+     else:return send_file(prepared['path'],conditional=True)
+  except (OSError,ValueError):pass
   # A player cannot seek a file whose index is at the end without fetching all of
   # it; that is what left the monitor black. Serve a cached fast-start copy and
   # leave the uploaded original untouched.
