@@ -102,16 +102,22 @@ The Windows-specific graphics query is written but untested on Windows.
 
 - Python 3.10+
 - FFmpeg, supplied through `imageio-ffmpeg`
-- The Python packages in `requirements.txt`
+- The Python packages in `requirements.txt`, with `requirements-constraints.txt`
 
 ## Install and run
 
 ```sh
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c requirements-constraints.txt
 python app.py
 ```
+
+The `-c` file is not optional. `scenedetect` declares a dependency on the *GUI*
+`opencv-python`, which pip installs beside the headless build this app needs; the two own
+the same `cv2` package, the GUI one wins, and `import cv2` then fails with a missing
+`libGL` — the editor will not start. The constraints file forbids those distributions
+outright, including when a dependency asks for them.
 
 Open `http://localhost:8003`.
 
@@ -558,7 +564,7 @@ this repository's folder, with Python 3.11 installed:
 
 ```powershell
 py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-local-ai.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt -r requirements-local-ai.txt -c requirements-constraints.txt
 .\.venv\Scripts\hf.exe download Systran/faster-whisper-small --local-dir "$HOME\storyroom-models\faster-whisper-small"
 $env:STORYROOM_WHISPER_MODEL_DIR = "$HOME\storyroom-models\faster-whisper-small"
 ```

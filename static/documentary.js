@@ -111,6 +111,7 @@ function beatProposalHTML(){
  <details><summary>Repeated footage to approve (${d.repeated_ranges.length} pair${d.repeated_ranges.length===1?'':'s'})</summary><p class="small">One video appears in more than one Beat. Approving lets the same footage appear again; it does not verify the picture.</p><ul class="issues">${d.repeated_ranges.map(p=>`<li>Beat ${p[0]} and Beat ${p[1]}</li>`).join('')||'<li>None.</li>'}</ul></details>
  ${d.consecutive_bites.length?`<details open><summary>Sound bites with no narration between them</summary><p class="small">Beat ${d.consecutive_bites.map(p=>p.join(' and ')).join(', ')} sit at the same pause. They will play back to back.</p></details>`:''}
  <label class="check-label"><input type="checkbox" id="beat-confirm" ${d.issues.length?'disabled':''}> I have read these picture-range changes and the repeated-footage list.</label>
+ <div id="beat-build-state" aria-live="polite"></div>
  <p><button type="button" onclick="buildBeatStoryboard()" ${d.issues.length?'disabled':''}>Build the Beat timeline</button> <button type="button" onclick="openDocumentary()">Open the documentary tools</button></p>
  <p class="small">This builds a review timeline only. Content, identity, speaker and reuse rights still need your review, and nothing is exported yet.</p>`;
 }
@@ -128,19 +129,72 @@ async function openBeatProposal(){
 function beatPickSource(name){
  if(!beatProposal)return;beatProposalFocus=name||null;openBeatProposal();
 }
+// The build decodes every source up to its last used frame, which takes minutes on a
+// real production. It runs as a job so this dialog can show what it is doing instead
+// of leaving a disabled button as the only evidence that anything was asked for.
+let beatBuildTimer=null;
+function beatBuildHTML(job){
+ const pct=Math.max(0,Math.min(100,Math.round(job.percent||0)));
+ return `<div class="build-progress">
+  <div class="progress-track"><i class="progress-fill" style="width:${pct}%"></i></div>
+  <p class="small"><strong>${pct}%</strong> · ${E(job.detail||'Building…')}</p>
+ </div>`;
+}
+function stopBeatBuildPolling(){clearTimeout(beatBuildTimer);beatBuildTimer=null}
+async function pollBeatBuild(){
+ beatBuildTimer=null;
+ if(!P?.id)return;
+ let job;
+ try{job=await api(`/api/projects/${P.id}/documentary-beat-storyboard`)}
+ catch(e){$('#beat-build-state').innerHTML=`<p class="notice warn">${E(e.message)}</p>`;return}
+ if(!$('#beat-build-state'))return;   // the dialog was closed while we were asking
+ if(job.status==='done'){
+  const built=job.project||{};
+  P=built;beatProposal=null;beatProposalFocus=null;
+  stopBeatBuildPolling();
+  $('#plan-dialog').close();
+  toast(`${(built.scenes||[]).length} picture slots built. Review the timeline, then check the pictures.`);
+  renderProject();list().catch(()=>{});
+  return;
+ }
+ if(job.status==='error'){
+  $('#beat-build-state').innerHTML=`<p class="notice warn">${E(job.error||'The build could not finish.')}</p>
+   <p><button type="button" onclick="buildBeatStoryboard()">Try again</button></p>`;
+  return;
+ }
+ if(job.status==='cancelled'){
+  $('#beat-build-state').innerHTML='<p class="small">Build cancelled. Nothing was changed.</p>';
+  return;
+ }
+ $('#beat-build-state').innerHTML=beatBuildHTML(job)+
+  '<p><button type="button" class="text-button danger" onclick="cancelBeatBuild()">Stop building</button></p>';
+ beatBuildTimer=setTimeout(pollBeatBuild,700);
+}
+async function cancelBeatBuild(){
+ stopBeatBuildPolling();
+ try{await api(`/api/projects/${P.id}/documentary-beat-storyboard/cancel`,'POST',{})}catch{}
+ $('#beat-build-state').innerHTML='<p class="small">Stopping after the current step…</p>';
+ beatBuildTimer=setTimeout(pollBeatBuild,700);
+}
 async function buildBeatStoryboard(){
  if(!beatProposal)return;
  if(!$('#beat-confirm')?.checked){toast('Read and confirm the picture-range changes first.');return}
  const button=document.querySelector('#plan-body button[onclick="buildBeatStoryboard()"]');if(button)button.disabled=true;
+ stopBeatBuildPolling();
+ const holder=$('#beat-build-state');
+ if(holder)holder.innerHTML=beatBuildHTML({percent:0,detail:'Reading the scripted Beats'});
  try{
-  const result=await api(`/api/projects/${P.id}/documentary-beat-storyboard`,'POST',{
+  const job=await api(`/api/projects/${P.id}/documentary-beat-storyboard`,'POST',{
    confirmed:true,project_version:beatProposal.project_version,plan_revision:0,script_sha256:beatProposal.script_sha256,
    approved_gaps:beatProposal.narration_gaps||[],approved_overlaps:beatProposal.repeated_ranges,allow_silent_tail:false,
    approve_consecutive_bites:beatProposal.consecutive_bites.length>0,
    scripted_review_beat:(beatProposal.issues.length?beatBlocker():null)||null,
    scripted_review_source:beatProposal.issues.length?beatProposalFocus:null});
-  P=result;beatProposal=null;beatProposalFocus=null;$('#plan-dialog').close();
-  toast(`${result.scenes.length} picture slots built. Review the timeline, then check the pictures.`);
-  renderProject();list().catch(()=>{});
- }catch(e){toast(e.message);if(button?.isConnected)button.disabled=false}
+  if(holder)holder.innerHTML=beatBuildHTML(job);
+  beatBuildTimer=setTimeout(pollBeatBuild,400);
+ }catch(e){
+  if(holder)holder.innerHTML=`<p class="notice warn">${E(e.message)}</p>`;
+  else toast(e.message);
+  if(button?.isConnected)button.disabled=false;
+ }
 }
