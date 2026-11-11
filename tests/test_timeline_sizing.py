@@ -1408,6 +1408,36 @@ class AssetPosterTest(unittest.TestCase):
         self.assertGreater(render.index('validation-list'), body_end,
                            'Checks must survive a render-page rebuild')
 
+    def test_the_render_button_is_never_disabled_by_a_render(self):
+        """The top bar must stay pressable so progress and the finished file are visible.
+
+        It used to be disabled while an export ran, which made the one control that
+        reports progress unreachable -- the only way to know whether a render had
+        finished was to open the export page and look.
+        """
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function renderExport(')
+        body = js[start:js.index('\n}', start)]
+        # The only disabling condition is "no production at all".
+        self.assertIn('button.disabled=!P;', body,
+                      'only an empty workspace may disable the button')
+        for forbidden in ('busy||pictureScaleSaving', 'button.disabled=!P||', '||busy;'):
+            self.assertNotIn(forbidden, body,
+                             f'a render must not disable the button ({forbidden})')
+
+    def test_the_render_button_reports_every_state(self):
+        """Four labels, one per outcome: render, progress, download, stopped."""
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function renderButtonState(')
+        body = js[start:js.index('function openRenderPage(', start)]
+        self.assertIn("Rendering ${Math.round(Number(s.r.progress)||0)}%", body)
+        self.assertIn("button.textContent='⬇ Download MP4'", body)
+        self.assertIn("button.textContent='Render stopped'", body)
+        self.assertIn("button.textContent='Render MP4'", body)
+        # A finished-but-out-of-date export must not masquerade as downloadable.
+        self.assertIn('downloading:!busy&&!!r.url&&isCurrentRender(r)', body)
+        self.assertIn('failed:!busy&&r.status===\'error\'', body)
+
     def test_the_export_page_offers_exactly_three_resolutions(self):
         """1080p, 2K and 4K, named the way the delivery spec names them."""
         js = __import__('pathlib').Path('static/editor.js').read_text()

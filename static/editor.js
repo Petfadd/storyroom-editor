@@ -510,12 +510,64 @@ function renderDocumentaryChecks(){
  $('#validation-list').innerHTML=`<div class="validation-item">${groups?`${groups.length} cue shots · `:''}${scenes().length} picture slots · original narration and SRT unchanged.</div>${other.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${other.length>3?`<div class="validation-item">${other.length-3} more items under Review / export checks.</div>`:''}${pending.length?`<div class="validation-item">${pending.length} scene approval${pending.length===1?'':'s'} and reuse-rights decisions remain before export; the timeline is ready to review.</div>`:''}${state.state==='error'?`<div class="validation-item warning">△ ${E(state.error)} <button type="button" onclick="retryDocumentaryCheck()">Retry</button></div>`:''}${state.state==='ready'?'<div class="validation-item ok">✓ Source, timing and approval checks passed. Content, identity and rights still require your review.</div>':''}`;
 }
 function renderChecks(){if(P?.edit_mode==='documentary'&&P?.documentary_beat_review){renderDocumentaryChecks();return}const ss=scenes(),errors=P?.validation?.errors||[],unresolved=P?.script_application?.issues||[];$('#validation-summary').textContent=!P?'No production selected':errors.length?`${errors.length} item${errors.length===1?'':'s'} to review`:(P?.picture_policy==='clips_only'?'Ready · automatic checks passed':'Ready for review export');$('#validation-summary').style.color=errors.length?'var(--amber)':'var(--green)';$('#validation-list').innerHTML=P?`<div class="validation-item ok">✓ ${ss.length} picture beats · original narration / SRT timing preserved.</div>${unresolved.length?`<div class="validation-item warning">△ ${unresolved.length} unassigned script shots. Select a gap to see its required source and range.</div>`:''}${errors.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${errors.length>3?`<div class="validation-item">${errors.length-3} more items under Review / export checks.</div>`:''}${!editorMaster&&ss.length?(P?.review_only_draft?'<div class="validation-item">Review-only timeline. Rendering remains blocked until outstanding checks are resolved.</div>':''):''}`:'<div class="validation-item">Create a new production, then import the voiceover, SRT and source MP4s.</div>'}
+// One place reads the render state, so the button and its click handler can never
+// disagree about what the button says.
+function renderButtonState(){
+ const r=P?.render||{},doc=P?.edit_mode==='documentary',beat=doc&&!!P?.documentary_beat_review;
+ const busy=['running','queued'].includes(r.status);
+ return {r,doc,beat,busy,
+  downloading:!busy&&!!r.url&&isCurrentRender(r),
+  failed:!busy&&r.status==='error',
+  stale:!busy&&!!r.output&&!isCurrentRender(r)};
+}
 function renderExport(){
- const r=P?.render||{},doc=P?.edit_mode==='documentary',beat=doc&&!!P?.documentary_beat_review,busy=['running','queued'].includes(r.status);
+ const s=renderButtonState();
  const dialog=$('#render-dialog');
  if(dialog?.open)renderRenderPage();
  const button=$('#render-button');
- if(button){button.disabled=!P||busy||pictureScaleSaving||(doc&&!beat)||!scenes().length;button.title=doc?(beat?'Open the export page and render MP4':'Documentary export requires a Beat storyboard'):'Open the export page and render a clean MP4'}
+ if(!button)return;
+ // The button is never disabled by a render. During an export it is the only control
+ // visible from anywhere in the editor that reports progress, and when the export
+ // lands it turns into the download -- so "is it finished?" is answerable at a glance
+ // without opening the export page first. Only an empty workspace disables it, because
+ // there is genuinely nothing to export.
+ button.disabled=!P;
+ button.dataset.mode='page';
+ if(s.busy){
+  button.textContent=`Rendering ${Math.round(Number(s.r.progress)||0)}%`;
+  button.dataset.mode='progress';
+  button.title='Open the export page to follow this export or cancel it';
+ }else if(s.downloading){
+  button.textContent='⬇ Download MP4';
+  button.dataset.mode='download';
+  button.title='Download the finished MP4';
+ }else if(s.failed){
+  button.textContent='Render stopped';
+  button.dataset.mode='error';
+  button.title='The last export stopped. Open the export page for the reason.';
+ }else if(s.stale){
+  button.textContent='Render again';
+  button.title='The timeline changed since the last MP4. Render again to include it.';
+ }else{
+  button.textContent='Render MP4';
+  button.title='Open the export page and render a clean MP4';
+ }
+}
+// Downloading from the top bar does not replace the export page: the page is where a
+// resolution is chosen and a render started, so the toast names the way back to it
+// rather than leaving the download button as a dead end.
+function renderButtonClick(){
+ if(!P){toast('Open or create a production first.');return}
+ const s=renderButtonState();
+ if(s.downloading&&s.r.url){
+  const link=document.createElement('a');
+  link.href=s.r.url+(s.r.url.includes('?')?'&':'?')+'download=1';
+  link.download='';
+  document.body.appendChild(link);link.click();link.remove();
+  toast('Download started. Setup → Review & delivery can render again.');
+  return;
+ }
+ openRenderPage();
 }
 function openRenderPage(){
  if(!P)return;pauseEditor();

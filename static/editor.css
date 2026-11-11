@@ -612,3 +612,14 @@
 
 /* Checks now live in the export page, under the controls, where the render decision is made. */
 .render-page .validation-card{margin:14px 0 0;background:#121821;border:1px solid #2b3542;border-radius:7px;padding:11px 13px;max-height:none;overflow:visible;flex:none}
+
+/* The render button is a status light as well as a control. It keeps one width across
+   every state -- Render MP4 / Rendering 47% / Download MP4 -- so the bar does not
+   reflow while an export runs, and the label alone says where things stand. */
+#render-button{min-width:132px;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+#render-button[data-mode="progress"]{background:#8a5a1e;color:#ffe9c4;cursor:progress}
+#render-button[data-mode="progress"]:hover{background:#a06a24}
+#render-button[data-mode="download"]{background:var(--green);color:#08130e;box-shadow:0 5px 18px #45d39a2e}
+#render-button[data-mode="download"]:hover{background:#5ce3ad}
+#render-button[data-mode="error"]{background:#5a2530;color:#ffc9d3;border-color:#8c3a48}
+#render-button[data-mode="error"]:hover{background:#6d2c39}
