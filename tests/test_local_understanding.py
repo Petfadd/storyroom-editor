@@ -363,11 +363,23 @@ class LocalUnderstandingTest(unittest.TestCase):
             self.assertEqual(upload.status_code,200,upload.get_json())
             url=f'/api/projects/{pid}/understanding/narration'
             self.assertEqual(client.get(url).get_json()['status'],'not_started')
-            self.assertIn(client.post(url).get_json()['status'],('queued','running','partial'))
-            for _ in range(100):
-                result=client.get(url).get_json()
-                if result['status'] not in ('queued','running'):break
-                time.sleep(.1)
+            # Analysis is queued as heavy work, and the dispatcher deliberately refuses
+            # to start heavy work on a machine that reads as strained -- a busy CI
+            # runner is exactly that. This test is about the analysis report, not about
+            # admission, so the machine is pinned quiet; what it would otherwise assert
+            # is that a busy computer leaves the job queued, which is intended.
+            import resources
+            quiet=resources.Snapshot(4.0,20.0,8192.0,100.0,20.0,'idle','quiet')
+            with patch.object(resources,'snapshot',return_value=quiet):
+                self.assertIn(client.post(url).get_json()['status'],('queued','running','partial'))
+                # Ten seconds was the original bound. A real analysis of one second of
+                # audio fits easily on an idle machine, but a loaded runner can take far
+                # longer, and a timeout there reports a product failure that did not
+                # happen. The bound is generous and the assertion unchanged.
+                for _ in range(300):
+                    result=client.get(url).get_json()
+                    if result['status'] not in ('queued','running'):break
+                    time.sleep(.1)
             self.assertEqual(result['status'],'partial',result)
             self.assertEqual(result['stages']['audio_features']['status'],'complete')
             project=client.get(f'/api/projects/{pid}').get_json()

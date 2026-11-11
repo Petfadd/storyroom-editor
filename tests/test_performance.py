@@ -26,6 +26,28 @@ except Exception:                                        # pragma: no cover
     psutil = None
 
 
+# A machine that reads as quiet. Every test in this file that starts a real dispatcher
+# uses this, because the dispatcher deliberately refuses heavy work when the computer
+# reads as strained -- under 900 MB free, or a load of 88 percent or more. That refusal
+# is correct, but it makes a test about ordering, retrying or cancelling depend on what
+# else the computer happens to be doing. A CI runner, or a full suite running in
+# parallel, can push the reading over the line; the job then sits queued until the test
+# gives up and reports a failure that did not happen.
+QUIET_MACHINE = None            # built in _QuietMachine.setUp, after resources loads
+
+
+class _QuietMachine(unittest.TestCase):
+    """Pins the machine reading to a quiet machine for the whole test."""
+
+    def setUp(self):
+        global QUIET_MACHINE
+        quiet = resources.Snapshot(4.0, 20.0, 8192.0, 100.0, 20.0, 'idle', 'quiet')
+        QUIET_MACHINE = quiet
+        patcher = mock.patch.object(resources, 'snapshot', return_value=quiet)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 class ResourceTest(unittest.TestCase):
     def test_a_snapshot_reports_what_the_machine_is_doing(self):
         state = resources.snapshot()
@@ -75,7 +97,7 @@ class ResourceTest(unittest.TestCase):
         self.assertGreaterEqual(resources.thread_count(), 1)
 
 
-class QueueTest(unittest.TestCase):
+class QueueTest(_QuietMachine):
     """Ordering and control of the queue.
 
     These jobs are heavy, and the real dispatcher refuses to start heavy work on a
@@ -89,16 +111,6 @@ class QueueTest(unittest.TestCase):
     order and the controls, not the admission policy; that has its own tests, which set
     the reading they want to examine.
     """
-
-    QUIET = None
-
-    def setUp(self):
-        import resources
-        quiet = resources.Snapshot(4.0, 20.0, 8192.0, 100.0, 20.0, 'idle', 'quiet')
-        self._real_snapshot = resources.snapshot
-        patcher = mock.patch.object(resources, 'snapshot', return_value=quiet)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def make(self, name, calls, delay=0.02, priority=None, weight='heavy'):
         def work(context):
@@ -470,7 +482,7 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(project_history.versions(self.root), [])
 
 
-class AuditRegressionTest(unittest.TestCase):
+class AuditRegressionTest(_QuietMachine):
     """Fixes found during the pre-merge audit. Each one was a real defect."""
 
     def test_a_truncated_proxy_is_not_served(self):
@@ -591,7 +603,7 @@ class FreshInstallTest(unittest.TestCase):
             shutil.rmtree(folder, ignore_errors=True)
 
 
-class RunningLongJobsTest(unittest.TestCase):
+class RunningLongJobsTest(_QuietMachine):
     """A cancelled job must return promptly and leave nothing running.
 
     Both halves matter and both were once wrong. The process was killed, but a
