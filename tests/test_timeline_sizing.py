@@ -1389,10 +1389,60 @@ class AssetPosterTest(unittest.TestCase):
         self.assertNotIn('Case footage &amp; photographs', pool)
         self.assertNotIn('audio-label', pool)
 
-    def test_checks_live_in_the_inspector(self):
-        """The pool is media only; the pass/fail verdict belongs with the shot."""
+    def test_checks_live_in_the_render_page(self):
+        """Checks are a decision about the export, so they belong where the export is.
+
+        They left the media pool first, then the shot inspector: a per-shot verdict was
+        the wrong shape for a question that is about the whole production.
+        """
         html = __import__('pathlib').Path('templates/index.html').read_text()
         pool = html[html.index('media-panel'):html.index('</aside>', html.index('media-panel'))]
         self.assertNotIn('validation-list', pool, 'Checks must leave the media pool')
-        insp = html[html.index('inspector-panel'):]
-        self.assertIn('validation-list', insp[:insp.index('</aside>')])
+        insp = html[html.index('inspector-panel'):html.index('</aside>', html.index('inspector-panel'))]
+        self.assertNotIn('validation-list', insp, 'Checks must leave the shot inspector')
+        render = html[html.index('render-dialog'):html.index('</dialog>', html.index('render-dialog'))]
+        self.assertIn('validation-list', render, 'Checks belong in the export page')
+        # They must sit outside #render-page-body, which is rebuilt on every open, or the
+        # list would be wiped the moment the page re-renders itself.
+        body_end = render.index('</div>', render.index('render-page-body'))
+        self.assertGreater(render.index('validation-list'), body_end,
+                           'Checks must survive a render-page rebuild')
+
+    def test_the_export_page_offers_exactly_three_resolutions(self):
+        """1080p, 2K and 4K, named the way the delivery spec names them."""
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        self.assertIn("key:'1080p',label:'1080p Full HD',w:1920,h:1080", js)
+        self.assertIn("key:'2k',label:'2K QHD',w:2560,h:1440", js)
+        self.assertIn("key:'4k',label:'4K UHD',w:3840,h:2160", js)
+        # A fourth choice would make the row a menu again.
+        self.assertEqual(js.count('label:\'1080p Full HD\''), 1)
+
+    def test_medium_reaches_2k_as_a_short_side(self):
+        """2K QHD must stay 2560x1440 landscape and 1440x2560 portrait."""
+        import app
+        self.assertEqual(app.stored_size('2k'), '1440p')
+        self.assertEqual(app.output_size('landscape', app.stored_size('2k')), (2560, 1440))
+        self.assertEqual(app.output_size('portrait', app.stored_size('2k')), (1440, 2560))
+        self.assertEqual(app.output_size('landscape', '4k'), (3840, 2160))
+        self.assertEqual(app.output_size('portrait', '4k'), (2160, 3840))
+
+    def test_upscale_factor_grows_only_as_far_as_needed(self):
+        """A source that already meets the target must not be enlarged at all."""
+        import app
+        self.assertEqual(app.upscale_factor(1080, 1080), 1, 'already sharp: leave it alone')
+        self.assertEqual(app.upscale_factor(1080, 720), 1, 'smaller target needs no AI')
+        self.assertEqual(app.upscale_factor(720, 1080), 2)
+        self.assertEqual(app.upscale_factor(720, 2160), 4)
+        self.assertEqual(app.upscale_factor(1080, 2160), 2)
+        self.assertEqual(app.upscale_factor(480, 2160), 4)
+
+    def test_framing_never_stretches(self):
+        """Every mode returns exactly the canvas, and the source ratio is preserved."""
+        import upscale
+        from PIL import Image
+        source = Image.effect_noise((900, 1600), 30).convert('RGB')
+        for framing in ('auto', 'fit', 'crop', 'blur'):
+            for canvas in ((1920, 1080), (1080, 1920)):
+                result, report = upscale.prepare(source, canvas, framing=framing, prefer_ai=False)
+                self.assertEqual(result.size, canvas, f'{framing} did not fill {canvas}')
+                self.assertEqual(report['source'], [900, 1600])

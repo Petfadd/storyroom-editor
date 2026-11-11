@@ -509,7 +509,7 @@ function renderDocumentaryChecks(){
  $('#validation-summary').textContent=summary;$('#validation-summary').style.color=state.state==='ready'?'var(--green)':'var(--amber)';
  $('#validation-list').innerHTML=`<div class="validation-item">${groups?`${groups.length} cue shots · `:''}${scenes().length} picture slots · original narration and SRT unchanged.</div>${other.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${other.length>3?`<div class="validation-item">${other.length-3} more items under Review / export checks.</div>`:''}${pending.length?`<div class="validation-item">${pending.length} scene approval${pending.length===1?'':'s'} and reuse-rights decisions remain before export; the timeline is ready to review.</div>`:''}${state.state==='error'?`<div class="validation-item warning">△ ${E(state.error)} <button type="button" onclick="retryDocumentaryCheck()">Retry</button></div>`:''}${state.state==='ready'?'<div class="validation-item ok">✓ Source, timing and approval checks passed. Content, identity and rights still require your review.</div>':''}`;
 }
-function renderChecks(){if(P?.edit_mode==='documentary'&&P?.documentary_beat_review){renderDocumentaryChecks();return}const ss=scenes(),errors=P?.validation?.errors||[],unresolved=P?.script_application?.issues||[];$('#validation-summary').textContent=!P?'No production selected':errors.length?`${errors.length} item${errors.length===1?'':'s'} to review`:(P?.picture_policy==='clips_only'?'Ready · automatic checks passed':'Ready for review export');$('#validation-summary').style.color=errors.length?'var(--amber)':'var(--green)';$('#validation-list').innerHTML=P?`<div class="validation-item ok">✓ ${ss.length} picture beats · original narration / SRT timing preserved.</div>${unresolved.length?`<div class="validation-item warning">△ ${unresolved.length} unassigned script shots. Select a gap to see its required source and range.</div>`:''}${errors.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${errors.length>3?`<div class="validation-item">${errors.length-3} more items under Review / export checks.</div>`:''}${!editorMaster&&ss.length?(P?.review_only_draft?'<div class="validation-item">Review-only timeline. Rendering remains blocked until outstanding checks are resolved.</div>':'<div class="validation-item">A continuous master may be rendered when export checks pass.</div>'):''}`:'<div class="validation-item">Create a new production, then import the voiceover, SRT and source MP4s.</div>'}
+function renderChecks(){if(P?.edit_mode==='documentary'&&P?.documentary_beat_review){renderDocumentaryChecks();return}const ss=scenes(),errors=P?.validation?.errors||[],unresolved=P?.script_application?.issues||[];$('#validation-summary').textContent=!P?'No production selected':errors.length?`${errors.length} item${errors.length===1?'':'s'} to review`:(P?.picture_policy==='clips_only'?'Ready · automatic checks passed':'Ready for review export');$('#validation-summary').style.color=errors.length?'var(--amber)':'var(--green)';$('#validation-list').innerHTML=P?`<div class="validation-item ok">✓ ${ss.length} picture beats · original narration / SRT timing preserved.</div>${unresolved.length?`<div class="validation-item warning">△ ${unresolved.length} unassigned script shots. Select a gap to see its required source and range.</div>`:''}${errors.slice(0,3).map(x=>`<div class="validation-item warning">△ ${E(x)}</div>`).join('')}${errors.length>3?`<div class="validation-item">${errors.length-3} more items under Review / export checks.</div>`:''}${!editorMaster&&ss.length?(P?.review_only_draft?'<div class="validation-item">Review-only timeline. Rendering remains blocked until outstanding checks are resolved.</div>':''):''}`:'<div class="validation-item">Create a new production, then import the voiceover, SRT and source MP4s.</div>'}
 function renderExport(){
  const r=P?.render||{},doc=P?.edit_mode==='documentary',beat=doc&&!!P?.documentary_beat_review,busy=['running','queued'].includes(r.status);
  const dialog=$('#render-dialog');
@@ -534,7 +534,8 @@ function renderRenderPage(){
  const previous=r.url&&!isCurrentRender(r)?`<div class="notice warn"><strong>Previous MP4 — not current</strong><p>This file does not include your latest edits. Render again to include them.</p><video controls class="reference-video" src="${r.url}"></video><a class="download" href="${r.url}?download=1">↓ Download previous MP4</a></div>`:'';
  const current=r.url&&isCurrentRender(r)?`<div class="notice"><strong>Current MP4</strong><video controls class="reference-video" src="${r.url}"></video><a class="download" href="${r.url}?download=1">↓ Download current MP4</a> <a class="download" href="${r.url.replace(/\.mp4$/,'.srt')}?download=1">↓ Separate SRT</a></div>`:'';
  box.innerHTML=`
- <section class="card"><h3>Picture</h3><label class="check-label"><input id="enhance-picture" type="checkbox" ${enhancePicture?'checked':''} onchange="setEnhancePicture(this.checked)"> Enhance all videos &amp; photos on export</label></section>
+ <section class="card"><h3>Resolution</h3>${resolutionHTML()}</section>
+ <section class="card"><h3>Picture</h3>${pictureHTML()}<label class="check-label"><input id="enhance-picture" type="checkbox" ${enhancePicture?'checked':''} onchange="setEnhancePicture(this.checked)"> Enhance all videos &amp; photos on export</label></section>
  <section class="card"><h3>Captions &amp; subtitles</h3>${doc?`<label class="check-label"><input id="burn-on-screen-captions" type="checkbox" ${P?.burn_captions!==false?'checked':''} onchange="setBurnCaptions(this.checked)"> Burn on-screen script captions and spoken sound-bite words</label><label class="check-label"><input id="doc-fade-enabled" type="checkbox" ${(P?.documentary_fades?.enabled!==false)?'checked':''} onchange="setDocumentaryFades({enabled:this.checked})"> Include the script's Cut Action fade in the export</label><p class="small"> and in the export.</p><label class="check-label"><input id="burn-srt-subtitles" type="checkbox" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn adjusted SRT subtitles (matches CC preview)</label><p class="small">The original uploaded SRT is never changed.</p>`:`<label class="check-label"><input type="checkbox" id="burn-script-captions" ${exportScriptCaptions?'checked':''} onchange="setScriptCaptionExport(this.checked)"> Burn on-screen script captions</label><label class="check-label"><input type="checkbox" id="burn-srt-subtitles" ${editorCC?'checked':''} onchange="setEditorCaptions(this.checked)"> Burn SRT subtitles (matches CC preview)</label>`}</section>
  <section class="card"><h3>Audio</h3>${docMusic.file_present?`<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Replace the music file</button> <button class="button secondary" type="button" onclick="docToggleMusic()">${docMusic.enabled?'Switch the music off':'Switch the music on'}</button>${docMusic.enabled?'':''}</p>`:'<p class="small"><button class="button secondary" type="button" onclick="docPickMusic()">Add background music or SFX</button></p>'}</section>
  <section class="card"><h3>Export status</h3><p><strong>${E(stage)}</strong></p><p class="small">${E(detail)}</p><progress max="100" value="${Number(r.progress)||0}"></progress><p class="small">${Math.round(Number(r.progress)||0)}%</p>${r.status==='error'?`<div class="notice error">Export could not finish. The production is intact.</div><details><summary>Technical details</summary><pre style="white-space:pre-wrap;word-break:break-word;font-size:10px">${E(r.error)}</pre></details>${doc?'':'<button type="button" onclick="documentaryRetry()">Retry</button>'}`:''}${busy?'<button type="button" onclick="cancelExport()">Cancel export</button>':''}${current}${previous}</section>
@@ -543,6 +544,52 @@ function renderRenderPage(){
 }
 function documentaryRetry(){if(!P)return;toast('Open Review / export checks to retry the export.')}
 function setEnhancePicture(checked){enhancePicture=!!checked;renderExport();renderProgram()}
+
+// The three resolutions the export page offers. The pixel pair shown is the one that
+// belongs to this project's shape: a 9:16 film reads 1080x1920, never 1920x1080.
+const EXPORT_RESOLUTIONS=[{key:'1080p',label:'1080p Full HD',w:1920,h:1080},{key:'2k',label:'2K QHD',w:2560,h:1440},{key:'4k',label:'4K UHD',w:3840,h:2160}];
+function exportOrientation(){return P?.format==='portrait'}
+function resolutionPixels(r){return exportOrientation()?[r.h,r.w]:[r.w,r.h]}
+function currentResolutionKey(){const stored=P?.size||'1080p';const found=EXPORT_RESOLUTIONS.find(r=>r.key===stored||(stored==='1440p'&&r.key==='2k')||(stored==='4k'&&r.key==='4k'));return found?found.key:'1080p'}
+// What a resolution costs this project, taken from the source dimensions the server
+// recorded at upload. When nothing needs enlarging the line says so, because rendering
+// an already-sharp film should not claim to have enhanced it.
+function sourceSummary(r){
+ const plan=P?.export_plan;if(!plan)return '';
+ const [w,h]=resolutionPixels(r);const target=Math.min(w,h);
+ const sources=(plan.sources||[]);
+ if(!sources.length)return `<span class="small">${w} × ${h}</span>`;
+ const short=s=>Math.min(s.width,s.height);
+ const best=sources.reduce((a,b)=>short(a)>=short(b)?a:b,sources[0]);
+ const factor=!short(best)||target<=short(best)?1:target<=short(best)*2?2:4;
+ const stale=sources.filter(s=>!s.width).length;
+ // Only claim AI when an AI engine is actually installed on this machine. Otherwise the
+ // line says Lanczos, because a subtle label is better than a false one.
+ const ai=typeof AI_UPSCALE!=='undefined'&&AI_UPSCALE.available&&P?.upscaler!=='lanczos';
+ const label=factor===1?'No upscale needed':`Upscale ×${factor}`;
+ const engine=ai?'Real-ESRGAN':'Lanczos';
+ return `<span class="small">${w} × ${h} · ${label}${factor>1?` · ${engine}`:''}${stale?` · ${stale} source(s) without recorded size`:''}</span>`
+}
+function resolutionHTML(){
+ const key=currentResolutionKey();
+ return `<div class="resolution-row" role="radiogroup" aria-label="Export resolution">${EXPORT_RESOLUTIONS.map(r=>{
+  const [w,h]=resolutionPixels(r);
+  return `<button type="button" class="resolution-choice${r.key===key?' is-on':''}" role="radio" aria-checked="${r.key===key}" onclick="setExportResolution('${r.key}')"><strong>${r.label}</strong><span>${w} × ${h}</span>${sourceSummary(r)}</button>`;
+ }).join('')}</div><p class="small">The upscale factor is worked out from the source footage. Footage that already meets the target is not processed again.</p>`
+}
+function pictureHTML(){
+ const framing=P?.framing||'auto',upscaler=P?.upscaler||'auto',quality=P?.quality||'standard';
+ const opt=(value,label,current)=>`<option value="${value}"${value===current?' selected':''}>${E(label)}</option>`;
+ return `<label>Framing when the source is a different shape<select onchange="setExportFraming(this.value)">${opt('auto','Fit, crop or blur by source',framing)}${opt('fit','Fit whole frame',framing)}${opt('crop','Crop to fill',framing)}${opt('blur','Blurred background',framing)}</select></label>
+ <label>Upscaling<select onchange="setExportUpscaler(this.value)">${opt('auto','Decide from the source',upscaler)}${opt('realesrgan','Real-ESRGAN (AI)',upscaler)}${opt('lanczos','Lanczos (no AI)',upscaler)}</select></label>
+ <label>Quality and bitrate<select onchange="setExportQuality(this.value)">${opt('high','High · CRF 18 · 256k audio',quality)}${opt('standard','Standard · CRF 20 · 192k audio',quality)}${opt('compact','Compact · CRF 23 · 160k audio',quality)}</select></label>
+ <p class="small">${E(window.AI_UPSCALE?.detail||'Framing and resolution never stretch or distort; only the source shape decides how the spare space is filled.')}</p>`
+}
+async function saveExportSetting(patch){if(!P)return;try{P=await api('/api/projects/'+P.id,'PATCH',patch);renderRenderPage()}catch(e){toast(e.message)}}
+function setExportResolution(key){if(!P)return;if(key===currentResolutionKey())return;saveExportSetting({size:key})}
+function setExportFraming(value){saveExportSetting({framing:value})}
+function setExportUpscaler(value){saveExportSetting({upscaler:value})}
+function setExportQuality(value){saveExportSetting({quality:value})}
 
 async function renderFromEditor(){
  if(!P)return;
