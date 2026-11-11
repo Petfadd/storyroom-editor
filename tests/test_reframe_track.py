@@ -102,7 +102,9 @@ class SubjectChoiceTest(unittest.TestCase):
             samples.append((float(i), [Box(200, 200, 240, 640, subject=0),
                                        Box(1400, 200, 240, 640, subject=1)]))
         result = T.plan_scene(samples, 0, 608, 1920, follow=1)
-        self.assertIn('following subject 1', result.notes)
+        # The note reaches the screen, so it must be words rather than an internal id.
+        self.assertIn('following the main person', result.notes)
+        self.assertFalse(any('subject 1' in n for n in result.notes))
         self.assertTrue(all(k.left > 900 for k in result.keyframes),
                         'the frame ignored the requested subject')
 

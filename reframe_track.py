@@ -192,7 +192,8 @@ def plan_scene(samples: list[tuple[float, list[Box]]], scene_index: int,
     if not relevant:
         return hold_middle('no subject detected; the frame holds the middle')
 
-    result.notes.append(f'following subject {primary}' if primary is not None
+    # Notes reach the screen, so they say what happened in words, never an id.
+    result.notes.append('following the main person' if primary is not None
                         else 'following the frame content')
 
     if _is_still(samples, primary):
