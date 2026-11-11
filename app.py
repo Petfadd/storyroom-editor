@@ -1004,9 +1004,28 @@ def get_settings():
 @app.patch('/api/settings')
 def update_settings():
  d=request.get_json(silent=True) or {}
+ before=SETTINGS.load()
  try:saved=SETTINGS.save(d)
  except ValueError as e:raise BadRequest(str(e))
+ # Changing the quality of the editing copies should actually change them. Without
+ # this the new setting would apply only to future uploads, and every existing clip
+ # would keep playing at the old quality with no explanation.
+ requeued=0
+ if saved.get('proxies_enabled') and saved.get('proxy_quality')!=before.get('proxy_quality'):
+  for project in PROJECTS.iterdir():
+   if not (project/'project.json').exists():continue
+   try:
+    p=json.loads((project/'project.json').read_text())
+   except (OSError,ValueError):continue
+   for asset in p.get('assets') or []:
+    if asset.get('kind')!='video':continue
+    source=project/asset['path']
+    if not source.is_file():continue
+    try:
+     if queue_proxy(p.get('id') or project.name,p,source):requeued+=1
+    except Exception:pass
  fresh=SETTINGS.as_dict();fresh['disk']=settings_store.disk_report(SETTINGS.cache_store()[0])
+ fresh['proxies_requeued']=requeued
  return jsonify(fresh)
 
 @app.get('/api/cache')
@@ -2798,11 +2817,13 @@ def asset_file(pid,aid):
    if SETTINGS.load().get('proxies_enabled'):
     store,_detail=SETTINGS.cache_store()
     prepared=proxy_module.metadata(store,source)
-    if prepared and Path(prepared.get('path','')).is_file():
-     requested=request.args.get('quality')
-     if requested in proxy_module.QUALITY_HEIGHTS and prepared.get('quality')!=requested:
-      pass
-     else:return send_file(prepared['path'],conditional=True)
+    # Only a proxy made at the CURRENTLY selected quality is used. A proxy built at a
+    # different quality is not wrong, just not what was asked for, and serving it would
+    # make the quality setting appear to do nothing.
+    wanted=SETTINGS.load().get('proxy_quality') or proxy_module.DEFAULT_QUALITY
+    if (prepared and Path(prepared.get('path','')).is_file()
+            and prepared.get('quality')==wanted):
+     return send_file(prepared['path'],conditional=True)
   except (OSError,ValueError):pass
   # A player cannot seek a file whose index is at the end without fetching all of
   # it; that is what left the monitor black. Serve a cached fast-start copy and
