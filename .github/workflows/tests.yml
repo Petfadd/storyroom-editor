@@ -33,9 +33,9 @@ jobs:
       - name: Diagnostic
         if: failure()
         run: |
-          python -m unittest tests.test_performance.QueueTest.test_a_failing_job_is_retried_then_given_up_on -v 2>&1 | tail -40 > /tmp/diag.txt || true
-          echo "::error title=queue-retry::$(cat /tmp/diag.txt | tr '\n' ' ' | head -c 900)"
-          python -c "import sys; print('load:', open('/proc/loadavg').read())" 
+          python -m unittest discover -s tests > /tmp/full.txt 2>&1 || true
+          echo "::error title=fails::$(grep -E '^(FAIL|ERROR):' /tmp/full.txt | tr '\n' '|' | head -c 900)"
+          echo "::error title=detail::$(grep -A 12 -E '^(FAIL|ERROR):' /tmp/full.txt | tr '\n' ' ' | head -c 2800)"
           echo "::error title=loadavg::$(cat /proc/loadavg)"
       - name: Start the server
         run: |
