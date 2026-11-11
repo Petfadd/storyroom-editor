@@ -19,8 +19,17 @@
 @media(max-width:720px){
  .editor-grid{grid-template-columns:180px minmax(0,1fr)}.project-heading span{display:none}.top-actions .button{padding:8px;font-size:10px}.top-actions #validate-button{display:none}.media-section-label{padding-left:9px}.media-list,.semantic-list{padding-left:4px;padding-right:4px}.media-hint{padding-left:9px;padding-right:9px}.audio-toggle{font-size:0;min-width:35px}.audio-toggle::first-letter{font-size:12px}.timecode{font-size:9px}
 }
-/* Reference-layout repair: keep all three panes visible at laptop preview sizes. */
-.editor-grid{grid-template-columns:clamp(180px,23vw,245px) minmax(0,1fr) clamp(210px,25vw,290px);overflow:hidden}
+/* Reference-layout repair: keep all three panes visible at laptop preview sizes.
+   Proportions follow CapCut, measured from the reference at 1916px: left side
+   25.9%, monitor 39.5%, inspector 34.6%. The monitor was previously left to
+   absorb all the leftover width, so it swelled to two thirds of the window while
+   the inspector stayed a narrow strip. Proportional shares make the three panes
+   hold that balance at any width; the minmax floors stop a pane collapsing. */
+.editor-grid{grid-template-columns:
+  minmax(200px,26fr)
+  minmax(0,39fr)
+  minmax(280px,35fr);
+  overflow:hidden}
 .inspector-panel{display:flex!important;min-width:0}.monitor-panel{overflow:auto;min-width:0}
 
 .monitor video,.monitor img{object-fit:contain}

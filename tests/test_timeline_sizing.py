@@ -258,6 +258,43 @@ class TimelineSizingTest(unittest.TestCase):
                          'the header is hidden and must not be sized')
         self.assertIn('.monitor{margin:0}', blocks[0])
 
+    def test_the_three_panes_hold_capcut_proportions(self):
+        """The monitor must not swallow the window and shrink the inspector.
+
+        The monitor used to absorb every leftover pixel: at 1600px it took 67% of
+        the width while the inspector was squeezed to a 277px strip. The reference
+        layout is roughly a quarter, two fifths, a third. Proportional `fr` shares
+        keep that balance at any window width, and the floors stop a pane
+        collapsing on a narrow screen.
+        """
+        css = Path('static/editor.css').read_text()
+        # The proportional layout is the rule whose three columns all carry an
+        # `fr` weight; the narrower media-query fallbacks below it use fixed px
+        # and are allowed to.
+        rules = [m for m in re.findall(r'\.editor-grid\{([^}]*)\}', css)
+                 if 'grid-template-columns' in m]
+        three = [r for r in rules
+                 if len(re.findall(r'minmax\([^)]*?\d+fr\)', r)) == 3]
+        self.assertEqual(len(three), 1,
+                         f'expected exactly one proportional three-pane rule, '
+                         f'found {len(three)}')
+        body = three[0]
+        cols = re.search(r'grid-template-columns:([^;]+);', body, re.S).group(1)
+        nums = [int(n) for n in re.findall(r'(\d+)fr', cols)]
+        self.assertEqual(len(nums), 3,
+                         f'expected three proportional columns, got {cols!r}')
+        left, middle, right = nums
+        share = [n / sum(nums) for n in nums]
+        # The reference is 26 / 39 / 35.
+        self.assertAlmostEqual(share[0], 0.26, places=2)
+        self.assertAlmostEqual(share[1], 0.39, places=2)
+        self.assertAlmostEqual(share[2], 0.35, places=2)
+        self.assertGreater(right, 25,
+                           'the inspector must stay a real column, not a strip')
+        # Every column needs a floor so none of them can collapse.
+        self.assertEqual(cols.count('minmax('), 3,
+                         f'each column needs a minimum, got {cols!r}')
+
     def test_the_picture_is_not_forced_wider_than_its_frame(self):
         """width:100% plus a side margin overflows the card by the margin."""
         css = Path('static/editor.css').read_text()
