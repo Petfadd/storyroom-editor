@@ -298,6 +298,30 @@ class TimelineSizingTest(unittest.TestCase):
         self.assertEqual(cols.count('minmax('), 3,
                          f'each column needs a minimum, got {cols!r}')
 
+    def test_the_transport_is_exactly_as_wide_as_the_monitor(self):
+        """The strip must not be narrower than the picture it belongs to.
+
+        A 10px side margin and rounded bottom corners made the transport a
+        separate floating bar, inset from the dark field above it, so the media
+        pool and the inspector stepped in and out at that seam. Both now reach
+        their column edges, which is what makes left panel, monitor and right
+        panel meet at one line.
+        """
+        css = Path('static/editor.css').read_text()
+        rules = [r for r in re.findall(r'\.transport\{[^}]*\}', css) if 'background' in r]
+        self.assertTrue(rules, 'no transport rule found')
+        base = rules[0]
+        self.assertIn('margin:0;', base,
+                      'a side margin makes the strip narrower than the monitor')
+        self.assertIsNone(re.search(r'margin:\s*0\s+\d+px', base),
+                          'the transport must have no side inset')
+        self.assertIn('border-radius:0', base,
+                      'rounded corners turn the strip into a floating bar')
+        # The short-screen override keeps it flush as well.
+        narrow = [r for r in re.findall(r'\.transport\{[^}]*\}', css) if '38px' in r]
+        self.assertTrue(narrow)
+        self.assertIn('margin:0 0', narrow[0])
+
     def test_the_picture_is_not_forced_wider_than_its_frame(self):
         """width:100% plus a side margin overflows the card by the margin."""
         css = Path('static/editor.css').read_text()

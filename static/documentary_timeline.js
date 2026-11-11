@@ -160,7 +160,9 @@ function docRenderTimeline(){
    :'DOCUMENTARY TIMELINE LOADING');
   $('#caption-track').innerHTML=`<span class="caption-note">${E(note)}</span>`;
   return}
- const width=Math.max(d.duration*timelineZoom,$('#timeline-scroll').clientWidth-2,600);$('#timeline-content').style.width=width+'px';const cueGroups=docCueGroups();$('#track-legend').textContent=cueGroups?`${cueGroups.length} cue shots · ${scenes().length} picture slots · ${d.bites.length} sound bite(s)`:`${scenes().length} base shots · ${d.bites.length} sound bite(s)`;
+ const width=Math.max(d.duration*timelineZoom,$('#timeline-scroll').clientWidth-2,600);$('#timeline-content').style.width=width+'px';const cueGroups=docCueGroups();// The toolbar carries no counts: the top bar already reports cue shots,
+ // picture slots and approvals, and the strip under the timeline was noise.
+ $('#track-legend').textContent='';
  const step=timelineZoom<5?60:30;let ticks='';for(let t=0;t<=d.duration+step;t+=step)ticks+=`<span class="ruler-tick" style="left:${t*timelineZoom}px">${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}</span>`;if(docTrackCache.rulerKey!==docTrackKey(d,'ruler')){docTrackCache.rulerKey=docTrackKey(d,'ruler');$('#ruler-track').innerHTML=ticks}
  const videoKey=docTrackKey(d,'video');
  // Skip the whole clip build when nothing that affects it has changed.

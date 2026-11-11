@@ -387,8 +387,13 @@
 .monitor.is-fullscreen{border-radius:0;margin:0;background:#000}
 
 /* Transport row. */
+/* The dark field above runs flush to both panels, so the transport has to as
+   well. A 10px side margin made the strip narrower than the monitor it belongs
+   to, and the rounded bottom corners turned it into a separate floating bar.
+   With no margin and no radius the media pool, the transport and the inspector
+   meet at one edge, and the strip is exactly as wide as the picture above it. */
 .transport{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:10px;
-  padding:0 12px;margin:0 10px 8px;border-radius:0 0 8px 8px;background:var(--deck-chrome);
+  padding:0 12px;margin:0;border-radius:0;background:var(--deck-chrome);
   box-sizing:border-box;min-width:0;overflow:hidden}
 .timecode{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;
   letter-spacing:.4px;display:flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto}
@@ -435,7 +440,7 @@
   /* The transport tightens its side inset on a short screen, and the stage keeps
      its zero margin so the black field still meets the panels edge to edge. */
   .monitor{margin:0}
-  .transport{height:38px;flex-basis:38px;margin:0 8px 6px;gap:7px;padding:0 9px}
+  .transport{height:38px;flex-basis:38px;margin:0 0 6px;gap:7px;padding:0 9px}
   .timecode{font-size:10px}
   .transport-buttons button{width:29px;height:26px;font-size:13px}
 }
