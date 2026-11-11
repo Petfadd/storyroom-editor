@@ -739,3 +739,17 @@
   box-shadow:none}
 #music-track{border-top:none}
 #music-track-label.empty{opacity:.55}
+
+/* Subject framing. Deliberately plain: sliders and one checkbox, no prose. */
+.reframe-panel{border:1px solid var(--line,#2a2f3a);border-radius:8px;padding:10px 12px;
+  margin:10px 0;display:grid;gap:8px}
+.reframe-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.reframe-panel label{display:grid;gap:4px;font-size:12px}
+.reframe-panel input[type=range]{width:100%}
+.reframe-lock{display:flex!important;align-items:center;gap:8px}
+.reframe-scene{border-top:1px solid var(--line,#2a2f3a);padding-top:8px;display:grid;gap:6px}
+.reframe-scene-head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-size:12px;opacity:.85}
+.reframe-panel .btn-quiet{background:none;border:1px solid var(--line,#2a2f3a);
+  color:inherit;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+.reframe-panel .btn-quiet:disabled{opacity:.5;cursor:default}

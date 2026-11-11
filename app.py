@@ -525,6 +525,8 @@ def public(p):
  d['export_plan']=export_plan(p)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
+ import reframe_jobs
+ d['reframe_job']=reframe_jobs.snapshot(p['id'])
  if p['id'] not in JOBS and d['render']['status'] in ['running','queued']:d['render'].update(status='interrupted',stage='Previous export interrupted; start a new export',progress=0)
  if d['render'].get('output'):
   d['render']['url']=f'/api/projects/{p["id"]}/exports/{d["render"]["output"]}'
@@ -825,6 +827,103 @@ def update_project(pid):
   save(p);body=public(p)
   if response_extra:body.update(response_extra)
   return jsonify(body)
+@app.get('/api/reframe/capabilities')
+def reframe_capabilities():
+ # Reported honestly so the editor never offers a detector this machine cannot run.
+ from reframe_detect import describe
+ return jsonify(describe())
+
+@app.post('/api/projects/<pid>/reframe/analyse')
+def start_reframe_analysis(pid):
+ import reframe_jobs
+ from reframe_render import window_for
+ with LOCKS[pid]:
+  editable(pid);p=load(pid);d=request.get_json(silent=True) or {}
+  if reframe_jobs.running(pid):raise BadRequest('Analysis is already running for this production.')
+  asset_id=d.get('asset_id')
+  assets=[a for a in p['assets'] if a.get('kind')=='video']
+  if asset_id:
+   assets=[a for a in assets if a['id']==asset_id]
+  if not assets:raise BadRequest('Add a video before analysing framing.')
+  asset=assets[0]
+  path=folder(pid)/asset['path']
+  if not path.is_file():raise BadRequest('The video for this analysis is missing from the production folder.')
+  width,height=int(d.get('width') or p.get('output_width') or 1080),int(d.get('height') or p.get('output_height') or 1920)
+  if (width,height) not in ((1080,1920),(1920,1080),(1080,1080),(1440,2560),(2560,1440),(2160,3840),(3840,2160),(2160,2160)):
+   raise BadRequest('Reframing is available for 9:16, 16:9 and 1:1 at 1080p, 2K or 4K.')
+  mode=str(d.get('mode') or 'smart_crop')
+  if mode not in ('smart_crop','blurred','cinematic'):raise BadRequest('Choose smart subject crop, full scene with blended background, or cinematic composition.')
+  def persist(payload):
+   with LOCKS[pid]:
+    fresh=load(pid)
+    fresh['reframe']=payload
+    fresh['framing']='blur' if payload.get('mode')=='blurred' else 'smart'
+    save(fresh)
+  try:job=reframe_jobs.start(pid,path,width,height,mode,persist)
+  except ValueError as e:raise BadRequest(str(e))
+  return jsonify({'job':job,'asset':asset['id']}),202
+
+@app.get('/api/projects/<pid>/reframe/analyse')
+def reframe_analysis_status(pid):
+ import reframe_jobs
+ p=load(pid)
+ return jsonify({'job':reframe_jobs.snapshot(pid),'plan':(p.get('reframe') or {})})
+
+@app.patch('/api/projects/<pid>/reframe')
+def update_reframe_plan(pid):
+ # Manual correction. Every one of these edits exists so that an automatic framing
+ # decision can be overruled without leaving the editor.
+ import reframe_plan
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  plan=reframe_plan.ReframePlan.from_dict(p.get('reframe') or {})
+  if not plan.scenes:raise BadRequest('Analyse the footage before adjusting framing.')
+  d=request.get_json(silent=True) or {}
+  if 'mode' in d:
+   if d['mode'] not in ('smart_crop','blurred','cinematic'):raise BadRequest('Unknown framing mode.')
+   plan.mode=d['mode'];p['framing']='blur' if d['mode']=='blurred' else 'smart'
+  if 'locked' in d:
+   for scene in plan.scenes:scene.locked=bool(d['locked'])
+   if plan.scenes:plan.scenes[0].manual=True
+  scene_index=d.get('scene')
+  if scene_index is not None:
+   scene=next((s for s in plan.scenes if s.index==int(scene_index)),None)
+   if scene is None:raise BadRequest('That scene is not in the framing plan.')
+   if 'locked' in d:scene.locked=bool(d['locked'])
+   if 'follow' in d:
+    scene.follow=None if d['follow'] in (None,'','any') else int(d['follow'])
+   if 'shift' in d:
+    # Nudging the whole scene is the correction people reach for first.
+    delta=float(d['shift'])
+    if abs(delta)>plan.source_width:raise BadRequest('That moves the frame further than the picture is wide.')
+    for key in scene.keyframes:key.left+=delta
+   if 'zoom' in d:
+    width=float(d['zoom'])
+    if width<=0:raise BadRequest('Zoom must be a positive window width.')
+    for key in scene.keyframes:key.width=width
+   if 'keyframes' in d:
+    from reframe_track import Keyframe
+    rebuilt=[]
+    for raw in d['keyframes']:
+     try:rebuilt.append(Keyframe(float(raw['t']),float(raw['x']),float(raw.get('w') or (scene.keyframes[0].width if scene.keyframes else 0))))
+     except (KeyError,TypeError,ValueError):raise BadRequest('Each keyframe needs a time and an x position.')
+    if not rebuilt:raise BadRequest('A scene needs at least one keyframe.')
+    rebuilt.sort(key=lambda k:k.t);scene.keyframes=rebuilt
+   scene.manual=True
+  p['reframe']=plan.as_dict()
+  save(p)
+  return jsonify({'plan':p['reframe']})
+
+@app.delete('/api/projects/<pid>/reframe')
+def clear_reframe_plan(pid):
+ import reframe_jobs
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  p.pop('reframe',None);p['framing']='auto'
+  reframe_jobs.forget(pid)
+  save(p)
+  return jsonify(public(p))
+
 @app.get('/api/projects/<pid>/imports/<key>')
 def import_status(pid,key):
  from import_status import token,get

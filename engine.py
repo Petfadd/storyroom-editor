@@ -231,6 +231,61 @@ class RenderJob:
             return {'type':'video','path':path,'in_ms':shot['video_in_ms'],'out_ms':shot['video_out_ms']}
         raise RuntimeError(f'Unknown visual media type for event {shot["shot"]}.')
 
+    def _smart_reframe_graph(self, shot, visual, prefix, frames, fps, ow, oh):
+        """The analysed reframe path, or None when this shot has no usable plan.
+
+        Returning None is the normal case and leaves the existing framing branch
+        untouched, so a project without a plan renders exactly as it did before.
+        """
+        plan_data = self.story.get('reframe') or {}
+        if not plan_data.get('scenes'):
+            return None
+        framing = shot.get('framing') or self.story['settings'].get('framing') or 'auto'
+        # Only an explicit request activates a plan. "auto" counts because it is the
+        # untouched default and the editor sets "smart" the moment a plan is stored.
+        # A stored plan must never override a deliberate "Fit", "Crop to fill" or
+        # "Blurred background" choice: those are the user answering the question.
+        if framing not in ('auto','smart'):
+            return None
+        import reframe_plan, reframe_render
+        plan = reframe_plan.ReframePlan.from_dict(plan_data)
+        if not plan.scenes or not plan.width or not plan.height:
+            return None
+        scene = self._reframe_scene_for(plan, shot, visual)
+        if scene is None:
+            return None
+        if scene.locked and scene.keyframes:
+            # A locked frame keeps one position for the whole shot, hand-set or not.
+            keys = scene.keyframes
+            left = keys[0].left
+            expression = f'{left:.4f}'
+        else:
+            expression = scene.expression()
+        width, height = reframe_render.window_for(self._dimensions(visual['path'])[0],
+                                                  self._dimensions(visual['path'])[1],
+                                                  ow, oh)
+        if plan.mode == 'blurred':
+            chart = reframe_render.blurred_extension_filter(ow, oh, min(ow, width))
+        else:
+            chart = reframe_render.smart_reframe_filter(expression, width, height,
+                                                        height, ow, oh, fps)
+        return f'[0:v]{prefix},{chart},trim=end_frame={frames}[picture]'
+
+    def _reframe_scene_for(self, plan, shot, visual):
+        """The scene in the plan that covers this shot's interval of its source."""
+        start = (visual.get('in_ms') or 0) / 1000.0
+        end = (visual.get('out_ms') or 0) / 1000.0
+        for scene in plan.scenes:
+            left = scene.start
+            right = scene.start + scene.duration
+            if end > left and start < right:
+                return scene
+        # A shot that starts before the analysed material still gets that material's
+        # framing rather than a silent fall back to the centre.
+        if plan.scenes and start <= plan.scenes[0].start:
+            return plan.scenes[0]
+        return None
+
     def _picture_segment_command(self, shot, index, segment, extra_frames=0):
         settings=self.story['settings'];fps=settings['fps'];frames=shot['duration_frames']+extra_frames;duration=frames/fps
         visual=self._resolve_visual(shot);ow,oh=settings['width'],settings['height']
@@ -268,7 +323,10 @@ class RenderJob:
             # every one keeps the source's own aspect ratio and only chooses what
             # happens in the space that is left over.
             framing=shot.get('framing') or settings.get('framing') or 'auto'
-            if abs(ratio-ow/oh)>.05:
+            smart=self._smart_reframe_graph(shot,visual,prefix,frames,fps,ow,oh)
+            if smart is not None:
+                graph=smart
+            elif abs(ratio-ow/oh)>.05:
                 if framing=='fit':
                     graph=(f'[0:v]{prefix},scale={ow}:{oh}:force_original_aspect_ratio=decrease,'
                            f'pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:color=black,trim=end_frame={frames}[picture]')

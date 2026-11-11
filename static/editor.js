@@ -838,11 +838,83 @@ function resolutionHTML(){
 function pictureHTML(){
  const framing=P?.framing||'auto',upscaler=P?.upscaler||'auto',quality=P?.quality||'standard';
  const opt=(value,label,current)=>`<option value="${value}"${value===current?' selected':''}>${E(label)}</option>`;
- return `<label>Framing when the source is a different shape<select onchange="setExportFraming(this.value)">${opt('auto','Fit, crop or blur by source',framing)}${opt('fit','Fit whole frame',framing)}${opt('crop','Crop to fill',framing)}${opt('blur','Blurred background',framing)}</select></label>
+ return `<label>Framing when the source is a different shape<select onchange="setExportFraming(this.value)">${opt('auto','Fit, crop or blur by source',framing)}${opt('smart','Follow the subject',framing)}${opt('fit','Fit whole frame',framing)}${opt('crop','Crop to fill',framing)}${opt('blur','Blurred background',framing)}</select></label>
  <label>Upscaling<select onchange="setExportUpscaler(this.value)">${opt('auto','Decide from the source',upscaler)}${opt('realesrgan','Real-ESRGAN (AI)',upscaler)}${opt('lanczos','Lanczos (no AI)',upscaler)}</select></label>
  <label>Quality and bitrate<select onchange="setExportQuality(this.value)">${opt('high','High · CRF 18 · 256k audio',quality)}${opt('standard','Standard · CRF 20 · 192k audio',quality)}${opt('compact','Compact · CRF 23 · 160k audio',quality)}</select></label>
- <p class="small">${E(window.AI_UPSCALE?.detail||'Framing and resolution never stretch or distort; only the source shape decides how the spare space is filled.')}</p>`
+ <p class="small">${E(window.AI_UPSCALE?.detail||'Framing and resolution never stretch or distort; only the source shape decides how the spare space is filled.')}</p>${reframeHTML()}`
 }
+function reframeHTML(){
+ // Only shown when the project asks to follow the subject. The panel exists so that an
+ // automatic decision can always be overruled; nothing here is required.
+ if((P?.framing||'auto')!=='smart')return '';
+ const plan=P?.reframe||{},scenes=plan.scenes||[],job=P?.reframe_job||{};
+ if(!scenes.length){
+  const running=job.status==='running'||job.status==='queued';
+  return `<div class="reframe-panel"><div class="reframe-head"><strong>Subject framing</strong>
+   <button type="button" class="btn-quiet" onclick="startReframe()" ${running?'disabled':''}>${running?'Analysing…':'Analyse footage'}</button></div>
+   ${running?`<p class="small">${E(job.detail||'Working')} · ${job.progress||0}%</p>`:''}
+   ${!running&&job.detail?`<p class="small">${E(job.detail)}</p>`:''}
+   <p class="small">Looks for people and scene changes, then sets where the frame sits for each shot. It never cuts audio or changes the length.</p></div>`;
+ }
+ const mode=plan.mode||'smart_crop';
+ const option=(v,t)=>`<option value="${v}"${v===mode?' selected':''}>${E(t)}</option>`;
+ return `<div class="reframe-panel"><div class="reframe-head"><strong>Subject framing</strong>
+   <button type="button" class="btn-quiet" onclick="startReframe()">Analyse again</button></div>
+  <label>Composition<select onchange="setComposition(this.value)">${option('smart_crop','Smart subject crop')}${option('blurred','Full scene, blended background')}${option('cinematic','Cinematic composition')}</select></label>
+  <label class="reframe-lock"><input type="checkbox" ${scenes.every(s=>s.locked)?'checked':''} onchange="lockAllFraming(this.checked)"> Lock the frame for every shot</label>
+  ${scenes.map((scene,i)=>reframeSceneHTML(scene,i)).join('')}
+ </div>`;
+}
+function reframeSceneHTML(scene,i){
+ const x=scene.keyframes?.[0]?.x??0,w=scene.keyframes?.[0]?.w??0;
+ const note=(scene.notes||[]).join(' · ');
+ return `<div class="reframe-scene">
+  <div class="reframe-scene-head"><span>Shot ${scene.scene+1}</span>
+   <button type="button" class="btn-quiet" onclick="lockFraming(${scene.scene},${!scene.locked})">${scene.locked?'Unlock':'Lock'}</button></div>
+  <label>Move frame <input type="range" min="-400" max="400" step="4" value="0" oninput="shiftFraming(${scene.scene},this.value)" onchange="this.value=0"></label>
+  <label>Zoom <input type="range" min="240" max="1200" step="8" value="${Math.round(w)}" onchange="zoomFraming(${scene.scene},this.value)"></label>
+  ${note?`<p class="small">${E(note)}</p>`:''}
+ </div>`;
+}
+async function startReframe(){
+ if(!P)return;const videos=(P.assets||[]).filter(a=>a.kind==='video');
+ if(!videos.length)return toast('Add a video before analysing framing.');
+ const [width,height]=exportDims();
+ try{
+  const r=await api('/api/projects/'+P.id+'/reframe/analyse','POST',{asset_id:videos[0].id,width,height,mode:'smart_crop'});
+  P.reframe_job=r.job;renderRenderPage();watchReframe();
+ }catch(e){toast(e.message)}
+}
+let reframeTimer=null;
+function watchReframe(){
+ clearInterval(reframeTimer);
+ reframeTimer=setInterval(async()=>{
+  if(!P)return clearInterval(reframeTimer);
+  try{
+   const d=await api('/api/projects/'+P.id+'/reframe/analyse');
+   P.reframe_job=d.job;
+   if(d.plan&&d.plan.scenes)P.reframe=d.plan;
+   renderRenderPage();
+   if(d.job?.status==='done'||d.job?.status==='failed'){clearInterval(reframeTimer);toast(d.job.detail||'Framing ready.')}
+  }catch(e){clearInterval(reframeTimer);toast(e.message)}
+ },1500);
+}
+function exportDims(){
+ const r=document.querySelector('.resolution-choice.is-on');
+ const text=r?r.textContent:'';
+ const m=text.match(/(\d{3,4})\s*×\s*(\d{3,4})/);
+ return m?[+m[1],+m[2]]:[1080,1920];
+}
+async function patchFraming(payload){
+ if(!P)return;
+ try{const d=await api('/api/projects/'+P.id+'/reframe','PATCH',payload);P.reframe=d.plan;renderRenderPage()}
+ catch(e){toast(e.message)}
+}
+function setComposition(mode){patchFraming({mode})}
+function lockAllFraming(on){patchFraming({locked:!!on})}
+function lockFraming(index,on){patchFraming({scene:index,locked:!!on})}
+function shiftFraming(index,delta){patchFraming({scene:index,shift:+delta})}
+function zoomFraming(index,width){patchFraming({scene:index,zoom:+width})}
 async function saveExportSetting(patch){if(!P)return;try{P=await api('/api/projects/'+P.id,'PATCH',patch);renderRenderPage()}catch(e){toast(e.message)}}
 function setExportResolution(key){if(!P)return;if(key===currentResolutionKey())return;saveExportSetting({size:key})}
 function setExportFraming(value){saveExportSetting({framing:value})}
