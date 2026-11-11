@@ -5,6 +5,13 @@ Pillow>=10,<14
 
 av>=12,<19
 
+# CPU, memory, disk and load readings, and therefore every decision about how many
+# heavy jobs may run, when to hold back, and whether a large operation fits. Without it
+# the app still runs, but the queue cannot see the machine it is managing, so the
+# performance controls degrade to doing nothing. That is not an acceptable default for
+# a feature whose whole point is resource management.
+psutil>=5.9,<8
+
 # Subject-aware reframing. scenedetect is BSD-3-Clause and is used to find scene
 # boundaries, so a crop is never carried across a cut. If it is missing the analyser
 # falls back to its own frame-difference pass and still works.

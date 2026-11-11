@@ -28,15 +28,6 @@ jobs:
         run: python -c "import app; assert app.app.test_client().get('/').status_code == 200"
       - name: Block-map editor tests
         run: python -m unittest discover -s tests -v
-      # TEMPORARY diagnostic: the log download is unavailable, so the failure
-      # is echoed as a step annotation instead. Removed once diagnosed.
-      - name: Diagnostic
-        if: failure()
-        run: |
-          python -m unittest discover -s tests > /tmp/full.txt 2>&1 || true
-          echo "::error title=fails::$(grep -E '^(FAIL|ERROR):' /tmp/full.txt | tr '\n' '|' | head -c 900)"
-          echo "::error title=detail::$(grep -A 12 -E '^(FAIL|ERROR):' /tmp/full.txt | tr '\n' ' ' | head -c 2800)"
-          echo "::error title=loadavg::$(cat /proc/loadavg)"
       - name: Start the server
         run: |
           python app.py > /tmp/server.log 2>&1 &

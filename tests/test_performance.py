@@ -771,11 +771,15 @@ class GraphicsReportingTest(unittest.TestCase):
     def test_the_snapshot_carries_graphics_without_breaking_the_other_readings(self):
         import resources
         reading = resources.snapshot().as_dict()
+        for key in ('vram_used_mb', 'vram_total_mb', 'gpu_name'):
+            self.assertIn(key, reading)
+        if psutil is None:
+            # Monitoring is installed as a requirement, but the app must still start
+            # and say so where it is absent rather than failing.
+            self.assertIn('monitoring', reading['detail'].lower())
+            self.skipTest('psutil is not installed, so there is no CPU reading to check')
         for key in ('cpu_percent', 'memory_percent', 'disk_free_gb'):
             self.assertIsNotNone(reading[key])
-        self.assertIn('vram_used_mb', reading)
-        self.assertIn('vram_total_mb', reading)
-        self.assertIn('gpu_name', reading)
 
     def test_capabilities_report_the_gpu_separately_from_encoder_support(self):
         """A card can be present while ffmpeg has no encoder for it. Those are two
@@ -822,33 +826,30 @@ class FirstReadingTest(unittest.TestCase):
     """
 
     def test_a_first_reading_does_not_invent_an_idle_machine(self):
+        """Deterministic: both inputs are supplied, so this holds on an idle machine,
+        a busy one and a CI runner alike."""
         import os, resources
-        try:
-            one, _five, _fifteen = os.getloadavg()
-        except (OSError, AttributeError):
+        if psutil is None:
+            self.skipTest('psutil is not installed, so there is no CPU reading to check')
+        if not hasattr(os, 'getloadavg'):
             self.skipTest('this platform has no load average')
-        busy = one * 100.0 / max(1, os.cpu_count() or 1)
-        if busy < 25:
-            self.skipTest('the machine is too quiet to tell the two apart')
 
-        original = psutil.cpu_percent
-        try:
-            psutil.cpu_percent = lambda interval=None: 0.0
+        cores = os.cpu_count() or 1
+        # A load average of two per core: the machine is working hard.
+        with mock.patch.object(resources.psutil, 'cpu_percent', lambda interval=None: 0.0), \
+             mock.patch.object(os, 'getloadavg', lambda: (2.0 * cores, 1.0, 0.5)):
             reading = resources.snapshot()
-        finally:
-            psutil.cpu_percent = original
         self.assertGreater(reading.cpu_percent, 0.0,
                            'a first reading reported an idle machine while load average '
                            'said otherwise')
+        self.assertGreaterEqual(reading.cpu_percent, 99.0)
 
     def test_a_second_reading_uses_the_measured_figure(self):
         import resources
-        original = psutil.cpu_percent
-        try:
-            psutil.cpu_percent = lambda interval=None: 42.0
+        if psutil is None:
+            self.skipTest('psutil is not installed, so there is no CPU reading to check')
+        with mock.patch.object(resources.psutil, 'cpu_percent', lambda interval=None: 42.0):
             reading = resources.snapshot()
-        finally:
-            psutil.cpu_percent = original
         self.assertEqual(round(reading.cpu_percent), 42)
 
 
