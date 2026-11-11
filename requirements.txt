@@ -1,5 +1,12 @@
 Flask>=3.0,<4
 imageio-ffmpeg>=0.5,<1
+# The headless build is required, not preferred: the app never opens a window, and the
+# GUI build needs a display library that a server, or a session without one, does not
+# provide. scenedetect (below) declares a dependency on the *GUI* `opencv-python`, so pip
+# installs it alongside this one; both then own the same `cv2` package, the GUI one wins,
+# and `import cv2` fails with a missing libGL.so.1 -- which stops the editor from starting
+# at all, not just from detecting scenes. `requirements-constraints.txt` is what prevents
+# that, and it is passed automatically by the commands in the README.
 opencv-python-headless>=4.8,<5
 Pillow>=10,<14
 

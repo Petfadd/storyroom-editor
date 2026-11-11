@@ -1267,7 +1267,15 @@ def perform_upload(pid,key=''):
     dest.unlink(missing_ok=True)
     if isinstance(e,BadRequest):raise
     raise BadRequest(str(e))
-   if not info['has_audio'] or not info['duration']:dest.unlink();raise BadRequest('The uploaded file has no decodable audio.')
+   # `probe` reports duration 0 when ffmpeg finds no Duration line -- a container it
+   # cannot read the length of, or a file still being written. Storing that 0 makes
+   # the narration look present but zero seconds long, and every later step that
+   # builds an edit clock then rejects it with "Narration duration must be a time in
+   # seconds." Refuse it here instead, where the user is still looking at the upload
+   # button and can pick a different export of the same file.
+   if not info['has_audio']:dest.unlink();raise BadRequest('The uploaded file has no decodable audio.')
+   if not info['duration']:
+    dest.unlink();raise BadRequest('This file\'s length could not be read, so it cannot be used as narration. Re-export it as MP3 or M4A and upload it again.')
    for old in (root/'inputs').glob('voiceover.*'):old.unlink()
    final=root/'inputs'/('voiceover'+ext);dest.replace(final);p['voiceover']={'name':f.filename,'path':final.relative_to(root).as_posix(),'duration':info['duration']}
    for scene in p['scenes']:scene['approved']=False
@@ -2371,53 +2379,106 @@ def documentary_beat_proposal(pid):
                   'assets':[{'name':a.get('original_name') or a.get('name'),'duration':a.get('duration')} for a in p.get('assets',[])],
                   **data})
 
-@app.post('/api/projects/<pid>/documentary-beat-storyboard')
-def build_documentary_beat_storyboard(pid):
- """Build a review-only plan after explicit range decisions; no input is replaced."""
+def _documentary_beat_build_work(pid, root, data, report):
+ """The Beat build, with progress. Raises ValueError for anything the user can fix."""
  from documentary import load_plan
  from documentary_storyboard import prepare
  from strict_cuts import source_rate,inspect_video,_nearest_frame
  from production import document
- root=folder(pid);data=request.get_json(silent=True) or {}
+ p=load(pid)
+ if p.get('edit_mode')!='documentary':raise ValueError('This operation is available only in documentary mode.')
+ if data.get('confirmed') is not True:raise ValueError('Explicit confirmation of the proposed gap ranges and repeats is required.')
+ # Say what is missing before comparing versions. A build attempted before the script
+ # and SRT exist used to report that the project had changed, which is true but sends
+ # the user looking for an edit that never happened.
+ if not (p.get('production_script') or {}).get('text','').strip():raise ValueError('Upload the production script before building the Beat timeline.')
+ if not ((p.get('srt') or {}).get('blocks')):raise ValueError('Upload the original SRT before building the Beat timeline.')
+ if not p.get('voiceover'):raise ValueError('Upload the narration before building the Beat timeline.')
+ current=load_plan(root)
+ if data.get('project_version')!=p.get('updated') or data.get('plan_revision')!=current['revision']:raise ValueError('The project or sound-bite plan changed; review the proposal again.')
+ if current['bites']:raise ValueError('Existing sound bites will not be replaced automatically.')
+ script=(p.get('production_script') or {}).get('text','')
+ if data.get('script_sha256')!=hashlib.sha256(script.encode()).hexdigest():raise ValueError('The production script changed; review the proposal again.')
+ from documentary_beats import read_beats
+ from documentary_beat_plan import fit,frame_limits
+ report('read',0.5)
+ beats=read_beats(script)
+ report('read',1.0)
+ # Fitting is mechanical and every change is saved with the storyboard, so the
+ # review timeline states exactly which ranges differ from the script.
+ beats,adjustments,issues=fit(beats,p['assets'],data.get('scripted_review_beat'),data.get('scripted_review_source'),frame_limits(root,p['assets']))
+ if issues:raise ValueError(' '.join(issues))
+ report('fit',1.0)
+ fitted={b['label']:{'source_file':b['source_file'],'source_in_ms':b['source_in_ms'],'source_out_ms':b['source_out_ms']} for b in beats}
+ staged,plan=prepare(p,root,data.get('approved_gaps'),data.get('approved_overlaps'),data.get('allow_silent_tail') is True,lambda path:probe(path)['has_audio'],beats=beats,allow_consecutive_bites=data.get('approve_consecutive_bites') is True,fitted_ranges=fitted)
+ staged['documentary_beat_adjustments']=list(adjustments)+list(staged.get('documentary_beat_adjustments') or [])
+ report('prepare',1.0)
+ assets={(a.get('original_name') or a.get('name')):a for a in p['assets']}
+ # The frame check decodes each source from its first frame, so it is reported per
+ # source and, inside a source, per frame. This is most of the build's duration.
+ names=sorted({b['source_file'] for b in beats})
+ for index,name in enumerate(names):
+  asset=assets[name];path=root/asset['path'];rate=source_rate(path)
+  end=max(b['source_out_ms'] for b in beats if b['source_file']==name)
+  end=max([end]+[g['source_out_ms'] for g in data.get('approved_gaps',[]) if g['source_file']==name])
+  required=_nearest_frame(end,rate)
+  def within(done,total,index=index,name=name):
+   share=(index+(done/max(1,total)))/max(1,len(names))
+   report('frames',share,source=name)
+  report('frames',index/max(1,len(names)),source=name)
+  inspect_video(path,required,progress=within)
+ report('frames',1.0)
+ staged['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
+ staged['documentary_beat_review']['at']=time.time()
+ report('save',0.4)
+ # A failed project save restores the pre-existing plan; no user plan is overwritten.
+ oldpath=root/'documentary_plan.json';old=oldpath.read_bytes() if oldpath.exists() else None
+ try:
+  write(oldpath,plan);save(staged)
+ except Exception:
+  if old is None:oldpath.unlink(missing_ok=True)
+  else:
+   temp=oldpath.with_name(oldpath.name+'.'+uuid.uuid4().hex+'.restore');temp.write_bytes(old);temp.replace(oldpath)
+  raise
+ report('save',1.0)
+ return public(staged)
+
+@app.post('/api/projects/<pid>/documentary-beat-storyboard')
+def build_documentary_beat_storyboard(pid):
+ """Start the Beat build as a job and return at once.
+
+ The build decodes every source up to its last used frame, which is far too long to
+ hold a request open: the editor looked frozen with no way to tell whether anything
+ was happening. The work is unchanged, it simply runs where it can be watched.
+ """
+ import documentary_beat_build
+ data=request.get_json(silent=True) or {}
  with LOCKS[pid]:
-  editable(pid);p=load(pid);current=load_plan(root)
-  if p.get('edit_mode')!='documentary':raise BadRequest('This operation is available only in documentary mode.')
-  if data.get('confirmed') is not True:raise BadRequest('Explicit confirmation of the proposed gap ranges and repeats is required.')
-  if data.get('project_version')!=p.get('updated') or data.get('plan_revision')!=current['revision']:raise BadRequest('The project or sound-bite plan changed; review the proposal again.')
-  if current['bites']:raise BadRequest('Existing sound bites will not be replaced automatically.')
-  script=(p.get('production_script') or {}).get('text','')
-  if data.get('script_sha256')!=hashlib.sha256(script.encode()).hexdigest():raise BadRequest('The production script changed; review the proposal again.')
+  editable(pid);root=folder(pid)
   try:
-   from documentary_beats import read_beats
-   from documentary_beat_plan import fit
-   beats=read_beats(script)
-   # Fitting is mechanical and every change is saved with the storyboard, so the
-   # review timeline states exactly which ranges differ from the script.
-   from documentary_beat_plan import frame_limits
-   beats,adjustments,issues=fit(beats,p['assets'],data.get('scripted_review_beat'),data.get('scripted_review_source'),frame_limits(root,p['assets']))
-   if issues:raise BadRequest(' '.join(issues))
-   fitted={b['label']:{'source_file':b['source_file'],'source_in_ms':b['source_in_ms'],'source_out_ms':b['source_out_ms']} for b in beats}
-   staged,plan=prepare(p,root,data.get('approved_gaps'),data.get('approved_overlaps'),data.get('allow_silent_tail') is True,lambda path:probe(path)['has_audio'],beats=beats,allow_consecutive_bites=data.get('approve_consecutive_bites') is True,fitted_ranges=fitted)
-   staged['documentary_beat_adjustments']=list(adjustments)+list(staged.get('documentary_beat_adjustments') or [])
-   assets={(a.get('original_name') or a.get('name')):a for a in p['assets']}
-   for name in {b['source_file'] for b in beats}:
-    asset=assets[name];path=root/asset['path'];rate=source_rate(path)
-    end=max(b['source_out_ms'] for b in beats if b['source_file']==name)
-    end=max([end]+[g['source_out_ms'] for g in data.get('approved_gaps',[]) if g['source_file']==name])
-    inspect_video(path,_nearest_frame(end,rate))
-   staged['edit_script_hash']=hashlib.sha256(document(p).encode()).hexdigest()
-   staged['documentary_beat_review']['at']=time.time()
-   # A failed project save restores the pre-existing plan; no user plan is overwritten.
-   oldpath=root/'documentary_plan.json';old=oldpath.read_bytes() if oldpath.exists() else None
-   try:
-    write(oldpath,plan);save(staged)
-   except Exception:
-    if old is None:oldpath.unlink(missing_ok=True)
-    else:
-     temp=oldpath.with_name(oldpath.name+'.'+uuid.uuid4().hex+'.restore');temp.write_bytes(old);temp.replace(oldpath)
-    raise
-   return jsonify(public(staged)),201
-  except (ValueError,OSError,KeyError) as e:raise BadRequest(str(e))
+   job=documentary_beat_build.start(pid,lambda report:_documentary_beat_build_work(pid,root,data,report))
+  except ValueError as e:raise BadRequest(str(e))
+ return jsonify(job),202
+
+@app.get('/api/projects/<pid>/documentary-beat-storyboard')
+def documentary_beat_storyboard_status(pid):
+ """How the build is going, and its finished storyboard once there is one."""
+ import documentary_beat_build
+ with LOCKS[pid]:
+  if load(pid).get('edit_mode')!='documentary':raise BadRequest('This operation is available only in documentary mode.')
+  job=documentary_beat_build.snapshot(pid)
+  if job.get('status')=='done':
+   built=documentary_beat_build.result(pid)
+   job['project']=built
+   job['scenes']=len((built or {}).get('scenes') or [])
+ return jsonify(job)
+
+@app.post('/api/projects/<pid>/documentary-beat-storyboard/cancel')
+def cancel_documentary_beat_storyboard(pid):
+ import documentary_beat_build
+ with LOCKS[pid]:
+  if not documentary_beat_build.cancel(pid):raise BadRequest('No Beat build is running.')
+  return jsonify(documentary_beat_build.snapshot(pid))
 
 @app.get('/api/projects/<pid>/documentary-timeline')
 def documentary_timeline(pid):

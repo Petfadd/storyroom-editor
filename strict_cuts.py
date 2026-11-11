@@ -29,8 +29,13 @@ def source_rate(path):
     except ValueError:raise
     except Exception as e:raise ValueError('source frame rate could not be verified: '+str(e)[:200]) from e
 
-def inspect_video(path, required_frames):
-    """Decode from the first frame, verifying each PTS through the exclusive OUT."""
+def inspect_video(path, required_frames, progress=None):
+    """Decode from the first frame, verifying each PTS through the exclusive OUT.
+
+    `progress(done, total)` is called as frames are checked. This decode is the slow
+    part of a documentary build, and reporting it is the difference between a progress
+    bar that moves and one that sits still for a minute and then finishes.
+    """
     import av
     path=Path(path);stat=path.stat();key=(str(path.resolve()),stat.st_size,stat.st_mtime_ns)
     with _lock:
@@ -47,7 +52,7 @@ def inspect_video(path, required_frames):
                 rate=stream.base_rate or stream.average_rate
                 if not rate or rate<=0 or rate>120:raise ValueError('source frame rate is unavailable or unsupported')
                 rate=Fraction(rate)
-                first=None;count=0
+                first=None;count=0;reported=0
                 for frame in container.decode(stream):
                     if frame.pts is None or frame.time_base is None:raise ValueError('source frame timestamps are unavailable')
                     pts=Fraction(frame.pts)*frame.time_base
@@ -57,6 +62,11 @@ def inspect_video(path, required_frames):
                     if abs((pts-first)-expected)>max(Fraction(stream.time_base),Fraction(1,1000000)):
                         raise ValueError(f'variable or discontinuous frame timestamps near source frame {count}')
                     count+=1
+                    # Report about every hundred frames: often enough to look alive,
+                    # rare enough that the callback costs nothing against decoding.
+                    if progress and count-reported>=100:
+                        reported=count
+                        progress(count,required_frames)
                     if count>=required_frames:break
                 if count<required_frames:raise ValueError(f'source ended after {count} frames, before the exclusive OUT frame {required_frames}')
                 result={'frames':count,'fps':rate};_cache[key]=result;return result

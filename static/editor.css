@@ -1,4 +1,4 @@
-:root{--bg:#0b0d11;--panel:#12151b;--panel2:#171b22;--line:#292f39;--muted:#8993a3;--text:#eef2f7;--accent:#ee455f;--accent2:#ff687e;--green:#45d39a;--amber:#f4bd56;--blue:#5ea8ff}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px}body{display:flex;flex-direction:column;overflow:hidden}button,input,a{font:inherit}button{color:inherit}.topbar{height:60px;flex:0 0 60px;display:flex;align-items:center;border-bottom:1px solid var(--line);background:#101318;padding:0 16px;gap:24px}.brand{display:flex;align-items:center;gap:9px;font-size:11px;letter-spacing:1.7px;font-weight:800;color:#c8d0dc}.brand-mark{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#e83250,#8d1c33);font-size:12px;letter-spacing:0;color:white;box-shadow:0 4px 18px #e8325030}.project-heading{display:flex;flex-direction:column;gap:2px;min-width:0}.project-heading strong{font-size:14px}.project-heading span{color:var(--muted);font-size:11px}.top-actions{margin-left:auto;display:flex;gap:8px}.button{border:1px solid transparent;border-radius:6px;padding:9px 14px;font-weight:700;font-size:12px;cursor:pointer;transition:.15s}.button:hover:not(:disabled){transform:translateY(-1px)}.button:disabled{opacity:.4;cursor:not-allowed}.button.primary{background:var(--accent);color:#fff;box-shadow:0 5px 18px #ee455f25}.button.primary:hover:not(:disabled){background:var(--accent2)}.button.secondary{background:#1c2129;border-color:#333b47;color:#dce3ec}.editor-grid{display:grid;grid-template-columns:240px minmax(390px,1fr) 310px;gap:1px;background:var(--line);flex:1;min-height:0}.panel{background:var(--panel);min-height:0}.panel-title{height:43px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);font-weight:750;font-size:12px;text-transform:uppercase;letter-spacing:.6px}.count{display:grid;place-items:center;min-width:23px;height:19px;border-radius:10px;background:#252b34;color:#aeb8c6;font-size:10px}.media-panel{display:flex;flex-direction:column}.media-section-label{padding:12px 12px 7px;color:#778294;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:750}.media-list{overflow:auto;min-height:80px;flex:1;padding:0 7px}.media-item{display:flex;align-items:center;gap:8px;padding:7px 7px;border-radius:5px;cursor:pointer}.media-item:hover{background:#1b2028}.media-item.selected{background:#242a34}.source-icon{width:30px;height:24px;border-radius:3px;background:#2a323e;display:grid;place-items:center;color:#b9c5d3;font-size:9px;font-weight:800}.media-meta{min-width:0;flex:1}.media-meta strong{display:block;font-size:11px}.media-meta span{display:block;font-size:10px;color:var(--muted);margin-top:2px}.ready-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex:0 0 auto}.ready-dot.missing{background:var(--accent)}.audio-label{border-top:1px solid var(--line);margin-top:5px;padding-top:12px}.audio-card{margin:0 9px 7px;padding:9px;border:1px solid #29303a;background:#151a21;border-radius:6px}.audio-card strong{display:block;font-size:11px;margin-bottom:3px}.audio-card span{font-size:10px;color:var(--muted);line-height:1.4}.audio-card.ready{border-color:#245743}.audio-card.missing{border-color:#5a3039}.media-hint{padding:9px 12px 12px;color:#6f7b8c;font-size:10px;line-height:1.45}.monitor-panel{background:#0e1116;display:flex;flex-direction:column;min-width:0;min-height:0}.monitor{position:relative;box-shadow:0 12px 35px #0008}.monitor video,.monitor img{position:absolute;width:100%;height:100%;object-fit:contain;inset:0;background:#030405}.monitor video{display:none}.monitor-gradient{position:absolute;inset:0;pointer-events:none;background:linear-gradient(transparent 70%,#0007)}.big-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:60px;height:60px;border-radius:50%;border:1px solid #ffffff55;background:#0a0c10b8;color:#fff;font-size:22px;padding-left:7px;cursor:pointer;backdrop-filter:blur(8px)}.big-play:hover{background:#ee455fdd}.caption-overlay{position:absolute;left:7%;right:7%;bottom:7%;text-align:center;color:#fff;font-weight:650;font-size:clamp(12px,1.45vw,21px);line-height:1.3;text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000,0 2px 5px #000;pointer-events:none}.buffering{display:none;position:absolute;top:10px;right:10px;padding:5px 8px;border-radius:4px;background:#000b;color:#d7dde6;font-size:10px}.preview-badge{margin-left:auto;color:#667386;font-size:9px;letter-spacing:1px}.validation-card{margin:0 15px 12px;padding:10px 12px;background:#131820;border:1px solid #272f3a;border-radius:7px}.validation-heading{display:flex;justify-content:space-between;font-size:11px}.validation-heading span{color:var(--amber)}#validation-list{font-size:10px;color:var(--muted);line-height:1.45;margin-top:5px}.validation-item{display:flex;gap:6px}.validation-item.error{color:#ef91a0}.validation-item.warning{color:#eac885}.validation-item.ok{color:#77d8b0}.inspector-panel{display:flex;flex-direction:column}.inspector-scroll{overflow:auto;flex:1;padding:2px 13px 12px}.inspector-group{padding:11px 0;border-bottom:1px solid #252b34}.inspector-group label,.inspector-grid label{display:block;color:#778396;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:750;margin-bottom:6px}.inspector-group p{margin:0;color:#c7d0dc;line-height:1.52;font-size:11px}.inspector-group code{display:block;color:#e7edf5;font-family:Consolas,monospace;font-size:11px;line-height:1.5;word-break:break-word}.inspector-group a{color:#86baff;text-decoration:none;font-size:11px}.inspector-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:11px 0;border-bottom:1px solid #252b34}.inspector-grid strong{font-size:11px}.cut-box code{color:#ff9dad}.render-card{border-top:1px solid var(--line);background:#141920;padding:12px}.render-heading{display:flex;justify-content:space-between;font-size:11px}.render-heading span{color:#a2adbb}.progress-track{height:5px;border-radius:4px;background:#282f39;margin:10px 0 7px;overflow:hidden}.progress-fill{height:100%;width:0;background:linear-gradient(90deg,#d52e4a,#ff6b81);transition:width .25s}.render-detail{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.render-log{height:130px;overflow:auto;background:#090b0e;border:1px solid #272e37;border-radius:5px;color:#9eacbb;padding:8px;font-size:9px;white-space:pre-wrap}.render-actions{display:flex;align-items:center;gap:10px;margin-top:9px;min-height:20px}.text-button{border:0;background:transparent;color:#8f9bad;font-size:10px;cursor:pointer;padding:0}.text-button:disabled{opacity:.4}.text-button.danger{color:#ef7d8e}.download-link{margin-left:auto;color:#71ddb0;text-decoration:none;font-weight:750;font-size:11px}.timeline-panel{background:#11151b;border-top:1px solid var(--line)}.timeline-toolbar{height:40px;display:flex;align-items:center;padding:0 13px;gap:16px;border-bottom:1px solid var(--line);font-size:11px}.timeline-toolbar strong{text-transform:uppercase;letter-spacing:.8px}.track-legend{display:flex;align-items:center;gap:6px;color:#808c9d;font-size:10px}.track-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-left:8px}.legend-video{background:#65748a}.legend-caption{background:#3b6970}.timeline-spacer{flex:1}.timeline-toolbar label{color:#7e8998;font-size:10px}.timeline-toolbar input{width:100px;accent-color:var(--accent)}.timeline-body{display:flex}.track-labels{width:50px;flex:0 0 50px;border-right:1px solid var(--line);color:#7e8b9c;font-size:10px;font-weight:750;text-align:center}.track-labels>div{display:flex;align-items:center;justify-content:center;border-bottom:1px solid #252b33}.documentary-workspace .ruler-label{height:var(--doc-ruler)}.timeline-scroll{flex:1;overflow:auto;position:relative}.timeline-content{position:relative;min-width:100%}.ruler-track{position:relative;border-bottom:1px solid #272e37;background:#0f1318}.ruler-tick{position:absolute;top:0;height:100%;border-left:1px solid #343b46;padding:5px 0 0 5px;color:#6f7b8b;font-size:9px;white-space:nowrap}.video-track{position:relative;background:#141920;border-bottom:1px solid #292f39}.shot-clip{position:absolute;top:5px;height:calc(100% - 10px);border-radius:4px;border:1px solid #ffffff24;padding:6px 6px;overflow:hidden;cursor:pointer;color:#f4f7fb;background:#445066;box-shadow:inset 0 1px #ffffff13}.shot-clip:hover{filter:brightness(1.18)}.shot-clip.selected{outline:2px solid #fff;outline-offset:-2px;z-index:2}.shot-clip strong{display:block;font-size:9px;white-space:nowrap}.shot-clip span{display:block;font-size:8px;color:#e2e8f0;margin-top:4px;white-space:nowrap}.caption-track{position:relative;background:#10161a}.caption-block{position:absolute;top:5px;height:calc(100% - 14px);border-radius:3px;background:#29484e;border:1px solid #3e6870;cursor:pointer}.caption-block:hover{background:#3b6970}.caption-block.active{background:#d4b15b;border-color:#f3d27e}/* Sits at the BOTTOM of its own track. A fixed top offset assumed the old 36px
+:root{--bg:#0b0d11;--panel:#12151b;--panel2:#171b22;--line:#292f39;--muted:#8993a3;--text:#eef2f7;--accent:#ee455f;--accent2:#ff687e;--green:#45d39a;--amber:#f4bd56;--blue:#5ea8ff}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px}body{display:flex;flex-direction:column;overflow:hidden}button,input,a{font:inherit}button{color:inherit}.topbar{height:60px;flex:0 0 60px;display:flex;align-items:center;border-bottom:1px solid var(--line);background:#101318;padding:0 16px;gap:10px}.brand{display:flex;align-items:center;gap:9px;font-size:11px;letter-spacing:1.7px;font-weight:800;color:#c8d0dc}.brand-mark{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#e83250,#8d1c33);font-size:12px;letter-spacing:0;color:white;box-shadow:0 4px 18px #e8325030}.project-heading{display:flex;flex-direction:column;gap:2px;min-width:0}.project-heading strong{font-size:14px}.project-heading span{color:var(--muted);font-size:11px}.top-actions{margin-left:auto;display:flex;gap:8px}.button{border:1px solid transparent;border-radius:6px;padding:9px 14px;font-weight:700;font-size:12px;cursor:pointer;transition:.15s}.button:hover:not(:disabled){transform:translateY(-1px)}.button:disabled{opacity:.4;cursor:not-allowed}.button.primary{background:var(--accent);color:#fff;box-shadow:0 5px 18px #ee455f25}.button.primary:hover:not(:disabled){background:var(--accent2)}.button.secondary{background:#1c2129;border-color:#333b47;color:#dce3ec}.editor-grid{display:grid;grid-template-columns:240px minmax(390px,1fr) 310px;gap:1px;background:var(--line);flex:1;min-height:0}.panel{background:var(--panel);min-height:0}.panel-title{height:43px;padding:0 13px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);font-weight:750;font-size:12px;text-transform:uppercase;letter-spacing:.6px}.count{display:grid;place-items:center;min-width:23px;height:19px;border-radius:10px;background:#252b34;color:#aeb8c6;font-size:10px}.media-panel{display:flex;flex-direction:column}.media-section-label{padding:12px 12px 7px;color:#778294;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:750}.media-list{overflow:auto;min-height:80px;flex:1;padding:0 7px}.media-item{display:flex;align-items:center;gap:8px;padding:7px 7px;border-radius:5px;cursor:pointer}.media-item:hover{background:#1b2028}.media-item.selected{background:#242a34}.source-icon{width:30px;height:24px;border-radius:3px;background:#2a323e;display:grid;place-items:center;color:#b9c5d3;font-size:9px;font-weight:800}.media-meta{min-width:0;flex:1}.media-meta strong{display:block;font-size:11px}.media-meta span{display:block;font-size:10px;color:var(--muted);margin-top:2px}.ready-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex:0 0 auto}.ready-dot.missing{background:var(--accent)}.audio-label{border-top:1px solid var(--line);margin-top:5px;padding-top:12px}.audio-card{margin:0 9px 7px;padding:9px;border:1px solid #29303a;background:#151a21;border-radius:6px}.audio-card strong{display:block;font-size:11px;margin-bottom:3px}.audio-card span{font-size:10px;color:var(--muted);line-height:1.4}.audio-card.ready{border-color:#245743}.audio-card.missing{border-color:#5a3039}.media-hint{padding:9px 12px 12px;color:#6f7b8c;font-size:10px;line-height:1.45}.monitor-panel{background:#0e1116;display:flex;flex-direction:column;min-width:0;min-height:0}.monitor{position:relative;box-shadow:0 12px 35px #0008}.monitor video,.monitor img{position:absolute;width:100%;height:100%;object-fit:contain;inset:0;background:#030405}.monitor video{display:none}.monitor-gradient{position:absolute;inset:0;pointer-events:none;background:linear-gradient(transparent 70%,#0007)}.big-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:60px;height:60px;border-radius:50%;border:1px solid #ffffff55;background:#0a0c10b8;color:#fff;font-size:22px;padding-left:7px;cursor:pointer;backdrop-filter:blur(8px)}.big-play:hover{background:#ee455fdd}.caption-overlay{position:absolute;left:7%;right:7%;bottom:7%;text-align:center;color:#fff;font-weight:650;font-size:clamp(12px,1.45vw,21px);line-height:1.3;text-shadow:-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,2px 2px 0 #000,0 2px 5px #000;pointer-events:none}.buffering{display:none;position:absolute;top:10px;right:10px;padding:5px 8px;border-radius:4px;background:#000b;color:#d7dde6;font-size:10px}.preview-badge{margin-left:auto;color:#667386;font-size:9px;letter-spacing:1px}.validation-card{margin:0 15px 12px;padding:10px 12px;background:#131820;border:1px solid #272f3a;border-radius:7px}.validation-heading{display:flex;justify-content:space-between;font-size:11px}.validation-heading span{color:var(--amber)}#validation-list{font-size:10px;color:var(--muted);line-height:1.45;margin-top:5px}.validation-item{display:flex;gap:6px}.validation-item.error{color:#ef91a0}.validation-item.warning{color:#eac885}.validation-item.ok{color:#77d8b0}.inspector-panel{display:flex;flex-direction:column}.inspector-scroll{overflow:auto;flex:1;padding:2px 13px 12px}.inspector-group{padding:11px 0;border-bottom:1px solid #252b34}.inspector-group label,.inspector-grid label{display:block;color:#778396;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:750;margin-bottom:6px}.inspector-group p{margin:0;color:#c7d0dc;line-height:1.52;font-size:11px}.inspector-group code{display:block;color:#e7edf5;font-family:Consolas,monospace;font-size:11px;line-height:1.5;word-break:break-word}.inspector-group a{color:#86baff;text-decoration:none;font-size:11px}.inspector-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:11px 0;border-bottom:1px solid #252b34}.inspector-grid strong{font-size:11px}.cut-box code{color:#ff9dad}.render-card{border-top:1px solid var(--line);background:#141920;padding:12px}.render-heading{display:flex;justify-content:space-between;font-size:11px}.render-heading span{color:#a2adbb}.progress-track{height:5px;border-radius:4px;background:#282f39;margin:10px 0 7px;overflow:hidden}.progress-fill{height:100%;width:0;background:linear-gradient(90deg,#d52e4a,#ff6b81);transition:width .25s}.render-detail{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.render-log{height:130px;overflow:auto;background:#090b0e;border:1px solid #272e37;border-radius:5px;color:#9eacbb;padding:8px;font-size:9px;white-space:pre-wrap}.render-actions{display:flex;align-items:center;gap:10px;margin-top:9px;min-height:20px}.text-button{border:0;background:transparent;color:#8f9bad;font-size:10px;cursor:pointer;padding:0}.text-button:disabled{opacity:.4}.text-button.danger{color:#ef7d8e}.download-link{margin-left:auto;color:#71ddb0;text-decoration:none;font-weight:750;font-size:11px}.timeline-panel{background:#11151b;border-top:1px solid var(--line)}.timeline-toolbar{height:40px;display:flex;align-items:center;padding:0 13px;gap:16px;border-bottom:1px solid var(--line);font-size:11px}.timeline-toolbar strong{text-transform:uppercase;letter-spacing:.8px}.track-legend{display:flex;align-items:center;gap:6px;color:#808c9d;font-size:10px}.track-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-left:8px}.legend-video{background:#65748a}.legend-caption{background:#3b6970}.timeline-spacer{flex:1}.timeline-toolbar label{color:#7e8998;font-size:10px}.timeline-toolbar input{width:100px;accent-color:var(--accent)}.timeline-body{display:flex}.track-labels{width:50px;flex:0 0 50px;border-right:1px solid var(--line);color:#7e8b9c;font-size:10px;font-weight:750;text-align:center}.track-labels>div{display:flex;align-items:center;justify-content:center;border-bottom:1px solid #252b33}.documentary-workspace .ruler-label{height:var(--doc-ruler)}.timeline-scroll{flex:1;overflow:auto;position:relative}.timeline-content{position:relative;min-width:100%}.ruler-track{position:relative;border-bottom:1px solid #272e37;background:#0f1318}.ruler-tick{position:absolute;top:0;height:100%;border-left:1px solid #343b46;padding:5px 0 0 5px;color:#6f7b8b;font-size:9px;white-space:nowrap}.video-track{position:relative;background:#141920;border-bottom:1px solid #292f39}.shot-clip{position:absolute;top:5px;height:calc(100% - 10px);border-radius:4px;border:1px solid #ffffff24;padding:6px 6px;overflow:hidden;cursor:pointer;color:#f4f7fb;background:#445066;box-shadow:inset 0 1px #ffffff13}.shot-clip:hover{filter:brightness(1.18)}.shot-clip.selected{outline:2px solid #fff;outline-offset:-2px;z-index:2}.shot-clip strong{display:block;font-size:9px;white-space:nowrap}.shot-clip span{display:block;font-size:8px;color:#e2e8f0;margin-top:4px;white-space:nowrap}.caption-track{position:relative;background:#10161a}.caption-block{position:absolute;top:5px;height:calc(100% - 14px);border-radius:3px;background:#29484e;border:1px solid #3e6870;cursor:pointer}.caption-block:hover{background:#3b6970}.caption-block.active{background:#d4b15b;border-color:#f3d27e}/* Sits at the BOTTOM of its own track. A fixed top offset assumed the old 36px
    stage; when the rows became proportional it landed on the row below, which is
    why "SRT REFERENCE · ORIGINAL UNCHANGED" was printed across the MP4 clips. */
 .caption-note{position:absolute;bottom:2px;left:8px;right:8px;color:#63777c;font-size:9px;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}.playhead{position:absolute;top:0;bottom:0;width:1px;background:#ff546d;z-index:20;pointer-events:none}.playhead span{position:absolute;top:0;left:-5px;width:11px;height:10px;background:#ff546d;clip-path:polygon(0 0,100% 0,50% 100%)}.modal-backdrop{position:fixed;inset:0;z-index:100;background:#05070bcc;display:grid;place-items:center;padding:20px;backdrop-filter:blur(6px)}.modal-backdrop[hidden]{display:none}.modal{width:min(660px,95vw);max-height:90vh;overflow:auto;background:#171c24;border:1px solid #3a424f;border-radius:12px;box-shadow:0 25px 90px #000b}.modal-header{display:flex;justify-content:space-between;align-items:flex-start;padding:20px;border-bottom:1px solid #303742}.modal-header strong{display:block;font-size:16px}.modal-header span{display:block;color:var(--muted);font-size:11px;margin-top:4px}.modal-header button{border:0;background:transparent;color:#9ca7b6;font-size:28px;cursor:pointer;line-height:1}.upload-section{display:grid;grid-template-columns:1fr auto;gap:10px 15px;padding:17px 20px;border-bottom:1px solid #2b323d;align-items:center}.upload-section strong{font-size:12px}.upload-section p{margin:5px 0 0;color:var(--muted);font-size:10px;line-height:1.45}.upload-section input{grid-column:1/2;color:#a8b4c3;font-size:10px;max-width:100%}.upload-action{grid-column:2/3;grid-row:1/3}.upload-status{padding:0 20px 18px;color:#ef9dad;font-size:11px}.toast{position:fixed;z-index:120;left:50%;bottom:20px;transform:translate(-50%,20px);background:#e9eef5;color:#151a21;border-radius:6px;padding:10px 15px;font-weight:650;font-size:11px;opacity:0;pointer-events:none;transition:.2s;box-shadow:0 10px 30px #0007}.toast.show{opacity:1;transform:translate(-50%,0)}.loading{color:var(--muted);padding:12px;font-size:11px}.drop-zone{grid-column:1/2;grid-row:2/3;border:1px dashed #44505e;border-radius:6px;padding:10px 12px;background:#11161d;cursor:pointer;min-height:43px}.drop-zone strong{display:block;color:#cbd5df;font-size:11px}.drop-zone span{display:block;color:#7f8b9b;font-size:10px;margin-top:3px}.drop-zone:hover,.drop-zone.dragover{border-color:#c94f65;background:#211820}.drop-zone:focus{outline:2px solid #c94f65;outline-offset:2px}.upload-progress{height:5px;background:#0c1117;border-radius:5px;margin:15px 20px 0;overflow:hidden}.upload-progress>div{height:100%;width:0;background:#d45168;transition:width .15s}.upload-status{padding:10px 20px 18px;color:#98a4b3;font-size:11px;line-height:1.5}.upload-status.success{color:#83d3b5}.upload-status.error{color:#ef9dad}.upload-status.working{color:#c8d4e2}.audio-toggle{border:1px solid #33404a;background:#171d22;color:#b8c0c8;border-radius:5px;padding:6px 10px;font-size:11px;white-space:nowrap;cursor:pointer}.audio-toggle.available{color:#8fd8c1;border-color:#31584e}.audio-toggle.unavailable{color:#df9b83;border-color:#5b3d35}.audio-toggle:hover{background:#222b32}@media(max-width:1100px){.editor-grid{grid-template-columns:205px minmax(350px,1fr) 275px}.topbar{gap:14px}.brand>span:last-child{display:none}.track-legend{display:none}}@media(max-height:760px){.validation-card{margin-bottom:8px}.validation-card{margin-bottom:8px}.inspector-group{padding:8px 0}}
@@ -11,13 +11,13 @@
 .match-warning{color:var(--amber)!important}.match-ready{color:var(--green)!important}
 @media(max-width:1220px){.preview-badge{display:none}.audio-toggle,.caption-toggle{padding:6px 7px}.timecode{font-size:10px}}
 /* Narrow live-preview repair: preserve the monitor and controls instead of clipping them. */
-.monitor-panel,.panel,.topbar,.timeline-panel{min-width:0}.project-heading{flex:1;overflow:hidden}.project-heading strong,.project-heading span{overflow:hidden;text-overflow:ellipsis}.top-actions{flex:0 0 auto}.transport-buttons{flex:0 0 auto}.timecode{white-space:nowrap;flex:0 0 auto}.validation-card{min-width:0;overflow-wrap:anywhere}.validation-heading{gap:12px}.validation-heading span{flex:0 0 auto}
+.monitor-panel,.panel,.topbar,.timeline-panel{min-width:0}.project-heading{flex:0 1 auto;overflow:hidden}.project-heading strong,.project-heading span{overflow:hidden;text-overflow:ellipsis}.top-actions{flex:0 0 auto}.transport-buttons{flex:0 0 auto}.timecode{white-space:nowrap;flex:0 0 auto}.validation-card{min-width:0;overflow-wrap:anywhere}.validation-heading{gap:12px}.validation-heading span{flex:0 0 auto}
 @media(max-width:1000px){
  .topbar{gap:10px;padding:0 10px}.brand{flex:0 0 auto}.brand>span:last-child{display:none}.project-heading strong{font-size:12px;white-space:nowrap}.project-heading span{font-size:10px;white-space:nowrap}.top-actions{gap:6px}.top-actions .button{padding:8px 10px;font-size:11px;white-space:nowrap}
- .editor-grid{grid-template-columns:220px minmax(0,1fr)}.inspector-panel{display:none}.monitor-panel{overflow:hidden}.transport-buttons button{width:27px}.audio-toggle,.caption-toggle{padding:6px 8px}.timecode{font-size:10px}.validation-card{margin:0 12px 10px}.timeline-panel{overflow:hidden}.timeline-toolbar{gap:10px}.timeline-toolbar .track-legend{display:none}
+ .editor-grid{grid-template-columns:220px minmax(0,1fr)}:root{--pane-columns:220px minmax(0,1fr) 0}.inspector-panel{display:none}.monitor-panel{overflow:hidden}.transport-buttons button{width:27px}.audio-toggle,.caption-toggle{padding:6px 8px}.timecode{font-size:10px}.validation-card{margin:0 12px 10px}.timeline-panel{overflow:hidden}.timeline-toolbar{gap:10px}.timeline-toolbar .track-legend{display:none}
 }
 @media(max-width:720px){
- .editor-grid{grid-template-columns:180px minmax(0,1fr)}.project-heading span{display:none}.top-actions .button{padding:8px;font-size:10px}.top-actions #validate-button{display:none}.media-section-label{padding-left:9px}.media-list,.semantic-list{padding-left:4px;padding-right:4px}.media-hint{padding-left:9px;padding-right:9px}.audio-toggle{font-size:0;min-width:35px}.audio-toggle::first-letter{font-size:12px}.timecode{font-size:9px}
+ .editor-grid{grid-template-columns:180px minmax(0,1fr)}:root{--pane-columns:180px minmax(0,1fr) 0}.project-heading span{display:none}.top-actions .button{padding:8px;font-size:10px}.top-actions #validate-button{display:none}.media-section-label{padding-left:9px}.media-list,.semantic-list{padding-left:4px;padding-right:4px}.media-hint{padding-left:9px;padding-right:9px}.audio-toggle{font-size:0;min-width:35px}.audio-toggle::first-letter{font-size:12px}.timecode{font-size:9px}
 }
 /* Reference-layout repair: keep all three panes visible at laptop preview sizes.
    Proportions follow CapCut, measured from the reference at 1916px: left side
@@ -25,11 +25,18 @@
    absorb all the leftover width, so it swelled to two thirds of the window while
    the inspector stayed a narrow strip. Proportional shares make the three panes
    hold that balance at any width; the minmax floors stop a pane collapsing. */
+/* The pane widths live in ONE custom property, because the header has to line up
+   with them: the production name sits over the monitor column, on the same vertical
+   line as the play button in the transport below. Two copies of these three values
+   would drift apart the moment either side was retuned. */
 .editor-grid{grid-template-columns:
   minmax(240px,34fr)
   minmax(0,40fr)
   minmax(250px,26fr);
   overflow:hidden}
+/* The header borrows the same three tracks from the same place, so it cannot drift
+   away from the panes below when either side is retuned. */
+:root{--pane-columns:minmax(240px,34fr) minmax(0,40fr) minmax(250px,26fr)}
 .inspector-panel{display:flex!important;min-width:0}.monitor-panel{overflow:auto;min-width:0}
 
 .monitor video,.monitor img{object-fit:contain}
@@ -37,8 +44,8 @@
 .validation-card{max-height:130px;overflow:auto;flex:0 0 auto}
 .media-panel{overflow:auto}.media-list{flex:1 0 125px;max-height:210px}.semantic-list{flex:0 0 100px}
 .timeline-scroll{min-width:0;overflow:auto;scrollbar-gutter:stable}.shot-clip strong{font-size:9px}.shot-clip span{font-size:9px}
-@media(max-width:1000px){.editor-grid{grid-template-columns:200px minmax(0,1fr) 225px}.inspector-panel{display:flex}.semantic-list{flex-basis:90px}.topbar{gap:8px}.brand>span:last-child{display:none}}
-@media(max-width:760px){body{overflow:auto;min-width:680px}.editor-grid{grid-template-columns:170px minmax(270px,1fr) 210px;min-height:410px}.topbar{min-width:680px}.timeline-panel{min-width:680px}.top-actions .button{padding:7px;font-size:10px}}
+@media(max-width:1000px){.editor-grid{grid-template-columns:200px minmax(0,1fr) 225px}:root{--pane-columns:200px minmax(0,1fr) 225px}.inspector-panel{display:flex}.semantic-list{flex-basis:90px}.topbar{gap:8px}.brand>span:last-child{display:none}}
+@media(max-width:760px){body{overflow:auto;min-width:680px}.editor-grid{grid-template-columns:170px minmax(270px,1fr) 210px;min-height:410px}:root{--pane-columns:170px minmax(270px,1fr) 210px}.topbar{min-width:680px}.timeline-panel{min-width:680px}.top-actions .button{padding:7px;font-size:10px}}
 /* Keep the monitor box itself 16:9, including on wide/short displays. */
 
 /* Full-frame soft backdrop; foreground is never stretched or cropped. */
@@ -47,7 +54,7 @@
 
 .monitor video.master-preview{display:block;z-index:2;object-fit:contain;background:transparent}.monitor video.master-preview[hidden]{display:none}
 /* Preserve the established three-pane timeline editor. Production tools are overlays. */
-[hidden]{display:none!important}.project-heading{flex:1}.topbar{padding:0 12px;gap:12px}.top-actions{gap:6px}.top-actions .button{padding:8px 10px}.media-list{max-height:none;flex:1 1 180px}.media-item .media-meta strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.media-item .media-meta span{font-size:9px}.monitor #program-master,.monitor #program-source,.monitor #program-source-next{position:absolute;inset:0;display:none;background:transparent;z-index:1}.monitor /* Fixed order: video above poster. The poster carried z-index:1 while the
+[hidden]{display:none!important}.project-heading{flex:0 1 auto}.topbar{padding:0 12px;gap:10px}.top-actions{gap:6px}.top-actions .button{padding:8px 10px}.media-list{max-height:none;flex:1 1 180px}.media-item .media-meta strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.media-item .media-meta span{font-size:9px}.monitor #program-master,.monitor #program-source,.monitor #program-source-next{position:absolute;inset:0;display:none;background:transparent;z-index:1}.monitor /* Fixed order: video above poster. The poster carried z-index:1 while the
    video had none, so a shown still covered the picture for the whole
    session and every moving clip looked frozen. */
 #program-master{z-index:2}
@@ -392,19 +399,28 @@
    to, and the rounded bottom corners turned it into a separate floating bar.
    With no margin and no radius the media pool, the transport and the inspector
    meet at one edge, and the strip is exactly as wide as the picture above it. */
-.transport{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:10px;
+/* Three columns with EQUAL side tracks, so the middle one is the bar's own centre
+   line whatever widths the timecode and the right-hand chips happen to be. With the
+   previous flex row the play cluster was centred in the space left over between two
+   unequal groups, which put the play button a few pixels off the centre of the
+   picture above it -- and the production name is now anchored to that same line. */
+.transport{height:44px;flex:0 0 44px;display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center;gap:10px;
   padding:0 12px;margin:0;border-radius:0;background:var(--deck-chrome);
   box-sizing:border-box;min-width:0;overflow:hidden}
 .timecode{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;
-  letter-spacing:.4px;display:flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto}
+  letter-spacing:.4px;display:flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto;
+  justify-self:start}
 #timecode-current{color:var(--deck-tc)}
 .timecode-sep,#timecode-total{color:var(--deck-total)}
 
-.transport-buttons{display:flex;gap:3px;flex:1 1 auto;justify-content:center}
+.transport-buttons{display:flex;gap:3px;justify-content:center;justify-self:center}
 .transport-buttons button{border:0;background:transparent;color:var(--deck-ink);
   width:34px;height:30px;border-radius:4px;cursor:pointer;font-size:15px;line-height:1}
 .transport-buttons button:hover{background:#383838;color:#fff}
-.transport-right{display:flex;align-items:center;gap:7px;flex:0 0 auto;margin-left:auto}
+.transport-right{display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  justify-self:end;margin-left:auto}
 .transport-chip{border:1px solid #4c4c4c;background:transparent;color:#c8c8c8;
   border-radius:3px;padding:2px 7px;font-size:11px;font-weight:700;cursor:pointer;min-width:0}
 .transport-chip:hover{border-color:#7a7a7a;color:#fff}
@@ -536,6 +552,14 @@
   font-weight:700;cursor:pointer}
 .pool-import span{font-size:14px;line-height:1;color:#8fd8c1}
 .pool-import:hover{background:#232b35;border-color:#445465}
+/* Add music sits beside Import, the same weight and shape, because it is the same
+   kind of action: one import button that brings in media. Music keeps a warm mark
+   rather than the import green, so the two are told apart at a glance without a
+   different box. The toolbar's chips take the remaining width on the right; when the
+   pool is too narrow for both rows the chips wrap under the buttons rather than
+   squeezing the labels into an ellipsis. */
+.pool-music-button span{color:#e8c477}
+.pool-music-button[hidden]{display:none}
 .pool-filter{display:flex;gap:2px;margin-left:auto}
 .pool-chip{border:1px solid transparent;background:transparent;color:#8f9bad;
   font-size:10px;font-weight:650;padding:4px 7px;border-radius:5px;cursor:pointer}
@@ -554,8 +578,13 @@
 .pool-foot strong{color:#b9c5d3;font-weight:700}
 .pool-foot[hidden]{display:none}
 
-/* The grid itself: two columns on a wide pool, more when it is wider. */
-.media-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));
+/* The grid itself: exactly THREE tiles per row, wrapping to the next row, so the pool
+   reads as a contact sheet with a predictable rhythm instead of a column count that
+   changes with the pane's width. `auto-fill`/`minmax` was doing the latter: at some
+   widths it produced two columns, at others three, and a tile could sit alone on the
+   last row looking like a mistake. Three fixed tracks keep every row identical, and
+   `minmax(0,1fr)` lets a long filename ellipsise instead of widening its column. */
+.media-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
   gap:10px 9px;padding:4px 10px 10px;align-content:start}
 .pool-tile{display:flex;flex-direction:column;gap:5px;padding:0;border:0;
   background:transparent;text-align:left;cursor:pointer;min-width:0;
@@ -624,17 +653,6 @@
 #render-button[data-mode="error"]{background:#5a2530;color:#ffc9d3;border-color:#8c3a48}
 #render-button[data-mode="error"]:hover{background:#6d2c39}
 
-/* Music in the pool. Empty it is an import card with a dashed edge, so it reads as a
-   place to put something rather than as a clip that already exists. Once a file is
-   chosen the same card becomes the clip, with the name and its length. */
-.pool-music .music-plate{position:absolute;inset:0;display:grid;place-items:center;
-  font-size:17px;font-weight:800;color:#e0b877}
-.pool-music .tile-shot{background:#14100a;border-color:#4a3a24}
-.pool-music.is-empty .tile-shot{background:transparent;border-style:dashed;border-color:#4a3a24}
-.pool-music.is-empty .music-plate{color:#a8895a;font-size:19px}
-.pool-music.is-empty .tile-name{color:#9a8b74}
-.pool-music:hover .tile-shot{border-color:#7a5a2c}
-
 /* An empty music bed takes no space at all. The row and its label are mounted so the
    track maths keeps working, but with no file there is nothing to show: collapsing
    them hands that height to the picture tracks instead of reserving a brown bar for a
@@ -694,29 +712,97 @@
 .transition-row button:hover{background:#1b170e;border-color:#c9a227}
 
 /* ---- header ------------------------------------------------------------
-   The top bar carries the production's name and two library doors. Everything
-   that used to narrate the workspace underneath the name has gone: the name is
-   the name, and the two boxes are the two things that change the look of the
-   film from one place. */
-/* The bar reads left to right: identity, the two look controls, the production
-   name, then the actions. The name takes the middle so it is the thing the eye
-   lands on between two groups of controls, and it is allowed to be long. */
+   The bar carries three things: identity and the two look controls, the
+   production's name, and the actions.
+
+   The name is not simply "next to" the controls. It sits on the same vertical line
+   as the play button in the transport below, which is the centre of the monitor
+   column. A title anywhere else reads as an afterthought drifting along the bar; on
+   that line it reads as the name of the picture it sits above.
+
+   An offset would not hold: the bar has to line up at every window width, and the
+   panes are proportional. So the bar is laid out on the SAME three-column template
+   as the editor grid (--pane-columns). The name's column IS the monitor's column by
+   construction, so retuning the panes moves the header with them in the same edit.
+   The controls stay over the media pool, where the drawing puts them, and the
+   actions keep the right-hand end.
+
+   The bar has no side padding and a 1px column gap, because the panes below have a
+   1px gap and none: any padding here would make these columns a few pixels wider
+   than the ones they are supposed to sit on, and the name would drift off the line
+   by exactly that amount. The two end groups carry their own inset instead. */
+.topbar{display:grid;grid-template-columns:var(--pane-columns);
+  padding:0;column-gap:1px;row-gap:0;align-items:center;overflow:visible}
+.head-left{display:flex;align-items:center;gap:10px;min-width:0;padding-left:14px}
 .head-tools{display:flex;gap:8px;flex:0 0 auto}
 .head-tool{padding:7px 16px;background:#161a21;border:1px solid #2b323d;border-radius:9px;
   cursor:pointer;color:#eef2f7;font:inherit;font-size:12.5px;font-weight:650;line-height:1.15;
-  transition:border-color .12s,background .12s}
+  transition:border-color .12s,background .12s;white-space:nowrap}
 .head-tool:hover{border-color:var(--accent);background:#1c2129}
-/* Both sides of the name reserve the same share of the bar, so the title sits on the
-   centre line of the window rather than on the centre of whatever space the buttons
-   happened to leave. Without this the action group, which is the widest thing in the
-   header, pushed the name about 25px off centre at every window size. */
-.topbar>.brand,.topbar>.head-tools,.topbar>.top-actions{flex:1 1 0;min-width:max-content}
-.topbar>.brand{justify-content:flex-start}
-.topbar>.top-actions{justify-content:flex-end}
-.project-heading{flex:0 1 auto;display:flex;justify-content:center;align-items:center;min-width:0;
-  padding:0 16px}
+/* Centred in its column, not stretched across it: `justify-content:center` puts the
+   name's own midpoint on the column's midpoint however long the name is.
+   `text-align:center` would centre the text inside a full-width box instead, which
+   only coincides with the line for a name that happens to fill the box. */
+.topbar>.project-heading{display:flex;flex-direction:row;justify-content:center;align-items:center;
+  min-width:0;padding:0 12px;justify-self:center}
 .project-heading strong{font-size:16px;font-weight:700;letter-spacing:.01em;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;max-width:44vw;color:#f4f7fb}
+  overflow:hidden;text-overflow:ellipsis;text-align:center;color:#f4f7fb;
+  max-width:var(--name-room,100%)}
+/* The action group keeps the right-hand end. It is wider than the inspector column,
+   so on all but the widest screens it reaches back over the monitor column; the name
+   is kept clear of it at runtime (see fitHeaderName in editor.js), which measures the
+   actual gap rather than guessing it here. */
+.topbar>.top-actions{grid-column:2 / -1;display:flex;justify-content:flex-end;align-items:center;
+  gap:6px;min-width:0;padding-right:14px}
+/* These six buttons are navigation chrome in a 60px bar, so they sit tighter than a
+   dialog's buttons. The room they give back goes to the production's name, which is
+   the only thing on this line that can stretch. Measured: at 1600px the action row
+   was 632px wide and reached 104px past the centre line, which is what squeezed the
+   name. Each pixel taken off this row is a pixel the name can use, twice over,
+   because the name is centred and its room is limited by the nearer side. */
+.topbar>.top-actions .button{padding:8px 10px;font-size:11px}
+/* The action group gives way first, because it is the only part of the bar that can:
+   the two boxes are the bar's purpose, and the name shares its line with the picture
+   below. Every one of these buttons is a single-click route to something that has no
+   other route in the interface -- Projects, Performance and the documentary tools in
+   particular -- so none of them is ever hidden. They only get tighter.
+   These selectors repeat `.topbar>` on purpose: the base rule above is the most
+   specific one in the block, and a plainer selector here would lose to it. */
+@media(max-width:1700px){
+  .topbar>.top-actions{gap:5px}
+  .topbar>.top-actions .button{padding:8px 9px;font-size:10.5px;letter-spacing:-.01em}
+}
+@media(max-width:1500px){
+  .topbar>.top-actions .button{padding:7px 8px;font-size:10px}
+}
+@media(max-width:1240px){
+  .topbar>.top-actions .button{padding:7px 7px;font-size:9.5px}
+  .project-heading strong{font-size:15px}
+}
+/* Measured, not chosen by eye: at 1460px of window the centred name still gets about
+   210px, enough for a real title. Below that the six action buttons and the two boxes
+   leave too little either side of the centre line, and a centred name decays into an
+   ellipsis and an initial. So below 1460px the bar becomes one row again -- identity,
+   controls, name, actions -- where the name sits beside the boxes and keeps its full
+   width. The drawing's arrangement applies at every width that can carry it, which
+   includes a maximised window on any laptop or desktop screen. */
+@media(max-width:1460px){
+  .topbar{display:flex;gap:10px;padding:0 14px;column-gap:0}
+  .head-left{padding-left:0}
+  .topbar>.project-heading{flex:0 1 auto;justify-content:flex-start;padding:0}
+  .topbar>.top-actions{grid-column:auto;flex:0 0 auto;margin-left:auto;padding-right:0}
+  .project-heading strong{text-align:left;max-width:100%}
+}
+@media(max-width:1100px){
+  .topbar .brand>span:last-child{display:none}
+  .head-tool{padding:6px 12px;font-size:11.5px}
+  .topbar>.top-actions .button{padding:7px 7px;font-size:10px}
+}
+/* The last resort. Even in one row, a name and six buttons do not both fit; the name
+   goes, and the production is still named in the window title and its tab. */
+@media(max-width:820px){
+  .topbar>.project-heading{visibility:hidden}
+}
 
 /* ---- caption library --------------------------------------------------- */
 .caption-preview{display:flex;align-items:center;justify-content:center;height:52px;
