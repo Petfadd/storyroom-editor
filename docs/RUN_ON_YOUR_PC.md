@@ -1,6 +1,6 @@
 # Running Storyroom on your own PC
 
-Everything below is verified against `main` at commit `ecd1637`.
+Everything below is verified against `main` at commit `c6634dd`.
 
 You need **Python 3.10+** and nothing else. FFmpeg is bundled with the app — do not
 install it separately.
@@ -27,7 +27,7 @@ Check you got the right version:
 git log --oneline -1
 ```
 
-It should say `ecd1637 Merge pull request #2`.
+It should say `c6634dd Merge pull request #7`.
 
 ---
 
@@ -55,6 +55,34 @@ Takes a minute or two. The `(.venv)` prefix in your prompt means it worked.
 
 You do not need the optional AI packages. Those are only for local speech, diarization
 and sound analysis, and are installed separately later if you ever want them.
+
+---
+
+## 3a. Optional: turn on real AI upscaling
+
+Without this the app still works, and it will tell you so: the export page says
+*"Real-ESRGAN is not installed, so pictures are resized with Lanczos."*
+
+With it, stills are enlarged by a neural network rather than by interpolation. It is
+free, runs on your own machine, and has no account or API key.
+
+1. Download
+   <https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip>
+2. Unzip it and put the **whole folder** here, so the file sits at
+   `C:\Storyroom\tools\realesrgan\realesrgan-ncnn-vulkan.exe`
+3. Restart `python app.py`
+
+Check it took: <http://localhost:8003/api/picture-tools> should report
+`"available": true`.
+
+**It needs a Vulkan-capable graphics card** — NVIDIA from 2012, AMD from 2012, or Intel
+HD 4000 and newer. Almost every machine that can play a 4K video qualifies. If yours
+does not, nothing breaks: the app falls back to Lanczos and says so in the panel.
+
+**Licence.** `realesrgan-ncnn-vulkan` is MIT licensed, which places no conditions on
+your own work. Note that this is *not* Video2X, whose AGPL-3.0 licence would attach to
+the app itself if it were bundled. Keeping AI upscaling in a separate executable is what
+keeps your project free of that obligation.
 
 ---
 
@@ -172,8 +200,34 @@ turned off, or tell me and I will raise the ceiling.
 1. **New production** — give it a title, choose **Landscape 16:9** or **Portrait 9:16**.
 2. Upload your **captions (.srt)**, **voiceover**, **production script** and **video clips**.
 3. Build the storyboard — the app studies your footage and matches it to the captions.
-4. **Render MP4** — the export appears in the player, with a download control in its
-   top-right corner.
+4. **Render MP4** — choose the resolution first, then render. The export appears in the
+   player, with a download control in its top-right corner.
 
-Portrait projects render at 1080×1920 with square pixels, ready for TikTok and Reels.
-Landscape renders at 1920×1080 for YouTube.
+### Choosing a resolution
+
+The export page offers three cards:
+
+| Choice | Landscape | Portrait |
+| --- | --- | --- |
+| 1080p Full HD | 1920 × 1080 | 1080 × 1920 |
+| 2K QHD | 2560 × 1440 | 1440 × 2560 |
+| 4K UHD | 3840 × 2160 | 2160 × 3840 |
+
+Each card tells you what that choice costs your own footage. A 1080p film at 1080p says
+**No upscale needed** and is not processed at all. The same film at 4K says
+**Upscale ×2**.
+
+The factor always comes from the source, never from the canvas. A 640 × 360 clip needs
+×4 even at 1080p, and the card says so before you render rather than after.
+
+Also on that page:
+
+- **Framing** — *fit* (black bars), *crop* (fills the frame, trims edges) or *blur*
+  (blurred copy behind). None of them stretch or distort.
+- **Quality** — High, Standard or Compact. These are CRF 18/20/23 with 256/192/160k
+  audio. Duration, frame rate and audio sync never change.
+- **Checks** — the export verdict, now beside the render button rather than in the
+  shot inspector.
+
+Portrait projects render with square pixels, ready for TikTok and Reels. Landscape is
+ready for YouTube.
