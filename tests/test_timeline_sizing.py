@@ -1408,6 +1408,41 @@ class AssetPosterTest(unittest.TestCase):
         self.assertGreater(render.index('validation-list'), body_end,
                            'Checks must survive a render-page rebuild')
 
+    def test_an_empty_music_bed_draws_nothing(self):
+        """No music means no bar, no prompt, no reserved row.
+
+        The empty bed used to paint a full-width amber strip reading "Add background
+        music", which looked like a clip had already been placed. A track with no file
+        is not a thing on the timeline.
+        """
+        js = __import__('pathlib').Path('static/documentary_timeline.js').read_text()
+        start = js.index('function docRenderMusicTrack(')
+        body = js[start:js.index('\n}', start)]
+        self.assertIn("const hasMusic=!!docMusic.file_present;", body)
+        # Both the row and its label are hidden when there is no file.
+        self.assertIn("track.style.display=documentary&&hasMusic?'block':'none'", body)
+        self.assertIn("label.style.display=documentary&&hasMusic?'flex':'none'", body)
+        # And the prompt text is gone entirely.
+        self.assertNotIn('Add background music', body)
+        self.assertIn("clip.innerHTML=''", body)
+
+    def test_music_appears_in_the_pool_as_an_import_card(self):
+        """The pool is where an importer looks, so music lives there too.
+
+        Empty it is an import card that opens the picker; filled it is the clip, with
+        its own name, length and on/off state.
+        """
+        js = __import__('pathlib').Path('static/editor.js').read_text()
+        start = js.index('function poolMusicTile(')
+        body = js[start:js.index('function poolSrtTile(', start)]
+        self.assertIn('is-empty', body, 'the empty state must read as an import card')
+        self.assertIn('docPickMusic()', body, 'importing from the pool uses the same picker')
+        self.assertIn('docMusic.name', body, 'a placed bed shows its own name')
+        self.assertIn('docMusic.duration_s', body, 'and its own length')
+        self.assertIn("docMusic.enabled?'MUSIC':'OFF'", body)
+        # Only documentary projects have a bed to fill.
+        self.assertIn("P?.edit_mode==='documentary'&&P)tiles.push(poolMusicTile())", js)
+
     def test_the_render_button_is_never_disabled_by_a_render(self):
         """The top bar must stay pressable so progress and the finished file are visible.
 

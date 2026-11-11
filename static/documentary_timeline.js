@@ -434,20 +434,22 @@ function docRenderMusicTrack(){
  const track=$('#music-track'),label=$('#music-track-label'),clip=$('#music-track-clip');
  if(!track||!label||!clip)return;
  const documentary=P?.edit_mode==='documentary';
- // The track stays mounted so its height is measurable; an empty bed shows the
- // "add music" prompt that opens the file picker.
- track.style.display=documentary?'block':'none';label.style.display=documentary?'flex':'none';
+ // An empty bed draws NOTHING: no bar, no amber strip, no prompt text. A music track
+ // that has never been given a file is not a thing on the timeline, and a full-width
+ // placeholder read as though a clip had already been placed there. The row itself
+ // stays mounted (so its height stays measurable) but collapses to nothing until a
+ // file exists, which also gives the other tracks that space back.
+ const hasMusic=!!docMusic.file_present;
+ track.style.display=documentary&&hasMusic?'block':'none';
+ label.style.display=documentary&&hasMusic?'flex':'none';
  if(!documentary)return;
- const duration=window.docTimelineData?.duration||0;
- if(!docMusic.file_present){
-  clip.style.left='0px';clip.style.width=Math.max(3,duration*timelineZoom-1)+'px';
-  clip.className='audio-clip doc-music';
-  clip.style.background='';clip.style.borderColor='';
-  clip.onclick=()=>docPickMusic();
-  clip.innerHTML='<div class="audio-label"><strong>＋ Add background music · click to upload</strong></div>';
+ if(!hasMusic){
+  clip.innerHTML='';clip.onclick=null;
+  clip.style.width='0px';clip.style.left='0px';
   const readout0=$('#music-volume');if(readout0)readout0.textContent='Off';
   return;
  }
+ const duration=window.docTimelineData?.duration||0;
  const spans=duration>0?docMusicSpans(duration):[{start:0,end:0}];
  const zoom=timelineZoom;
  // One piece for the whole film: the bed is never cut, so there is no gap to
