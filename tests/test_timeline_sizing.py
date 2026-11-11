@@ -1519,3 +1519,46 @@ class AssetPosterTest(unittest.TestCase):
                 result, report = upscale.prepare(source, canvas, framing=framing, prefer_ai=False)
                 self.assertEqual(result.size, canvas, f'{framing} did not fill {canvas}')
                 self.assertEqual(report['source'], [900, 1600])
+
+
+class HeaderLayoutTest(unittest.TestCase):
+    """The top bar has one job: name the production, and offer the two looks.
+
+    It used to open with a generic "Storyboard editor" title, then a sentence of
+    workspace statistics, then two boxes reading "Transition / Library" and
+    "Caption / Library". The name belongs in the middle where a title is read, the
+    two controls belong on the left, and neither box needs the word "Library" --
+    the button already opens one.
+    """
+
+    def setUp(self):
+        self.template = __import__('pathlib').Path('templates/index.html').read_text()
+        self.editor = __import__('pathlib').Path('static/editor.js').read_text()
+        start = self.template.index('<header')
+        self.header = self.template[start:self.template.index('</header>', start)]
+
+    def test_the_header_reads_brand_tools_name_actions(self):
+        order = [self.header.index('class="brand"'),
+                 self.header.index('class="head-tools"'),
+                 self.header.index('class="project-heading"'),
+                 self.header.index('class="top-actions"')]
+        self.assertEqual(order, sorted(order),
+                         'the name must sit between the two controls and the actions')
+
+    def test_the_two_boxes_are_named_without_the_word_library(self):
+        self.assertIn('>Transition<', self.header)
+        self.assertIn('>Caption<', self.header)
+        # The function names still say "Library" -- that is the dialog they open. What
+        # must not appear is the word on the button, which is what a reader sees.
+        visible = __import__('re').sub(r'<[^>]+>', ' ', self.header)
+        self.assertNotIn('Library', visible)
+
+    def test_no_generic_workspace_title_or_status_sentence(self):
+        self.assertNotIn('Storyboard editor', self.template)
+        self.assertNotIn('project-status', self.template)
+        # And the editor must not write to a status line that no longer exists.
+        self.assertNotIn("$('#project-status')", self.editor)
+
+    def test_the_name_is_the_productions_own(self):
+        self.assertIn("$('#project-name').textContent=P?.title", self.editor)
+        self.assertNotIn('Documentary', self.editor.split("$('#project-name').textContent")[1][:120])

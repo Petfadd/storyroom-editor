@@ -89,7 +89,10 @@ function renderEditor(){
  const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));// The header shows the production's own name and nothing else. The workspace type,
 // scene count and approval tally used to sit under it; they are gone, and the name
 // carries no "Documentary" suffix because that is a workspace, not a title.
-$('#project-name').textContent=P?.title||'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null; // Clicking a source opens it, so the pool carries that instruction on the list
+// The header shows the production's own name, and nothing else when there is no
+// production to name. "Storyboard editor" here read as though it were the name of a
+// project, which is exactly what the bar must never imply.
+$('#project-name').textContent=P?.title||'Untitled production';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null; // Clicking a source opens it, so the pool carries that instruction on the list
  // itself. It used to be written through `.media-hint`, which matched the
  // footage-count line first and wiped that count on every render.
  const pool=$('#media-list');
