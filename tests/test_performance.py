@@ -20,6 +20,11 @@ import project_history
 import proxy
 import resources
 
+try:
+    import psutil
+except Exception:                                        # pragma: no cover
+    psutil = None
+
 
 class ResourceTest(unittest.TestCase):
     def test_a_snapshot_reports_what_the_machine_is_doing(self):
@@ -71,6 +76,30 @@ class ResourceTest(unittest.TestCase):
 
 
 class QueueTest(unittest.TestCase):
+    """Ordering and control of the queue.
+
+    These jobs are heavy, and the real dispatcher refuses to start heavy work on a
+    machine that reads as strained -- under 900 MB free, or a load of 88 percent or
+    more. That is correct behaviour, but it makes a test of *ordering* depend on what
+    else the computer happens to be doing: running the whole suite at once can push the
+    reading over the line, and the jobs then sit queued until the test gives up and
+    reports a priority failure that did not happen.
+
+    The reading is therefore pinned to a quiet machine here. What is under test is the
+    order and the controls, not the admission policy; that has its own tests, which set
+    the reading they want to examine.
+    """
+
+    QUIET = None
+
+    def setUp(self):
+        import resources
+        quiet = resources.Snapshot(4.0, 20.0, 8192.0, 100.0, 20.0, 'idle', 'quiet')
+        self._real_snapshot = resources.snapshot
+        patcher = mock.patch.object(resources, 'snapshot', return_value=quiet)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def make(self, name, calls, delay=0.02, priority=None, weight='heavy'):
         def work(context):
             calls.append(name)
@@ -770,6 +799,45 @@ class GraphicsReportingTest(unittest.TestCase):
         self.assertLess(each, 0.02,
                         f'a status reading took {each*1000:.1f} ms, which is too slow '
                         'to run every second')
+
+
+class FirstReadingTest(unittest.TestCase):
+    """The very first reading of the machine must not claim it is idle.
+
+    psutil returns 0.0 for a reading taken with no interval because it has nothing to
+    compare against. Reporting that as fact shows an idle machine on a machine running
+    flat out, which is precisely the wrong moment to understate the load.
+    """
+
+    def test_a_first_reading_does_not_invent_an_idle_machine(self):
+        import os, resources
+        try:
+            one, _five, _fifteen = os.getloadavg()
+        except (OSError, AttributeError):
+            self.skipTest('this platform has no load average')
+        busy = one * 100.0 / max(1, os.cpu_count() or 1)
+        if busy < 25:
+            self.skipTest('the machine is too quiet to tell the two apart')
+
+        original = psutil.cpu_percent
+        try:
+            psutil.cpu_percent = lambda interval=None: 0.0
+            reading = resources.snapshot()
+        finally:
+            psutil.cpu_percent = original
+        self.assertGreater(reading.cpu_percent, 0.0,
+                           'a first reading reported an idle machine while load average '
+                           'said otherwise')
+
+    def test_a_second_reading_uses_the_measured_figure(self):
+        import resources
+        original = psutil.cpu_percent
+        try:
+            psutil.cpu_percent = lambda interval=None: 42.0
+            reading = resources.snapshot()
+        finally:
+            psutil.cpu_percent = original
+        self.assertEqual(round(reading.cpu_percent), 42)
 
 
 if __name__ == '__main__':

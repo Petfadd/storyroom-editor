@@ -250,6 +250,18 @@ def snapshot(cache_dir: Path | None = None) -> Snapshot:
     except Exception:                                    # pragma: no cover
         return Snapshot(0.0, 0.0, 4096.0, None, 0.0, 'idle', 'System readings failed.')
 
+    # psutil reports 0.0 for the first reading taken with no interval, because it has no
+    # earlier sample to compare against. Taken at face value that says an idle machine,
+    # which is the one answer it must never invent: on the first call the status panel
+    # would show 0 percent while every core was busy. Load average is a real measurement
+    # from the operating system, so it is used until a second sample exists.
+    if cpu <= 0.0:
+        try:
+            one, five, fifteen = os.getloadavg()
+            cpu = min(100.0, one * 100.0 / max(1, os.cpu_count() or 1))
+        except (OSError, AttributeError, ValueError):
+            cpu = 0.0
+
     free_gb = None
     try:
         target = Path(cache_dir) if cache_dir else Path.home()
