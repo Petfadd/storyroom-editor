@@ -1027,7 +1027,16 @@ function fitHeaderName(){
   // the buttons are the nearer neighbour means the name never overlaps either of them.
   name.style.removeProperty('--name-room');
   const centre=head.getBoundingClientRect().left + head.getBoundingClientRect().width/2;
-  const left=tools.getBoundingClientRect().right, right=actions.getBoundingClientRect().left;
+  // The action group's own box starts one column to the left of its buttons (it spans
+  // from the monitor column so that Render MP4 still ends at the window edge), and that
+  // box is mostly empty. Measuring the box's left edge therefore reported no room at all
+  // and the production name disappeared. Measure the first button that is actually
+  // drawn, which is the real neighbour no matter how far the group's box reaches.
+  const visible=[...actions.querySelectorAll('.button')]
+    .map(b=>b.getBoundingClientRect()).filter(r=>r.width>0||r.height>0);
+  if(!visible.length)return;
+  const left=tools.getBoundingClientRect().right,
+        right=Math.min(...visible.map(r=>r.left));
   const room=Math.max(0,Math.floor(2*Math.min(centre-left,right-centre)-24));
   name.style.setProperty('--name-room',room+'px');
 }

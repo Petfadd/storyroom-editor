@@ -24,7 +24,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HARNESS = Path(os.environ.get('STORYROOM_CHROME_HARNESS', '/tmp/chrome-harness/run.js'))
+# Kept in the repository, not /tmp: the sandbox's /tmp is wiped between sessions and a
+# missing harness turns these tests into SKIPs, which quietly stops proving anything.
+HARNESS = Path(os.environ.get('STORYROOM_CHROME_HARNESS',
+                              str(ROOT / 'tests' / 'chrome_harness.js')))
 DEFAULT_CHROME = '/tmp/chr/chromium'
 
 
@@ -151,8 +154,17 @@ class HeaderAlignmentInBrowserTest(unittest.TestCase):
                 f"{-row['clearance']}px")
 
     def test_the_media_pool_lays_out_three_tiles_per_row(self):
-        """Measured, not read from the stylesheet: eight tiles, three per row."""
-        for row in self.report:
+        """Measured, not read from the stylesheet: eight tiles, three per row.
+
+        Only a production with media has tiles, and the harness does not fabricate any:
+        an empty pool is reported as an unmeasured column count. The three-column rule
+        itself is proved against the stylesheet in test_pool_and_timeline_notes.
+        """
+        measured = [r for r in self.report if r['pool'].get('columns')]
+        if not measured:
+            raise unittest.SkipTest(
+                'the page has no media tiles, so the pool geometry cannot be measured here')
+        for row in measured:
             pool = row['pool']
             self.assertEqual(pool['columns'], 3,
                              f"at {row['width']}px the pool has {pool['columns']} columns")
@@ -171,6 +183,89 @@ class HeaderAlignmentInBrowserTest(unittest.TestCase):
                 self.assertGreater(row['name_width'], 80,
                                    f"at {row['width']}px the name is only "
                                    f"{row['name_width']}px wide")
+
+
+    # -- one line, every element, at every width -----------------------------
+    # The complaint these answer: "some are up, some down, another middle."
+    def test_every_header_element_sits_on_one_centre_line(self):
+        """Brand, Transition/Caption, the name and every action button share a centre.
+
+        The measured defect was a bar with two implicit grid rows: the brand, the boxes
+        and the name sat at y17 while Projects and Render MP4 sat at y49.5, half a bar
+        lower. A single centre line is the whole requirement.
+        """
+        for row in self.report:
+            centres = row['group_centres']
+            self.assertEqual(
+                len({round(c, 1) for c in centres}), 1,
+                f"at {row['width']}px the header groups are not level: {centres}")
+            self.assertEqual(
+                row['button_rows'], 1,
+                f"at {row['width']}px the action buttons have "
+                f"{row['button_rows']} different centre lines: {row['button_centres']}")
+
+    def test_the_bar_has_exactly_one_grid_row(self):
+        """The mechanism, not just the symptom: no implicit second row may reappear.
+
+        `.top-actions` spans two columns so Render MP4 can end at the window edge. When
+        it was left to auto-placement that span created an implicit row and dropped the
+        buttons below the name -- the exact defect the user screenshotted.
+        """
+        for row in self.report:
+            if row['bar_display'] != 'grid':
+                continue  # the narrow fallback is a flex row, one line by definition
+            tracks = [t for t in row['grid_template_rows'].split() if t]
+            self.assertEqual(
+                len(tracks), 1,
+                f"at {row['width']}px the bar has {len(tracks)} grid rows "
+                f"({row['grid_template_rows']}) and the groups can drift onto two lines")
+            self.assertEqual(
+                row['name_grid_row'], '1',
+                f"at {row['width']}px the name is not pinned to row 1")
+            self.assertEqual(
+                row['actions_grid_row'], '1',
+                f"at {row['width']}px the action group is not pinned to row 1")
+
+    def test_the_name_stays_centred_on_the_play_line_all_the_way_down(self):
+        """Centring was being abandoned at 1460px, long before it had to be.
+
+        The flex fallback used to start there and left-aligned the name beside the two
+        boxes, so on any window narrower than a desktop the name was off the picture's
+        centre line. Measurement puts the real limit at 860px.
+        """
+        for row in self.report:
+            if not row['name_visible']:
+                continue
+            self.assertAlmostEqual(
+                row['name_centre'] - row['play_centre'], 0, delta=1.0,
+                msg=f"at {row['width']}px the name's centre is {row['name_centre']} but "
+                    f"the play button's is {row['play_centre']}")
+
+    def test_render_mp4_ends_inside_the_window_at_every_width(self):
+        """The overflow the previous fix left behind: up to 26px past the right edge.
+
+        The action group is wider than the inspector column it used to be confined to,
+        so Render MP4 hung off the window between roughly 1461 and 1690px.
+        """
+        for row in self.report:
+            self.assertLessEqual(
+                row['right_edge'], row['width'],
+                f"at {row['width']}px Render MP4 ends at {row['right_edge']}px, "
+                f"{round(row['right_edge'] - row['width'])}px outside the window")
+
+    def test_the_name_is_never_a_clipped_sliver(self):
+        """Either the name is readable, or it is deliberately not shown.
+
+        Between 861 and 940px a centred name has only a few characters of room; the bar
+        hides it there rather than displaying an ellipsis and a letter. It must never be
+        left visible and clipped, which is the worst of both.
+        """
+        for row in self.report:
+            if row['name_visible']:
+                self.assertGreater(
+                    row['name_width'], 80,
+                    f"at {row['width']}px the name is shown but only "
+                    f"{row['name_width']}px wide -- clipped rather than hidden")
 
 
 if __name__ == '__main__':

@@ -732,8 +732,9 @@
    than the ones they are supposed to sit on, and the name would drift off the line
    by exactly that amount. The two end groups carry their own inset instead. */
 .topbar{display:grid;grid-template-columns:var(--pane-columns);
+  grid-template-rows:100%;
   padding:0;column-gap:1px;row-gap:0;align-items:center;overflow:visible}
-.head-left{display:flex;align-items:center;gap:10px;min-width:0;padding-left:14px}
+.head-left{grid-row:1;display:flex;align-items:center;gap:10px;min-width:0;padding-left:14px}
 .head-tools{display:flex;gap:8px;flex:0 0 auto}
 .head-tool{padding:7px 16px;background:#161a21;border:1px solid #2b323d;border-radius:9px;
   cursor:pointer;color:#eef2f7;font:inherit;font-size:12.5px;font-weight:650;line-height:1.15;
@@ -743,24 +744,35 @@
    name's own midpoint on the column's midpoint however long the name is.
    `text-align:center` would centre the text inside a full-width box instead, which
    only coincides with the line for a name that happens to fill the box. */
-.topbar>.project-heading{display:flex;flex-direction:row;justify-content:center;align-items:center;
-  min-width:0;padding:0 12px;justify-self:center}
+/* Column 2 spelled out. The action group spans 2 / -1, so if the name were left to
+   auto-placement the grid would push it past that span into an implicit 4th column --
+   it ended up 24px wide, jammed against the window's right edge. Pinned here, it sits
+   on the monitor's column, i.e. on the play button's centre line, as it must. */
+.topbar>.project-heading{grid-column:2;grid-row:1;display:flex;flex-direction:row;justify-content:center;
+  align-items:center;min-width:0;padding:0 12px;justify-self:center}
 .project-heading strong{font-size:16px;font-weight:700;letter-spacing:.01em;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;text-align:center;color:#f4f7fb;
   max-width:var(--name-room,100%)}
-/* The action group keeps the right-hand end. It is wider than the inspector column,
-   so on all but the widest screens it reaches back over the monitor column; the name
-   is kept clear of it at runtime (see fitHeaderName in editor.js), which measures the
-   actual gap rather than guessing it here. */
-.topbar>.top-actions{grid-column:2 / -1;display:flex;justify-content:flex-end;align-items:center;
-  gap:6px;min-width:0;padding-right:14px}
+/* The action group spans the last TWO columns, because it is genuinely wider than the
+   inspector column alone: six buttons need 437-462px, while 26% of a 1600px window is
+   416px. Confining it to the inspector's column made Render MP4 hang off the right edge
+   of the window by up to 26px. Spanning to the end of the bar keeps it ending at the
+   window edge at every width. `grid-row:1` above is what stops that span from inventing
+   a second row -- without it the whole group dropped below the brand and the name. */
+.topbar>.top-actions{grid-column:2 / -1;grid-row:1;display:flex;justify-content:flex-end;
+  align-items:center;gap:6px;min-width:0;padding-right:14px}
 /* These six buttons are navigation chrome in a 60px bar, so they sit tighter than a
    dialog's buttons. The room they give back goes to the production's name, which is
    the only thing on this line that can stretch. Measured: at 1600px the action row
    was 632px wide and reached 104px past the centre line, which is what squeezed the
    name. Each pixel taken off this row is a pixel the name can use, twice over,
    because the name is centred and its room is limited by the nearer side. */
-.topbar>.top-actions .button{padding:8px 10px;font-size:11px}
+/* One line, every button, at every width. "+ New" is the only label with a space in
+   it, so it was the only one that could wrap -- and when it did, its button grew a
+   second line, stood taller than its neighbours and pushed itself up out of line.
+   That is what made one button sit higher than the rest at around 1500px. */
+.topbar>.top-actions .button{padding:8px 10px;font-size:11px;white-space:nowrap;
+  flex:0 0 auto}
 /* The action group gives way first, because it is the only part of the bar that can:
    the two boxes are the bar's purpose, and the name shares its line with the picture
    below. Every one of these buttons is a single-click route to something that has no
@@ -779,14 +791,15 @@
   .topbar>.top-actions .button{padding:7px 7px;font-size:9.5px}
   .project-heading strong{font-size:15px}
 }
-/* Measured, not chosen by eye: at 1460px of window the centred name still gets about
-   210px, enough for a real title. Below that the six action buttons and the two boxes
-   leave too little either side of the centre line, and a centred name decays into an
-   ellipsis and an initial. So below 1460px the bar becomes one row again -- identity,
-   controls, name, actions -- where the name sits beside the boxes and keeps its full
-   width. The drawing's arrangement applies at every width that can carry it, which
-   includes a maximised window on any laptop or desktop screen. */
-@media(max-width:1460px){
+/* Measured, not chosen by eye. The name is centred on the play button's line and gets
+   room = 2 * (distance from that line to the nearer neighbour); fitHeaderName in
+   editor.js measures it. Walking the window down in 40px steps, that room stays
+   positive to 860px (478px at 1460, 313px at 1280, 136px at 960, 36px at 860) and
+   reaches 0 at 820px. So the centred arrangement is kept all the way down to 861px and
+   this fallback only takes over where centring genuinely cannot survive. It used to
+   start at 1460px, which left the name left-aligned beside the boxes on any window
+   narrower than that -- losing the centring the design asks for long before it had to. */
+@media(max-width:860px){
   .topbar{display:flex;gap:10px;padding:0 14px;column-gap:0}
   .head-left{padding-left:0}
   .topbar>.project-heading{flex:0 1 auto;justify-content:flex-start;padding:0}
@@ -798,9 +811,13 @@
   .head-tool{padding:6px 12px;font-size:11.5px}
   .topbar>.top-actions .button{padding:7px 7px;font-size:10px}
 }
-/* The last resort. Even in one row, a name and six buttons do not both fit; the name
-   goes, and the production is still named in the window title and its tab. */
-@media(max-width:820px){
+/* Where the name stops being a name. Walking down, its centred room is 136px at 960px
+   of window and 37px at 861 -- at which point it is an ellipsis and one letter, still
+   costing the bar 24px of padding. It goes at 940px, where the room is about 120px.
+   The production is still named in the window title and in its own tab, so nothing is
+   lost but a decorative fragment. Hiding it before the fallback above also means a
+   shrunken name is never left sitting off the centre line. */
+@media(max-width:940px){
   .topbar>.project-heading{visibility:hidden}
 }
 
