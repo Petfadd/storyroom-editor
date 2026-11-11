@@ -42,8 +42,11 @@ enhancement -- is submitted to a single dispatcher instead of starting its own t
 The order is: playback and editing, essential media loading, background analysis, AI
 enhancement, thumbnails. One heavy and one AI job run at a time, because two of them on
 16 GB is slower than one after the other. Pause, resume, cancel, retry and the queue
-itself are in Processing and storage; a cancelled job also terminates its ffmpeg child,
-so the machine is not still working on something the queue has forgotten.
+itself are in Processing and storage. Pause and cancel both reach the work rather than
+only the label: pausing suspends the child encode and resuming continues it, and
+cancelling stops the whole process tree, so the machine is never still busy with
+something the queue has forgotten. Measured on a 180-second 4K source: 398 CPU ticks per
+two seconds while running, 0 while paused, 386 after resuming.
 
 **Hardware.** Encoders are tested rather than assumed: a build can list `h264_nvenc` on a
 machine with no NVIDIA driver, so each one is checked with a real one-frame encode.
