@@ -66,8 +66,23 @@ function renderEditor(){
  const reqClean=requirement?.status==='found'&&!requirement.missing&&!requirement.ambiguous;
  if(reqPool)reqPool.hidden=!!reqClean;
  reqPool.textContent=requirement?.status==='found'?`${requirement.total} script file${requirement.total===1?'':'s'} · ${requirement.matched} matched · ${requirement.missing} missing${requirement.ambiguous?' · '+requirement.ambiguous+' duplicate':''}`:P?.production_script?'No video filenames recognized in script':'Upload a production script to see the footage count.';
- const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';$('#media-list').innerHTML=visibleAssets.map((a,i)=>`<div class="media-item ${current?.asset_id===a.id?'selected':''}" role="button" tabindex="0" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" onkeydown="if(event.key==='Enter')inspectAsset('${a.id.replace(/'/g,'')}')"><span class="source-icon">${a.reserve?E(a.source_label):a.kind==='image'?'PHOTO':/^[SV]\d+/i.test(a.name)?E(a.name.replace(/\.[^.]+$/,'')):String(i+1).padStart(2,'0')}</span><div class="media-meta"><strong>${E(a.name)}</strong><span>${a.reserve?(assetIsUsed(a)?'Reserve source · explicitly placed':'Held in reserve')+' · ':''}${a.kind==='image'?'Photograph':a.duration?a.duration.toFixed(1)+'s video':'Case video'} · ${a.verified?(a.approval_record?.independent_verification===false?'approved · user instruction':'approved'):'not approved'}</span></div><span class="ready-dot ${a.verified?'':'missing'}"></span></div>`).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
- $('#audio-status').className='audio-card '+(P?.voiceover?'ready':'missing');$('#audio-status').innerHTML=`<strong>Voiceover · ${E(P?.voiceover?.name||'not imported')}</strong><span>${P?.voiceover?P.voiceover.duration.toFixed(3)+(isDoc?'s original · split around sound bites':'s · continuous original audio'):'Import from Setup. No per-cut audio restarts.'}</span>`;
+ const visibleAssets=assets().filter(a=>!(P?.picture_policy==='clips_only'&&a.kind==='image'&&a.derived_from));$('#source-count').textContent=visibleAssets.length;document.querySelector('.media-section-label').textContent='CASE FOOTAGE & PHOTOGRAPHS';function tileLen(seconds){const t=Math.max(0,Math.round(seconds));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0')}
+$('#media-list').innerHTML=visibleAssets.map((a,i)=>{
+  const pid=P?.id||'';const poster=a.kind==='image'
+    ?`/api/projects/${pid}/assets/${a.id}/poster`
+    :`/api/projects/${pid}/assets/${a.id}/poster`;
+  const badge=a.reserve?E(a.source_label):(a.kind==='image'?'PHOTO':'VIDEO');
+  const len=a.kind==='video'&&a.duration?tileLen(a.duration):'';
+  const used=current?.asset_id===a.id;
+  return `<button type="button" class="media-tile ${used?'selected':''} ${a.kind==='image'?'is-photo':''}" onclick="inspectAsset('${a.id.replace(/'/g,'')}')" title="${E(a.name)}">
+    <span class="tile-shot"><img src="${poster}" alt="" loading="lazy" onerror="this.parentNode.classList.add('no-poster')"><em>${badge}</em>${len?`<b>${len}</b>`:''}</span>
+    <span class="tile-name">${E(a.name.replace(/\.[^.]+$/,''))}</span>
+    <span class="tile-meta">${a.reserve?(assetIsUsed(a)?'Reserve \u00b7 placed':'Reserve'):''}${a.reserve?' \u00b7 ':''}${a.kind==='image'?'Photo':(a.duration?a.duration.toFixed(0)+'s':'Video')}</span>
+    <span class="ready-dot ${a.verified?'':'missing'}"></span>
+  </button>`;
+}).join('')||'<div class="loading">No case media imported.<br>Use Import media above.</div>';
+ $('#audio-status').className='audio-card audio-tile '+(P?.voiceover?'ready':'missing');
+ $('#audio-status').innerHTML=`<span class="wave" aria-hidden="true">${Array.from({length:26},(_,i)=>`<i style="height:${[38,62,84,48,72,96,58,80,44,68,92,54,76,60,88,46,70,94,56,82,50,74,66,90,52,78][i]}%"></i>`).join('')}</span><span class="tile-body"><strong>${P?.voiceover?E(P.voiceover.name):'No voiceover'}</strong><span>${P?.voiceover?tileLen(P.voiceover.duration)+(isDoc?' · original':' · narration'):'Import from Setup'}</span></span>`;
  $('#srt-status').className='audio-card '+(P?.srt?'ready':'missing');$('#srt-status').innerHTML=`<strong>${P?.srt?P.srt.blocks.length:0} original SRT blocks</strong><span>Timing reference · captions not baked in</span>`;
  renderProgram();renderTimeline();renderInspector();renderChecks();renderExport();updateTrackMuteControls();updatePosition();
 }

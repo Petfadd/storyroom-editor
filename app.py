@@ -2558,6 +2558,42 @@ def documentary_timeline_thumbnail(pid,aid):
     finally:temp.unlink(missing_ok=True)
  return send_from_directory(cache,out.name,conditional=True)
 
+@app.get('/api/projects/<pid>/assets/<aid>/poster')
+@project_io_lock
+def asset_poster(pid,aid):
+ """A poster frame for the media pool grid: a still for a photograph, a decoded
+ frame for a video. Unassigned uploads have no scene to borrow a thumbnail from,
+ so this reads the asset itself. Cached per revision so the pool stays cheap."""
+ p=load(pid);a=next((x for x in p['assets'] if x['id']==aid),None)
+ if not a:raise NotFound('Media not found.')
+ root=folder(pid).resolve();source=(root/a['path']).resolve()
+ # Photographs are stored under assets/, decoded video under sources/.
+ if a.get('kind')=='image':
+  if not source.is_relative_to(root/'assets') or not source.is_file():raise NotFound('Media file is missing.')
+  return send_from_directory(root,a['path'],conditional=True)
+ if not source.is_relative_to(root/'sources') or not source.is_file():raise NotFound('Media file is missing.')
+ cache=root/'.cache'/'posters';cache.mkdir(parents=True,exist_ok=True)
+ stat=source.stat()
+ key=hashlib.sha256(json.dumps([aid,a.get('revision'),stat.st_size,stat.st_mtime_ns]).encode()).hexdigest()[:24]
+ out=cache/(key+'.jpg')
+ if not out.exists():
+  from conform import capture
+  with THUMBNAIL_SLOTS:
+   if not out.exists():
+    cap=capture(source)
+    try:
+     # A tenth of the way in avoids a black lead-in on most footage.
+     cap.set(cv2.CAP_PROP_POS_MSEC,min(1.0,max(0.0,float(a.get('duration') or 0)*0.1))*1000);ok,img=cap.read()
+    finally:cap.release()
+    if not ok:raise NotFound('The poster frame could not be decoded.')
+    temp=out.with_name(out.stem+'.'+uid()+'.jpg')
+    try:
+     # Portrait uploads keep their shape; the grid crops with object-fit.
+     h,w=img.shape[:2];scale=240/max(1,min(h,w))
+     cv2.imwrite(str(temp),cv2.resize(img,(max(1,int(w*scale)),max(1,int(h*scale)))),[cv2.IMWRITE_JPEG_QUALITY,82]);temp.replace(out)
+    finally:temp.unlink(missing_ok=True)
+ return send_from_directory(cache,out.name,conditional=True)
+
 @app.get('/api/projects/<pid>/scenes/<sid>/thumbnail')
 @project_io_lock
 def scene_thumbnail(pid,sid):
