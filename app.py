@@ -11,6 +11,8 @@ import cv2, imageio_ffmpeg
 BASE=Path(__file__).resolve().parent
 from engine import RenderJob
 import upscale
+import transitions
+import captions
 # Verified playback schedules, keyed by project. Rebuilt only when the project or
 # plan revision changes.
 SCHEDULE_CACHE={}
@@ -305,7 +307,7 @@ def source_overlap_interval(scene, asset, project=None):
   interval=verified_source_interval(project,scene,asset)
   if interval is not None:return interval
  start=float(scene.get('in_s') or 0)
- end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if scene.get('transition')=='dissolve' else 0))/30
+ end=start+(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',4) if transitions.is_transition(scene.get('transition')) else 0))/30
  row=scene.get('plan_row') or {}
  if (row.get('strict_production') and scene.get('transition')=='cut' and
      asset.get('original_name',asset.get('name','')).casefold()==str(row.get('source_file','')).casefold() and
@@ -362,16 +364,21 @@ def scene_review(p,i,s,a,ranges,last,final=False):
   if not(s['context_only'] and s['notes'].strip() and a['category']!='person' and not a['people']):errors.append(pre+'the named person is not verified in this asset. Select the correct person, or explicitly disclose genuine wide context with no substituted identity.')
   else:notes.append(pre+'disclosed context, not a verified portrait: '+s['notes'])
  lastscene=i==len(p['scenes'])-1
- if s['transition']=='dissolve' and lastscene:errors.append(pre+'the last scene cannot dissolve into a nonexistent next scene.')
- if s['transition']=='dissolve' and not lastscene and p['scenes'][i+1]['transition']=='dissolve':errors.append(pre+'adjacent dissolve pairs are unsupported; keep the next exit as a cut.')
- if s['transition']=='dissolve' and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the dissolve is longer than the incoming picture beat.')
+ blended=transitions.is_transition(s.get('transition'))
+ lastscene=lastscene
+ if blended and lastscene:errors.append(pre+'the last scene cannot blend into a nonexistent next scene.')
+ # Adjacent blends are allowed and render correctly: the chain applies each boundary to
+ # the running result, so a scene can open on one transition and close on another. The
+ # only real limit is room -- a blend may not be longer than the scene it leads into,
+ # checked below -- because the handle has to come from somewhere.
+ if blended and not lastscene and s.get('transition_handle_frames',4)>p['scenes'][i+1]['frame_out']-p['scenes'][i+1]['frame_in']:errors.append(pre+'the transition is longer than the incoming picture beat.')
  still=is_still(p,a)
  if still and policy(p)!='mixed':errors.append(pre+'this production is set to moving footage only. Switch the picture policy to allow photographs, or use a clip.')
  if still and not (a.get('approval_record') or {}).get('active',True):errors.append(pre+'the photograph’s use approval was revoked; re-approve it before exporting.')
  if a.get('derived_from'):errors.append(pre+'extracted frames are not permitted; use original uploaded media.')
  if not (folder(p['id'])/a['path']).is_file():errors.append(pre+'source file is missing from disk.')
  if a['kind']=='video':
-  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0))/30
+  end_s=s['in_s']+(s['frame_out']-s['frame_in']+(s.get('transition_handle_frames',4) if transitions.is_transition(s.get('transition')) else 0))/30
   if s['in_s']<0 or end_s>a['duration']+.001:errors.append(pre+'video is too short, including transition handles. No loop or frozen tail will be generated.')
   compare_in,compare_out=source_overlap_interval(s,a,p)
   approved_pairs,approved_beats=beat_approvals(p)
@@ -587,6 +594,54 @@ def home():
  return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options,
                         ai_upscale=upscale.describe())
 
+@app.get('/api/transitions')
+def transition_library():
+ # The library dialog is built from this, so a transition cannot be offered in the UI
+ # that the renderer has no filter for.
+ return jsonify(transitions.catalogue())
+
+
+@app.post('/api/projects/<pid>/transition-suggest')
+def suggest_transitions(pid):
+ """Assign a transition to every boundary, each from that scene's own content.
+
+ Rewrites only `transition` and its handle. Nothing about timing, source, approval or
+ narration is touched, so this is safe to run on an approved timeline -- and it says
+ up front what it changed, because an automatic rewrite of editorial choices should
+ never be silent.
+ """
+ with LOCKS[pid]:
+  editable(pid);p=load(pid)
+  if not p.get('scenes'):raise BadRequest('Build a storyboard before suggesting transitions.')
+  data=request.get_json(silent=True) or {}
+  intensity=data.get('intensity') or transitions.DEFAULT_INTENSITY
+  if intensity not in transitions.INTENSITY:raise BadRequest('Choose an intensity: '+', '.join(transitions.INTENSITY))
+  frames=transitions.DURATION.get(data.get('duration') or transitions.DEFAULT_DURATION,(None,15))[1]
+  if p.get('transition_policy')=='clean_cuts_only' and frames:
+   # Suggesting blends on a clean-cuts production would produce a timeline that fails
+   # its own validation. Allowing dissolves is the human's decision, not this call's.
+   raise BadRequest('This production uses clean cuts only. Allow transitions before suggesting them.')
+  keys=transitions.suggest_all(p['scenes'],intensity)
+  changed=0
+  for scene,key in zip(p['scenes'],keys):
+   if scene.get('transition')!=key:
+    changed+=1
+   scene['transition']=key
+   scene['transition_handle_frames']=frames if transitions.is_transition(key) else 0
+  p['manual_scene_edits']=True
+  save(p)
+  return jsonify({'project':public(p),'changed':changed,
+                  'summary':{k:keys.count(k) for k in set(keys) if k!='cut'}})
+
+
+@app.get('/api/captions')
+def caption_library():
+ # The dialog is built from this, so it can only offer looks the renderer can burn in.
+ data=captions.catalogue()
+ data['selected']=(load(request.args.get('pid')) if request.args.get('pid') else {}).get('caption_preset') or captions.DEFAULT
+ return jsonify(data)
+
+
 @app.get('/api/picture-tools')
 def picture_tools():
  # Reported to the browser so the export page can say plainly whether AI upscaling is
@@ -743,6 +798,12 @@ def update_project(pid):
   if 'burn_captions' in d:
    if not isinstance(d['burn_captions'],bool):raise BadRequest('On-screen captions must be on or off.')
    p['burn_captions']=d['burn_captions']
+  if 'caption_preset' in d:
+   # The preset is a project setting so the preview and the export read the same value;
+   # an unknown key is refused rather than silently rendered as the default, because a
+   # caption style the editor cannot show is worse than an error.
+   if d['caption_preset'] not in captions.PRESETS:raise BadRequest('Choose a caption style from the library.')
+   p['caption_preset']=d['caption_preset']
   # The script's Cut Action fade. A fade ramps brightness on existing frames, so
   # it never changes a cut, a frame count or the reviewed timing.
   if 'documentary_fades' in d:
@@ -946,7 +1007,7 @@ def perform_upload(pid,key=''):
      old_id=scene.get('asset_id')
      if old_id not in duplicate_ids|derived_ids:continue
      affected+=1;scene['approved']=False;scene['source_replacement_pending']=name;scene.pop('thumbnail',None)
-     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if scene.get('transition')=='dissolve' else 0))/30
+     length=(scene['frame_out']-scene['frame_in']+(scene.get('transition_handle_frames',0) if transitions.is_transition(scene.get('transition')) else 0))/30
      if old_id in derived_ids or float(scene.get('in_s') or 0)+length>duration+.001:
       scene['review_previous_asset_id']=old_id;scene['asset_id']=None;unassigned+=1
       scene['replacement_issue']='The replacement video is too short for this shot, or this shot used a frame derived from the previous upload.'
@@ -1518,14 +1579,21 @@ def edit_scene(pid,sid):
    s['motion']=d['motion']
   if d.get('focus_position') in ['left','center','right']:s['focus_position']=d['focus_position']
   if d.get('motion_strength') in ['subtle','purposeful','strong']:s['motion_strength']=d['motion_strength']
-  if d.get('transition') in ['cut','dissolve']:
-   # A dissolve is refused while the production is clean-cuts-only rather than silently
-   # rewritten to a cut. Silently forcing it meant the request appeared to succeed and the
-   # scene then validated as a cut, so the policy error it should have produced could never
-   # be reached and there was nothing to explain why the dissolve never appeared.
-   if d['transition']=='dissolve' and p.get('transition_policy')=='clean_cuts_only':
-    raise BadRequest('This production uses clean cuts only. Allow dissolves for it before setting a dissolve on a scene.')
-   s['transition']=d['transition'];s['transition_handle_frames']=(s.get('transition_handle_frames') or 4) if s['transition']=='dissolve' else 0
+  if 'transition' in d and d['transition'] not in transitions.LIBRARY:
+   # An unknown name used to be dropped silently, so the request looked accepted and the
+   # boundary quietly stayed as it was. Refusing is the only honest answer: the caller
+   # picked a transition the renderer cannot produce.
+   raise BadRequest('Choose a transition from the library: '+', '.join(transitions.LIBRARY))
+  if d.get('transition') in transitions.LIBRARY:
+   # A blended transition is refused while the production is clean-cuts-only rather than
+   # silently rewritten to a cut. Silently forcing it meant the request appeared to succeed
+   # and the scene then validated as a cut, so the policy error it should have produced
+   # could never be reached and there was nothing to explain why it never appeared.
+   blended=transitions.is_transition(d['transition'])
+   if blended and p.get('transition_policy')=='clean_cuts_only':
+    raise BadRequest('This production uses clean cuts only. Allow transitions for it before setting one on a scene.')
+   s['transition']=d['transition']
+   s['transition_handle_frames']=(int(d.get('transition_handle_frames') or 0) or 4) if blended else 0
   if 'context_only' in d:s['context_only']=d['context_only'] is True
   s['approved']=d.get('approved',False) is True
   if s['approved'] and s.get('asset_id'):
@@ -1606,7 +1674,13 @@ def manifest(p, strict=None, enhance_picture=False):
  for i,s in enumerate(p['scenes']):
   a=assets[s['asset_id']];frames=s['frame_out']-s['frame_in'];m=motion(s,i);signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
   while signature in signatures and m.get('move')!='static':m['x_end']+=.00001;signature=tuple(m[k] for k in ['zoom_start','zoom_end','x_start','x_end','y_start','y_end'])
-  signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
+  signatures.add(signature)
+  # The final scene has no boundary after it, so a handle on it would reserve source
+  # frames and add picture frames that no transition ever consumes -- which lengths the
+  # programme by the handle and pushes the narration out of sync. The handle exists only
+  # where a transition will actually use it.
+  last_scene=i==len(p['scenes'])-1
+  extra=s.get('transition_handle_frames',4) if (transitions.is_transition(s.get('transition')) and not last_scene) else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
    # A photograph is prepared once per (source revision, canvas, framing, mode) and then
@@ -1635,9 +1709,11 @@ def manifest(p, strict=None, enhance_picture=False):
   # Framing is per shot so a single differently-shaped insert can be fitted without
   # changing how the rest of the film is framed.
   shot['framing']=s.get('framing') or p.get('framing','auto')
+  # The engine blends whatever this names. `cut` carries no handle, so it costs nothing.
+  shot['transition']=s.get('transition','cut')
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture,'framing':p.get('framing','auto'),'quality':p.get('quality','standard')},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture,'framing':p.get('framing','auto'),'quality':p.get('quality','standard'),'caption_preset':p.get('caption_preset') or captions.DEFAULT},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
 @app.post('/api/projects/<pid>/continuous-preview')
 def prepare_continuous_preview(pid):
@@ -1891,17 +1967,21 @@ def update_documentary_music(pid):
   if 'enabled' in data:
    if not isinstance(data['enabled'],bool):raise BadRequest('Music on/off must be true or false.')
    music['enabled']=data['enabled']
-  # The bed is continuous: it plays under the narration and under every sound
-  # bite, at the one volume the user set. Saved requests that still ask for a
-  # duck or a mute are accepted and stored as 'full', so an old client cannot
-  # reintroduce either behaviour.
-  if 'duck_under_speech' in data and data['duck_under_speech'] is not False:
-   raise BadRequest('The background music plays continuously; it is not ducked or cut.')
+  # The bed ducks under speech. It is one continuous piece for the whole film -- it is
+  # never cut, and it comes back up wherever the speaking stops -- but while narration or
+  # a sound bite is carrying words it sits underneath them, which is what makes speech
+  # intelligible. `duck` is therefore the only accepted mode, and an old client asking
+  # for a flat 'full' bed is stored as a duck rather than being honoured.
+  if 'duck_under_speech' in data:
+   if not isinstance(data['duck_under_speech'],bool):raise BadRequest('Ducking must be true or false.')
+   if data['duck_under_speech'] is False:
+    raise BadRequest('The background music ducks under speech; it cannot be switched to play flat.')
   for key in ('narration_level','speech_mode'):
    if key in data:
-    if data[key] not in ('full','mute','duck'):raise BadRequest('Music plays continuously, under narration and sound bites alike.')
-    music['narration_level']='full'
+    if data[key] not in ('full','mute','duck'):raise BadRequest('Choose ducked music, or turn the bed off.')
+    music['narration_level']='duck'
   music.pop('duck_under_speech',None)
+  music['narration_level']='duck'
   if 'volume_percent' in data:
    value=data['volume_percent']
    if isinstance(value,bool) or not isinstance(value,int):raise BadRequest('Music volume must be a whole percentage from 0 to 100.')

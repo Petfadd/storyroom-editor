@@ -12,7 +12,7 @@ JOBS={}
 GUARD=threading.RLock()
 # v2: the preview mix no longer bakes in background music; the bed is a live
 # layer in the browser. A v1 mix still sounds like the old bed, so it is rejected.
-AUDIO_PROCESSING_VERSION='narration-loudness-match-v2'
+AUDIO_PROCESSING_VERSION='narration-loudness-match-v3-ducked'
 
 
 def _run_command(cmd):
@@ -115,12 +115,17 @@ def build_audio(root, project, plan, destination, progress=lambda *a:None, stric
         music_result=None
         out=work/'result.wav'
         if music:
-            from documentary_music import build_bed, music_path
-            bed=work/'music-bed.wav'
+            from documentary_music import build_bed, duck_track, music_path
+            bed=work/'music-bed.wav';ducked=work/'music-ducked.wav'
             music_result=build_bed(project,music_path(root),bed,timeline['duration_s'],timeline['segments'])
-            # Narration and bites stay at their reviewed level, and the bed runs
-            # unbroken underneath them: it is not ducked or cut anywhere.
-            _run_command([ff,'-hide_banner','-loglevel','error','-y','-i',str(speech),'-i',str(bed),'-filter_complex','[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891251:level=0:latency=1','-ar','48000','-c:a','pcm_s16le',str(out)])
+            # The bed is one unbroken piece for the whole film, but it sits under any
+            # spoken word and comes straight back up when the speech stops. Ducking is
+            # driven by the finished speech stream itself rather than by cue timings, so
+            # it follows a sound bite exactly and cannot drift if a cue is re-timed.
+            duck_track(bed,speech,ducked)
+            # Narration and bites stay at their reviewed level, over the ducked bed.
+            _run_command([ff,'-hide_banner','-loglevel','error','-y','-i',str(speech),'-i',str(ducked),'-filter_complex','[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891251:level=0:latency=1','-ar','48000','-c:a','pcm_s16le',str(out)])
+            ducked.unlink(missing_ok=True)
         else:
             shutil.copyfile(speech,out)
         with av.open(str(out)) as media:

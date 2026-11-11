@@ -642,3 +642,92 @@
 .music-track[style*="display: none"],
 #music-track[hidden]{display:none!important}
 #music-track-label[style*="display: none"]{display:none!important}
+
+/* ---- transition library -------------------------------------------------
+   The grid is the whole point: each card shows the movement itself, not a name.
+   A preview is pure CSS on two stacked blocks, so the dialog costs no network and
+   animates without a video element. */
+.transition-library{width:min(760px,94vw)}
+.transition-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:14px 0}
+.transition-card{display:flex;flex-direction:column;gap:6px;padding:10px;background:#141414;border:1px solid #2b2b2b;
+  border-radius:10px;color:#ddd;text-align:left;cursor:pointer;font:inherit}
+.transition-card:hover{border-color:#4a4a4a;background:#191919}
+.transition-card.current{border-color:var(--accent,#c9a227);box-shadow:0 0 0 1px var(--accent,#c9a227) inset}
+.transition-card.disabled{opacity:.4;cursor:not-allowed}
+.transition-card strong{font-size:13px}
+.transition-card small{font-size:11px;color:#8d8d8d;line-height:1.35}
+.transition-card em{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent,#c9a227);font-style:normal}
+.transition-preview{position:relative;display:block;height:52px;border-radius:6px;overflow:hidden;background:#0b0b0b}
+.transition-preview>span{position:absolute;inset:0;background:linear-gradient(135deg,#3a4a5a,#6d7f92)}
+.transition-preview::after{content:"";position:absolute;inset:0;background:linear-gradient(135deg,#6b3a3a,#a86a5a);opacity:0}
+.transition-card:hover .transition-preview>span,.transition-card.current .transition-preview>span{animation:t-in 1.6s ease-in-out infinite}
+.transition-card:hover .transition-preview::after,.transition-card.current .transition-preview::after{animation:t-out 1.6s ease-in-out infinite}
+@keyframes t-in{0%,100%{transform:none;opacity:1}50%{opacity:.35}}
+@keyframes t-out{0%,100%{opacity:0}50%{opacity:.75}}
+.t-cut:hover .transition-preview>span{animation:none}
+.t-cut:hover .transition-preview::after{animation:none;opacity:1;clip-path:inset(0 50% 0 0)}
+.t-fadeblack .transition-preview,.t-fadewhite .transition-preview{background:#000}
+.t-fadewhite .transition-preview{background:#fff}
+.t-slideleft .transition-preview>span{animation:t-slide 1.6s ease-in-out infinite!important}
+.t-smoothup .transition-preview>span{animation:t-rise 1.6s ease-in-out infinite!important}
+.t-zoomin .transition-preview>span{animation:t-zoom 1.6s ease-in-out infinite!important}
+.t-circleopen .transition-preview::after{animation:t-circle 1.6s ease-in-out infinite!important;border-radius:50%;transform:scale(0)}
+.t-pixelize .transition-preview::after{animation:t-pixel 1.6s steps(4) infinite!important}
+.t-distance .transition-preview>span{animation:t-zoom 1.6s ease-in-out infinite!important}
+@keyframes t-slide{0%,100%{transform:none}50%{transform:translateX(38%)}}
+@keyframes t-rise{0%,100%{transform:none}50%{transform:translateY(-32%)}}
+@keyframes t-zoom{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}
+@keyframes t-circle{0%,100%{transform:scale(0);opacity:0}55%{transform:scale(1.7);opacity:1}}
+@keyframes t-pixel{0%,100%{opacity:0}50%{opacity:1;clip-path:inset(12% 20% 24% 10%)}}
+.transition-controls{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;padding-top:12px;border-top:1px solid #262626}
+.transition-controls label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:#8d8d8d;letter-spacing:.06em;text-transform:uppercase}
+.transition-controls select{background:#141414;color:#ddd;border:1px solid #2b2b2b;border-radius:7px;padding:7px 9px;font:inherit;font-size:12px}
+.transition-controls .new{margin-left:auto}
+
+/* The transition row is a select and a button that opens the same library the
+   transport bar opens. Both routes exist because one is for scanning down the
+   inspector and one is for choosing a look before touching a scene. */
+.transition-row{display:flex;gap:6px;align-items:stretch}
+.transition-row select{flex:1;min-width:0}
+.transition-row button{flex:0 0 auto;padding:0 10px;font-size:11px;letter-spacing:.04em;
+  background:#141414;color:#c9a227;border:1px solid #3a3220;border-radius:7px;cursor:pointer}
+.transition-row button:hover{background:#1b170e;border-color:#c9a227}
+
+/* ---- header ------------------------------------------------------------
+   The top bar carries the production's name and two library doors. Everything
+   that used to narrate the workspace underneath the name has gone: the name is
+   the name, and the two boxes are the two things that change the look of the
+   film from one place. */
+.project-heading{display:flex;flex-direction:column;justify-content:center;min-width:0}
+.project-heading strong{font-size:15px;font-weight:700;letter-spacing:.01em;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:34vw}
+.head-tools{display:flex;gap:8px;margin-left:auto;margin-right:10px}
+.head-tool{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:6px 14px;
+  min-width:92px;background:#161a21;border:1px solid #2b323d;border-radius:9px;cursor:pointer;
+  color:#eef2f7;font:inherit;line-height:1.15;transition:border-color .12s,background .12s}
+.head-tool:hover{border-color:var(--accent);background:#1c2129}
+.head-tool span{font-size:12.5px;font-weight:650}
+.head-tool small{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#8993a3}
+.head-tool:hover small{color:var(--accent2)}
+
+/* ---- caption library --------------------------------------------------- */
+.caption-preview{display:flex;align-items:center;justify-content:center;height:52px;
+  border-radius:6px;background:linear-gradient(135deg,#26303c,#3d4a5a);
+  font-size:11.5px;overflow:hidden;padding:0 6px;text-align:center}
+.caption-card:hover .caption-preview{outline:1px solid #3a4250}
+
+/* ---- zoom --------------------------------------------------------------
+   Two buttons around the slider, so the timeline can be zoomed without dragging.
+   No word beside them: the plus and minus say it. */
+.zoom-step{width:22px;height:22px;display:grid;place-items:center;background:#161a21;
+  color:#dbe2ec;border:1px solid #2b323d;border-radius:6px;cursor:pointer;font:inherit;
+  font-size:14px;line-height:1;padding:0}
+.zoom-step:hover{background:#212832;border-color:var(--accent);color:#fff}
+.zoom-step:active{background:#2a323e}
+
+/* An unused music row is present but bare: the label keeps the row at its normal
+   height, the clip area stays empty, and nothing is drawn across the film. */
+#music-track:empty,#music-track .audio-clip:empty{background:none;border-color:transparent;
+  box-shadow:none}
+#music-track{border-top:none}
+#music-track-label.empty{opacity:.55}

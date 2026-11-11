@@ -86,8 +86,10 @@ function poolSrtTile(srt){
 }
 function renderEditor(){
  const isDoc=P?.edit_mode==='documentary';if(window.ensureDocTimeline)window.ensureDocTimeline();if(window.refreshDocumentaryDraft)window.refreshDocumentaryDraft();document.body.classList.toggle('documentary-workspace',isDoc);$('#documentary-button').hidden=!isDoc;$('#documentary-timeline-label').hidden=!isDoc;$('#documentary-prepare-timeline').hidden=!isDoc;$('#doc-source-track').hidden=!isDoc;$('#doc-source-label').hidden=!isDoc;
- const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));$('#project-name').textContent=P?.title?(P.title+(isDoc?' · Documentary':'')):'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null;$('#project-status').textContent=P?`${cueGroups?`${cueGroups.length} cue shots · ${ss.length} picture slots`:ss.length+' scenes'} · ${totalTime().toFixed(3)}s · ${P.scenes.filter(s=>s.approved).length} ${cueGroups?'slots approved':'approved'}${P.script_application?.issues.length?' · '+P.script_application.issues.length+' script gaps':''}`:'Same timeline workflow · create a production to begin';
- // Clicking a source opens it, so the pool carries that instruction on the list
+ const ss=scenes(),current=ss[sceneIndex];selectedSlotIds=new Set([...selectedSlotIds].filter(id=>ss.some(s=>s.id===id)));// The header shows the production's own name and nothing else. The workspace type,
+// scene count and approval tally used to sit under it; they are gone, and the name
+// carries no "Documentary" suffix because that is a workspace, not a title.
+$('#project-name').textContent=P?.title||'Storyboard editor';document.title=(P?.title||'Storyroom')+' · Timeline editor';const cueGroups=isDoc&&P?.documentary_beat_review&&typeof docCueGroups==='function'?docCueGroups():null; // Clicking a source opens it, so the pool carries that instruction on the list
  // itself. It used to be written through `.media-hint`, which matched the
  // footage-count line first and wiped that count on every render.
  const pool=$('#media-list');
@@ -132,6 +134,9 @@ function missingVisualHTML(s){return s?.replacement_issue?`<strong>Replaced foot
 function goToNextVideo(){const ss=scenes(),video=s=>assets().some(a=>a.id===s.asset_id&&a.kind==='video');let index=ss.findIndex((s,i)=>i>sceneIndex&&video(s));if(index<0)index=ss.findIndex(video);if(index>=0)selectEditorScene(index);else toast('No playable scripted video is available.') }
 function isCurrentRender(r){const o=r?.options;if(!r?.current||!o)return false;if(P?.edit_mode==='documentary')return !!o.srt_subtitles===editorCC&&!!o.enhance_picture===enhancePicture;return !!o.script_captions===exportScriptCaptions&&!!o.srt_subtitles===editorCC&&!!o.enhance_picture===enhancePicture}
 function renderProgram(){
+ // The saved caption look is applied before anything is drawn, so the preview carries
+ // the project's own style from the first frame rather than the stylesheet default.
+ applyCaptionPreset();
  if(P?.edit_mode==='documentary'){docRenderProgram();return}
  const target=editorVideoMuted?(P?.render?.status==='done'&&isCurrentRender(P.render)?P.render.url:(P?.preview?.status==='done'?P.preview.url:'')):'';
  if(editorPlaying&&masterUrl!==target)return;
@@ -288,28 +293,210 @@ async function loadNarrationWaveform(voice){
 }
 function seekAudioTrack(event){const rect=$('#audio-track').getBoundingClientRect();seekEditor((event.clientX-rect.left)/timelineZoom,true)}
 
+/* ---- caption library ----------------------------------------------------
+   Same shape as the transition library: a grid of real looks, one dialog, opened from
+   the header. Picking a card saves the preset on the project, so the editor preview and
+   the burned-in export are the same style rather than two similar ones. */
+let captionCatalogue=null;
+
+async function openCaptionLibrary(){
+  if(!P){toast('Open a production first.');return}
+  try{
+    captionCatalogue=await api(`/api/captions?pid=${encodeURIComponent(P.id)}`);
+  }catch(e){toast(e.message);return}
+  renderCaptionLibrary();
+  const dlg=$('#caption-dialog');
+  if(dlg&&!dlg.open)dlg.showModal();
+}
+window.openCaptionLibrary=openCaptionLibrary;
+window.closeCaptionLibrary=function(){const d=$('#caption-dialog');if(d?.open)d.close()};
+
+function renderCaptionLibrary(){
+  const body=$('#caption-body');if(!body||!captionCatalogue)return;
+  const selected=P?.caption_preset||captionCatalogue.selected||'clean';
+  body.innerHTML=captionCatalogue.presets.map(p=>`
+    <button type="button" class="transition-card caption-card ${p.key===selected?'current':''}"
+      onclick="chooseCaptionPreset('${p.key}')">
+      <span class="caption-preview" style="${p.css}">Sample caption</span>
+      <strong>${E(p.label)}</strong><small>${E(p.detail)}</small>
+      ${p.key===selected?'<em>In use</em>':''}
+    </button>`).join('');
+  if($('#caption-burn'))$('#caption-burn').checked=P?.burn_captions!==false;
+  if($('#caption-preview'))$('#caption-preview').checked=!!editorCC;
+}
+
+async function chooseCaptionPreset(key){
+  if(!P)return;
+  try{
+    P=await api(`/api/projects/${P.id}`,'PATCH',{caption_preset:key});
+    applyCaptionPreset();
+    renderCaptionLibrary();
+    toast('Caption style saved.');
+  }catch(e){toast(e.message)}
+}
+window.chooseCaptionPreset=chooseCaptionPreset;
+
+// Paint the preset the dialog just saved onto the live preview overlay. The export
+// reads the same key from the project, so this is a preview of the real thing.
+function applyCaptionPreset(){
+  const overlay=$('#editor-captions');if(!overlay)return;
+  const key=P?.caption_preset||'clean';
+  const preset=(captionCatalogue?.presets||[]).find(p=>p.key===key);
+  if(!preset){overlay.removeAttribute('style');return}
+  // The overlay's own positioning lives in the stylesheet; only the look is replaced.
+  overlay.setAttribute('style',preset.css);
+}
+
+async function setCaptionBurn(on){
+  if(!P)return;
+  try{
+    P=await api(`/api/projects/${P.id}`,'PATCH',{burn_captions:!!on});
+    renderCaptionLibrary();renderProgram();
+    toast(on?'Captions will be burned into the export.':'Captions will not be burned in.');
+  }catch(e){toast(e.message)}
+}
+window.setCaptionBurn=setCaptionBurn;
+
+function setCaptionPreview(on){setEditorCaptions(!!on);renderCaptionLibrary()}
+window.setCaptionPreview=setCaptionPreview;
+
+/* ---- transition library --------------------------------------------------
+   One dialog, opened either from the transport bar (which acts on the scene in the
+   inspector) or from the inspector's own transition row. It is the only place a
+   transition is chosen, so there is one list to learn rather than a dropdown plus a
+   grid that can disagree. The catalogue comes from the server, which means a card can
+   never offer a transition the renderer cannot produce. */
+let transitionCatalogue=null,transitionTarget=null;
+
+async function loadTransitionCatalogue(){
+  if(transitionCatalogue)return transitionCatalogue;
+  try{transitionCatalogue=await api('/api/transitions')}catch(e){toast(e.message)}
+  return transitionCatalogue;
+}
+
+function transitionLabel(key){
+  const c=(transitionCatalogue?.transitions||[]).find(t=>t.key===key);return c?c.label:(key||'Cut');
+}
+
+async function openTransitionLibrary(sceneId){
+  await loadTransitionCatalogue();
+  if(!transitionCatalogue)return;
+  if(!P){toast('Open a production first.');return}
+  transitionTarget=sceneId||scenes()[sceneIndex]?.id||null;
+  const dlg=$('#transition-dialog');
+  renderTransitionLibrary();
+  if(dlg&&!dlg.open)dlg.showModal();
+}
+
+window.openTransitionLibrary=openTransitionLibrary;
+window.closeTransitionLibrary=function(){const d=$('#transition-dialog');if(d?.open)d.close()};
+
+function renderTransitionLibrary(){
+  const body=$('#transition-body');if(!body)return;
+  if($('#transition-duration'))$('#transition-duration').value=transitionDuration;
+  if($('#transition-intensity'))$('#transition-intensity').value=transitionIntensity;
+  const scene=P?.scenes?.find(s=>s.id===transitionTarget);
+  const current=scene?.transition||'cut';
+  const index=P?.scenes?.findIndex(s=>s.id===transitionTarget);
+  const lastIndex=(P?.scenes?.length||1)-1;
+  const isLast=index===lastIndex;
+  const isClean=P?.transition_policy==='clean_cuts_only';
+  const target=$('#transition-target');
+  if(target){
+    if(!scene)target.textContent='Select a scene in the inspector, then choose its exit transition.';
+    else if(isLast)target.textContent=`Scene ${index+1} is the last scene. There is nothing after it to blend into.`;
+    else target.textContent=`Scene ${index+1} of ${P.scenes.length} · exit into scene ${index+2}`;
+  }
+  const grid=transitionCatalogue.transitions.map(t=>{
+    const disabled=isClean&&t.overlaps;
+    const isCurrent=t.key===current;
+    return `<button type="button" class="transition-card ${isCurrent?'current':''} ${disabled?'disabled':''}"
+      ${disabled?'disabled':''} onclick="chooseTransition('${t.key}')"
+      ${disabled?'title="This production uses clean cuts only. Allow transitions first."':''}>
+      <span class="transition-preview t-${t.key}"><span></span></span>
+      <strong>${E(t.label)}</strong><small>${E(t.detail)}</small>
+      ${isCurrent?'<em>In use</em>':''}
+    </button>`;
+  }).join('');
+  body.innerHTML=grid;
+}
+
+async function chooseTransition(key,silent){
+  if(!P||!transitionTarget)return;
+  const scene=P.scenes.find(s=>s.id===transitionTarget);if(!scene)return;
+  // The handle a blend needs is the duration itself, in frames. A cut needs none.
+  const handle=(transitionCatalogue?.durations||[]).find(d=>d.key===transitionDuration)?.frames||15;
+  try{
+    P=await api(`/api/projects/${P.id}/scenes/${scene.id}`,'PATCH',
+      {transition:key,transition_handle_frames:key==='cut'?0:handle});
+    transitionCatalogue=null; // the response carries the project, not the catalogue
+    await loadTransitionCatalogue();
+    renderTransitionLibrary();renderInspector();renderProject?.();
+    if(!silent)toast(`${transitionLabel(key)} set on scene ${P.scenes.findIndex(s=>s.id===transitionTarget)+1}.`);
+  }catch(e){toast(e.message)}
+}
+window.chooseTransition=chooseTransition;
+
+let transitionDuration='standard',transitionIntensity='balanced';
+
+function setTransitionDuration(key){
+  transitionDuration=key;
+  const scene=P?.scenes?.find(s=>s.id===transitionTarget);
+  if(scene&&scene.transition&&scene.transition!=='cut')chooseTransition(scene.transition,true);
+}
+window.setTransitionDuration=setTransitionDuration;
+
+function setTransitionIntensity(key){transitionIntensity=key}
+window.setTransitionIntensity=setTransitionIntensity;
+
+async function autoSuggestTransitions(){
+  if(!P)return;
+  try{
+    const data=await api(`/api/projects/${P.id}/transition-suggest`,'POST',
+      {intensity:transitionIntensity,duration:transitionDuration});
+    P=data.project;
+    renderInspector();renderProject?.();renderTransitionLibrary();closeTransitionLibrary();
+    const parts=Object.entries(data.summary||{}).map(([k,v])=>`${v} ${transitionLabel(k)}`);
+    toast(data.changed?`${data.changed} boundaries changed${parts.length?': '+parts.join(', '):''}.`:'Every boundary already fit its scene.');
+  }catch(e){toast(e.message)}
+}
+window.autoSuggestTransitions=autoSuggestTransitions;
+
 function renderInspector(){const s=scenes()[sceneIndex];
  if(P?.edit_mode==='documentary'&&editorPlaying){if(s){const lbl=s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('\u2013');$('#shot-number').textContent=lbl}return}$('#shot-number').textContent=s?((s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('–'))):'—';
- if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Waiting for footage links</label><p>The script refers to ${missing.map(x=>E(x.source_file)).join(', ')}. Select the correct existing videos or upload the missing files.</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?(P?.edit_mode==='documentary'&&P?.script_reading?.status==='not_detailed'?'<div class="inspector-group"><label>No picture beats yet</label><p>The SRT is imported and the Beat script was read. Build the picture from the reviewed Beat ranges; Setup cannot build this script automatically.</p><button type="button" onclick="openBeatProposal()">Review the Beat picture plan</button></div>':'<div class="inspector-group"><label>No picture beats yet</label><button type="button" onclick="manage(\'brief\')">Open setup</button></div>'):'<div class="inspector-group"><label>Ready for a new production</label></div>';return}
+ if(P?.edit_mode==='documentary'&&editorPlaying){if(s){const lbl=s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('\u2013');$('#shot-number').textContent=lbl}return}$('#shot-number').textContent=s?((s.plan_row?.shot_id||'SRT '+s.srt_blocks.join('–'))):'—';
+ // Nothing here explains itself. A field says what it holds, a notice says what is
+ // wrong, and everything else was removed: the inspector is a control surface, not a
+ // manual. Where a sentence used to justify a value, the value now stands alone.
+ if(!s){const missing=(P?.source_match_report||[]).filter(x=>!['matched','selected'].includes(x.status));$('#inspector-content').innerHTML=missing.length?`<div class="inspector-group"><label>Unlinked source files</label><p>${missing.map(x=>E(x.source_file)).join(', ')}</p><button type="button" onclick="manage('brief')">Resolve filenames</button></div>`:P?.srt?`<div class="inspector-group"><label>No picture beats</label><button type="button" onclick="manage('brief')">Open setup</button></div>`:'<div class="inspector-group"><label>No production open</label></div>';return}
  const a=assets().find(a=>a.id===s.asset_id),m=s.motion_plan||{};
  const chosen=selectedScenes(),scaleTarget=chosen.find(x=>x.id===s.id)||chosen[0],scaleValue=scaleTarget?effectivePictureScale(scaleTarget):100,scaleMixed=new Set(chosen.map(effectivePictureScale)).size>1;
  const flow=s.picture_flow,cut=s.cut_sync;
- const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous beat',continued_running_take:'continued take',slid_inside_a_shot:'conformed inside a shot',slid_far_inside_a_shot:'moved far — check it',repeats_recent_footage:'repeats recent footage',jump_cut_within_shot:'deliberate jump cut',no_single_shot_fits:'no shot fits this beat',not_decoded:'source not decoded'};
- const cutLabel={in_a_breath:'cut in a breath',on_a_block_boundary:'cut on a line break',over_speech:'cut over a spoken word',between_blocks:'cut between blocks'};
- const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Picture flow</span><span title="${E(flow.note||'')}">${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · shot ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut to next</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · moved from ${cut.moved_from_s}s`:''}</span></div>`:''}`;
- $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed values':''): 'no slots selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Use project scale (${Number(P.picture_scale)||100}%)</button></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration / picture beat</label><p class="narration-excerpt">${E(s.narration)}</p></div>${s.plan_row?.native_static_interval?'<div class="notice warn"><strong>Native static interval · review only</strong><p>Playing the original video, without a freeze or extracted frame. Count its full duration toward the still allowance; eligibility, identity and rights must be checked.</p></div>':''}${meta}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Selected visual<select name="asset_id">${options([['','Choose uploaded media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Photo source time (not applicable)':'Video in-point (seconds)'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}">${flow&&flow.declared_in_s!=null&&Math.abs(flow.declared_in_s-flow.conformed_in_s)>=.001?`<span class="small">Declared ${flow.declared_in_s}s · conformed to ${flow.conformed_in_s}s so the beat stays inside one continuous shot. ${E(flow.note||'')}</span>`:''}</label><label>Exit transition<select name="transition">${options(P.transition_policy==='clean_cuts_only'?[['cut','Clean cut · transitions disabled']]:[['cut','Clean action / phrase cut'],['dissolve','Short dissolve · handles required']],s.transition)}</select></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Disclosed wide context, not the exact person/exhibit</label><label>Editorial / exception notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild this block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Editorially approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+ const flowLabel={already_inside_one_shot:'inside one shot',continuous_with_previous:'runs on from previous',continued_running_take:'continued take',slid_inside_a_shot:'conformed',slid_far_inside_a_shot:'moved far',repeats_recent_footage:'repeats footage',jump_cut_within_shot:'jump cut',no_single_shot_fits:'no shot fits',not_decoded:'not decoded'};
+ const cutLabel={in_a_breath:'in a breath',on_a_block_boundary:'on a line break',over_speech:'over speech',between_blocks:'between blocks'};
+ // Three terse fact rows. No prose, no tooltips that restate the label.
+ const meta=`<div class="mini-meta"><span>SRT ${s.srt_blocks.join('–')}</span><span>${((s.frame_out-s.frame_in)/30).toFixed(3)}s</span></div><div class="mini-meta"><span>Timeline</span><span>${(s.frame_in/30).toFixed(3)} → ${(s.frame_out/30).toFixed(3)}s</span></div>${flow?`<div class="mini-meta"><span>Flow</span><span>${E(flowLabel[flow.status]||flow.status)}${flow.shot?` · ${flow.shot[0]}–${flow.shot[1]}s`:''}</span></div>`:''}${cut?`<div class="mini-meta"><span>Cut</span><span>${E(cutLabel[cut.quality]||cut.quality)}${cut.moved_from_s!=null?` · ${cut.moved_from_s}s`:''}</span></div>`:''}`;
+ const transitionKey=s.transition||'cut';
+ const transitionOptions=(transitionCatalogue?.transitions||[{key:'cut',label:'Cut'},{key:'fade',label:'Cross Fade'},{key:'dissolve',label:'Dissolve'}]).map(t=>[t.key,t.label]);
+ $('#inspector-content').innerHTML=`<div class="slot-scale-control"><label for="slot-scale-range">Scale · ${chosen.length?chosen.length+' selected'+(scaleMixed?' · mixed':''):'none selected'}</label><div class="slot-scale-row"><input id="slot-scale-range" type="range" min="100" max="200" step="1" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><input id="slot-scale-number" type="number" min="100" max="200" step="1" aria-label="Slot picture scale percent" value="${scaleValue}" ${chosen.length?'':'disabled'} oninput="previewSlotScale(this.value)" onchange="saveSlotScale(this.value)"><span>%</span></div><button type="button" onclick="saveSlotScale(null)" ${!chosen.some(x=>x.picture_scale!=null)?'disabled':''}>Project scale (${Number(P.picture_scale)||100}%)</button></div>${docVolumeHTML()}<form id="scene-form" onsubmit="saveEditorScene(event)"><div class="inspector-group"><label>Narration</label><p class="narration-excerpt">${E(s.narration)}</p></div>${meta}${s.plan_row?.native_static_interval?'<div class="notice warn">Native static interval · review only</div>':''}${sourceTimingHTML(s,a)}<label>Emotion<input name="emotion" value="${E(s.emotion)}"></label><label>Primary focus<input name="focus" value="${E(s.focus)}"></label><label>Named person<input name="person" value="${E(s.person)}"></label><label>Visual<select name="asset_id">${options([['','Choose media'],...P.assets.filter(a=>!P.script_moving_only||a.kind==='video'||(s.plan_row?.uploaded_photo&&a.kind==='image'&&!a.derived_from)).map(a=>[a.id,(a.reserve?'[reserve '+a.source_label+'] ':'')+(a.verified?'✓ ':'? ')+a.name])],s.asset_id||'')}</select></label><label>${s.plan_row?.uploaded_photo?'Source time (n/a)':'In-point · s'}<input name="in_s" type="number" step=".001" min="0" value="${s.in_s}"></label><label>Exit transition<div class="transition-row"><select name="transition">${options(transitionOptions,transitionKey)}</select><button type="button" onclick="openTransitionLibrary('${s.id}')" title="Open the transition library">Library</button></div></label><label class="check-label"><input type="checkbox" name="context_only" ${s.context_only?'checked':''}>Wide context, not the named person</label><label>Notes<textarea name="notes" rows="3">${E(s.notes)}</textarea></label><div class="edit-actions"><button type="button" onclick="rebuildHere()">Rebuild block</button></div><label class="check-label"><input type="checkbox" name="approved" ${s.approved?'checked':''}>Approved</label><button class="button primary" type="submit">Save scene</button></form><div id="scene-understanding"></div><div id="plan-tools"></div>`;
+
+ // The library dropdown needs the catalogue; fetching it once per session is cheaper
+ // than a hard-coded list that can drift from what the renderer supports.
+ if(!transitionCatalogue){loadTransitionCatalogue().then(()=>{if($('#scene-form'))renderInspector()})}
  if(a?.kind==='video')loadSceneUnderstanding(s.id);
  $('#plan-tools').innerHTML=planToolsHTML();candidateHTMLForScene(s).then(h=>{const n=$('#plan-tools');if(n)n.insertAdjacentHTML('beforeend',h)});
- if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}form.insertAdjacentHTML('afterbegin','<div class="inspector-group"><label>Automatic clips-only assembly</label><p>Source interval checked and linked to the script/SRT. No manual portrait selection or scene approval is required for this prepared timeline.</p></div>')}
+ // An automatic match hides the three fields it has already answered. The notice that
+ // used to explain this said only that, so it is gone; the fields simply are not there.
+ if(s.automatic_match&&!P.manual_scene_edits){const form=$('#scene-form');for(const name of ['person','context_only','approved']){const field=form.querySelector('[name="'+name+'"]');if(field)field.closest('label').hidden=true}}
 }
-function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Uploaded photograph · static hold</label><p>${E(a.original_name||a.name)}</p><p>Timeline duration: ${((s.frame_out-s.frame_in)/30).toFixed(3)}s. No video source IN/OUT. Counts toward still allowance; identity and rights require review.</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Analyzed MP4 / SRT linkage</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>Saved IN: ${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p>Source-bank match: ${E(s.automatic_match.bank_id)}. Provisional CSV times were checked against actual footage.</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
+function sourceTimingHTML(s,a){if(!a)return '';if(a.kind==='image'&&!a.derived_from)return `<div class="inspector-group"><label>Still · ${((s.frame_out-s.frame_in)/30).toFixed(3)}s</label><p>${E(a.original_name||a.name)}</p><p id="source-clock" class="small"></p></div>`;if(s.automatic_match)return `<div class="inspector-group"><label>Source</label><p>${E(a.original_name||a.name)} · SRT ${E(s.automatic_match.srt_block)}</p><p>${Number(s.in_s).toFixed(3)}s → ${(Number(s.in_s)+(s.frame_out-s.frame_in)/30).toFixed(3)}s</p><p id="source-clock" class="small"></p></div>`;const derived=a.derived_from,planned=s.plan_row;const actual=derived?derived.requested_time_ms/1000:Number(s.in_s);
  // The script's IN/OUT is only worth a line when it disagrees with what is saved.
  // On a conformed beat the two are identical, so printing both just invited the
  // reader to hunt for a difference that is not there.
  const plannedIn=planned?(planned.extracted_frame_ms??planned.source_in_ms)/1000:null;
  const plannedOut=planned?.source_out_ms!=null?planned.source_out_ms/1000:null;
  const moved=plannedIn!=null&&(Math.abs(plannedIn-actual)>0.0005||(plannedOut!=null&&Math.abs(plannedOut-(actual+(s.frame_out-s.frame_in)/30))>0.0005));
- return `<div class="inspector-group"><label>Source cut</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${derived?'Extracted frame':'Saved IN'}: ${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p>Script asked for: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s (exclusive)':''}</p>`:''}${planned?'':'<p>Source timing selected in the editor.</p>'}<p id="source-clock" class="small"></p></div>`}
+ return `<div class="inspector-group"><label>Source</label><p>${E(derived?.source_file||a.original_name||a.name)}</p><p>${actual.toFixed(3)}s${a.kind==='video'?' → '+(actual+(s.frame_out-s.frame_in)/30).toFixed(3)+'s':''}</p>${moved?`<p class="small">Script: ${plannedIn.toFixed(3)}s${plannedOut!=null?' → '+plannedOut.toFixed(3)+'s':''}</p>`:''}<p id="source-clock" class="small"></p></div>`}
 
 
 async function loadSceneUnderstanding(sceneId){
@@ -790,7 +977,15 @@ async function setBurnCaptions(enabled){
 }
 function setEditorCaptions(enabled){editorCC=!!enabled;$('#caption-toggle').textContent=editorCC?'CC On':'CC Off';$('#caption-toggle').setAttribute('aria-pressed',String(editorCC));const c=$('#burn-srt-subtitles');if(c)c.checked=editorCC;renderProgram();updatePosition();renderExport();if($('#manage-dialog').open)renderManagement()}
 function toggleEditorCaptions(){setEditorCaptions(!editorCC)}
-function setEditorZoom(v){timelineZoom=Number(v);renderTimeline();updatePosition()}
+function setEditorZoom(v){
+ // The slider is the fine control; the two buttons beside it exist so the timeline can
+ // be zoomed without dragging at all. Both write through the same value, so the slider
+ // always shows the zoom the buttons reached.
+ timelineZoom=Math.max(2,Math.min(35,Number(v)||12));
+ const slider=$('#zoom');if(slider&&Number(slider.value)!==timelineZoom)slider.value=timelineZoom;
+ renderTimeline();updatePosition();
+}
+function stepEditorZoom(direction){setEditorZoom(timelineZoom+(direction>0?2:-2))}
 masterNode.addEventListener('ended',pauseEditor);narrNode.addEventListener('ended',pauseEditor);
 $('#manage-dialog').addEventListener('cancel',e=>{e.preventDefault();closeManagement()});
 $('#ruler-track').onclick=e=>{const r=$('#ruler-track').getBoundingClientRect();seekEditor((e.clientX-r.left)/timelineZoom,true)};

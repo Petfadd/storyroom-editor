@@ -176,10 +176,10 @@ def target_lufs(level_percent):
 def build_bed(project, music_file, destination, duration_s, segments, level_percent=None, duck=False, work_dir=None, narration_level=None):
     """Loop and level the music, then cut it to an exact-length WAV bed.
 
-    The bed is continuous: it is neither dipped under the narration nor cut under
-    a sound bite, so the score runs unbroken from the first frame to the last.
-    `segments` and `narration_level` are still accepted because saved projects
-    and older callers pass them; they no longer change the gain.
+    The bed is one continuous piece for the whole film: it is never cut, and it rises
+    back to its set level the moment the speaking stops. While narration or a sound bite
+    carries words it sits underneath them (see `duck_track`), because a bed at its full
+    level across speech is what makes the speech hard to follow.
     """
     music_file = Path(music_file).resolve()
     destination = Path(destination).resolve()
@@ -224,9 +224,49 @@ def build_bed(project, music_file, destination, duration_s, segments, level_perc
         raise ValueError('The music bed length does not match the timeline.')
     return {'duration_s': length, 'level_percent': level_percent, 'nominal_lufs': target_lufs(level_percent),
             'measured_source_lufs': round(measured, 2), 'gain_db': round(gain_db, 2),
-            'ducked_under_speech': False,
-            'narration_level': narration_level,
-            'speech_mode': narration_level,
+            'ducked_under_speech': True,
+            'duck_depth_db': DUCK_DEPTH_DB,
+            'narration_level': 'duck',
+            'speech_mode': 'duck',
+            # Kept for callers that read them. Ducking is a sidechain at mix time, so
+            # these are always empty: the bed has no gap and no gain window anywhere.
             'narration_windows': [],
             'mute_windows': [],
             'music_version': MUSIC_VERSION}
+
+
+# How far the bed drops while speech is present. 11 dB keeps the score audible as a
+# bed while leaving the words clearly on top; deeper starts to sound like the music
+# is being switched off and on.
+DUCK_DEPTH_DB = 11.0
+
+# Sidechain compression, not a gain envelope drawn from timings. The narration stream
+# itself opens and closes it, so the bed dips exactly while someone is talking -- across
+# a sound bite, mid-sentence, wherever -- and returns in the gaps. A threshold this low
+# with a slow release means it never pumps between words.
+DUCK_FILTER = (
+    'sidechaincompress=threshold=0.012:ratio=6:attack=40:release=320:'
+    'knee=4:makeup=1:mode=downward'
+)
+
+
+def duck_track(music_input, speech_input, destination, depth_db=DUCK_DEPTH_DB):
+    """Lower `music_input` wherever `speech_input` is carrying sound.
+
+    Returns the filter graph used, so a preview and the export can share one string and
+    a listener can never hear a duck that the file does not have.
+    """
+    source = Path(music_input).resolve()
+    speech = Path(speech_input).resolve()
+    destination = Path(destination).resolve()
+    if not source.is_file() or not speech.is_file():
+        raise ValueError('The music or narration stream is missing for ducking.')
+    ff = imageio_ffmpeg.get_ffmpeg_exe()
+    graph = (
+        f'[0:a]volume=1[a];'
+        f'[1:a]volume=1,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[s];'
+        f'[a][s]{DUCK_FILTER},volume={depth_db:.2f}dB[m]'
+    )
+    _run([ff, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(source), '-i', str(speech),
+          '-filter_complex', graph, '-map', '[m]', '-c:a', 'pcm_s16le', str(destination)])
+    return graph

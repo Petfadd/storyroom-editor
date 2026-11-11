@@ -78,10 +78,11 @@ class NoMusicUnderABiteTest(unittest.TestCase):
             self.assertAlmostEqual(value, reference, delta=1.0,
                                    msg=f'{name} is {value} dB against {reference} dB of picture')
 
-    def test_a_saved_duck_or_mute_opens_as_a_continuous_bed(self):
-        # Both old settings must open, and neither may bring the duck or the cut
-        # back: the export reads the project, so a stale save would reintroduce
-        # exactly what the user asked to remove.
+    def test_a_saved_mode_opens_ducked_and_never_cut(self):
+        # The direction reversed: the bed now sits under speech. What has NOT come
+        # back is the cut -- a bite does not silence the music, it lowers it. An old
+        # save asking for 'mute' or a flat 'full' bed therefore opens ducked, and
+        # the rendered bed is still one unbroken file with no gap in it.
         for saved in ({'speech_mode': 'duck'}, {'duck_under_speech': False},
                       {'narration_level': 'mute'}, {'speech_mode': 'mute'}):
             with self.subTest(saved):
@@ -89,8 +90,9 @@ class NoMusicUnderABiteTest(unittest.TestCase):
                            'documentary_music': {'enabled': True, 'volume_percent': 60, **saved}}
                 bed = self.root / 'old.wav'
                 result = music.build_bed(project, self.music, bed, 12.0, self.segments())
-                self.assertEqual(result['narration_level'], 'full')
-                self.assertFalse(result['ducked_under_speech'])
+                self.assertEqual(result['narration_level'], 'duck')
+                self.assertTrue(result['ducked_under_speech'])
+                self.assertEqual(result['mute_windows'], [])
                 levels = self.spans(bed)
                 self.assertAlmostEqual(levels['bite'], levels['picture'], delta=1.0,
                                        msg=f'{saved} dipped or cut the bite')

@@ -758,9 +758,12 @@ class SidebarContentsTest(unittest.TestCase):
         self.assertIn('Case footage', text)
 
     def test_script_in_line_only_when_it_differs(self):
+        # The disclosure has to survive, but not as a sentence: it is now a bare
+        # "Script:" figure that appears only when it disagrees with what is saved.
         index = self.editor.index('function sourceTimingHTML')
         body = self.editor[index:index + 2000]
-        self.assertIn('Script asked for', body)
+        self.assertIn('Script: ', body)
+        self.assertIn("moved?", body, 'the line is conditional, not always printed')
         self.assertNotIn('<p>Script IN: ', body)
 
 
@@ -1408,23 +1411,28 @@ class AssetPosterTest(unittest.TestCase):
         self.assertGreater(render.index('validation-list'), body_end,
                            'Checks must survive a render-page rebuild')
 
-    def test_an_empty_music_bed_draws_nothing(self):
-        """No music means no bar, no prompt, no reserved row.
+    def test_an_empty_music_bed_draws_nothing_inside_the_row(self):
+        """No music means no bar, no prompt and no sliver -- but the row stays.
 
         The empty bed used to paint a full-width amber strip reading "Add background
-        music", which looked like a clip had already been placed. A track with no file
-        is not a thing on the timeline.
+        music", which looked like a clip had already been placed. The row itself must
+        remain in the track stack: removing it shifted every track underneath it, and
+        the movement was worse than the placeholder. So the row and its label are
+        present, and the clip inside is empty.
         """
         js = __import__('pathlib').Path('static/documentary_timeline.js').read_text()
         start = js.index('function docRenderMusicTrack(')
         body = js[start:js.index('\n}', start)]
         self.assertIn("const hasMusic=!!docMusic.file_present;", body)
-        # Both the row and its label are hidden when there is no file.
-        self.assertIn("track.style.display=documentary&&hasMusic?'block':'none'", body)
-        self.assertIn("label.style.display=documentary&&hasMusic?'flex':'none'", body)
-        # And the prompt text is gone entirely.
+        # The row is unconditional in a documentary; the clip is what is conditional.
+        self.assertIn("track.style.display=documentary?'block':'none'", body)
+        self.assertIn("label.style.display=documentary?'flex':'none'", body)
+        # The prompt text is gone entirely.
         self.assertNotIn('Add background music', body)
         self.assertIn("clip.innerHTML=''", body)
+        # A loaded timeline with no music must draw no strip at all, not a 3px stub.
+        self.assertIn('if(!duration){', body)
+        self.assertIn("clip.style.width='0px'", body)
 
     def test_music_appears_in_the_pool_as_an_import_card(self):
         """The pool is where an importer looks, so music lives there too.

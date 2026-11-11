@@ -440,8 +440,12 @@ function docRenderMusicTrack(){
  // stays mounted (so its height stays measurable) but collapses to nothing until a
  // file exists, which also gives the other tracks that space back.
  const hasMusic=!!docMusic.file_present;
- track.style.display=documentary&&hasMusic?'block':'none';
- label.style.display=documentary&&hasMusic?'flex':'none';
+ // The ROW is always there in a documentary -- it is part of the track stack, and a
+ // row that appears and disappears shifts every other track under the pointer. What
+ // stays hidden until a file exists is the clip inside it: an empty track shows its
+ // label and nothing else, exactly as CapCut leaves an unused audio row.
+ track.style.display=documentary?'block':'none';
+ label.style.display=documentary?'flex':'none';
  if(!documentary)return;
  if(!hasMusic){
   clip.innerHTML='';clip.onclick=null;
@@ -450,7 +454,16 @@ function docRenderMusicTrack(){
   return;
  }
  const duration=window.docTimelineData?.duration||0;
- const spans=duration>0?docMusicSpans(duration):[{start:0,end:0}];
+ // With no timeline loaded yet there is no film to draw a bed across. Drawing a
+ // 3px placeholder here is what left a brown sliver sitting in an empty track; the
+ // track itself stays mounted and visible, it simply holds no picture of a clip.
+ if(!duration){
+  clip.innerHTML='';clip.onclick=null;clip.style.left='0px';clip.style.width='0px';
+  clip.style.background='transparent';clip.style.borderColor='transparent';
+  const r=$('#music-volume');if(r)r.textContent=docMusic.enabled?String(docTrackVolume.music):'Off';
+  return;
+ }
+ const spans=docMusicSpans(duration);
  const zoom=timelineZoom;
  // One piece for the whole film: the bed is never cut, so there is no gap to
  // draw and no second label to repeat the name at every resume point.
