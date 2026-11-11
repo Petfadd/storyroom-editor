@@ -225,9 +225,14 @@ class TimelineSizingTest(unittest.TestCase):
                               ('--deck-tc:#1a89bb', 'playhead colour'),
                               ('--deck-total:#cfcfcf', 'programme length colour')):
             self.assertIn(needle, self.css, f'missing {label} from the monitor palette')
-        # The transport is one row: time, tally, play, then the view controls.
+        # The transport is one row: time, play, then the view controls. It is a
+        # grid with equal side tracks so the play button lands on the bar's own
+        # centre line, which is the line the production name is anchored to above.
         row = re.search(r'\.transport\{[^}]*\}', self.css).group(0)
-        self.assertIn('display:flex', row)
+        self.assertIn('display:grid', row)
+        self.assertIn('minmax(0,1fr) auto minmax(0,1fr)', row,
+                      'the play cluster must sit between two equal tracks, '
+                      'otherwise it is centred in the leftover space instead of the bar')
         self.assertNotIn('flex-wrap:wrap', row, 'the transport must stay a single row')
 
     def test_the_dark_field_runs_edge_to_edge(self):

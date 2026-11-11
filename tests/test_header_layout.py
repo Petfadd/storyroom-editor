@@ -1,15 +1,22 @@
-"""The header must read as one line, and its buttons must never be invisible.
+"""The header must put the name where the drawing puts it, and keep its buttons usable.
 
-The header used to give the brand, the two library buttons and the action group an
-equal share of the bar (`flex:1 1 0` each). That stretched two small groups of buttons
-across the whole window, so each sat at the far edge of its third with a wide empty gap
-beside it, and the production name floated in the space between. On a wide screen it
-looked like blank boxes with a few words drifting between them.
+Two layouts have been wrong here in different ways. First the brand, the two library
+buttons and the action group each took an equal share of the bar (`flex:1 1 0`), which
+stretched two small groups of buttons across the whole window and left the production
+name floating in the middle of a gap. Then the name was pulled left to sit beside the
+controls, which put it nowhere in particular.
 
-These tests read the stylesheet rather than a rendered page, because the property that
-matters is which rule wins the cascade. They are deliberately about structure, not
-decoration: a layout can be restyled freely, but it must not go back to stretching the
-groups apart, and the buttons must keep a readable foreground.
+What the drawing asks for is exact: the two boxes stay over the media pool, and the
+production name sits on the same vertical line as the play button in the transport
+below -- the centre of the monitor column. That is a geometric promise, so the tests
+here check the mechanism that delivers it (the header borrows the editor grid's own
+column tracks, and the name is centred in the middle one) and, when a browser is
+available, the pixels themselves.
+
+They read the stylesheet because the property that matters is which rule wins the
+cascade. They are deliberately about structure, not decoration: the bar can be
+restyled freely, but the name must stay on the picture's centre line, the groups must
+not be stretched apart, and no button may become unreachable.
 """
 import re
 import unittest
@@ -44,6 +51,16 @@ def _last(selector: str) -> str:
     return rules[-1][1] if rules else ''
 
 
+def _base(selector: str) -> str:
+    """The last rule for a selector that is NOT inside a media query.
+
+    `_last` returns whatever comes last in the file, which for a layout rule is usually
+    a narrow-screen override. The unconditional layout is the one to assert on.
+    """
+    base = [body for media, body in _rules(selector) if not media]
+    return base[-1] if base else ''
+
+
 def _decl(body: str, prop: str) -> str:
     match = re.search(rf'(?:^|;)\s*{re.escape(prop)}\s*:\s*([^;}}]+)', body)
     return match.group(1).strip() if match else ''
@@ -69,11 +86,41 @@ class HeaderLayoutTest(unittest.TestCase):
                 self.assertEqual(grow, '0',
                                  f'{selector} grows and pushes its neighbours apart')
 
-    def test_the_name_follows_the_controls_instead_of_centring_in_a_gap(self):
-        body = _last('.project-heading')
-        self.assertEqual(_decl(body, 'justify-content'), 'flex-start')
-        # A rule between the controls and the name is what the drawing asked for.
-        self.assertIn('border-left', body)
+    def test_the_name_is_centred_in_the_monitors_own_column(self):
+        """The drawing: the name sits on the vertical line of the play button.
+
+        The mechanism is that the bar is a grid on the SAME tracks as the editor grid,
+        and the name is the middle track's content, centred in it. A left-aligned name
+        beside the boxes was the previous attempt and is what this replaces.
+        """
+        bar = _base('.topbar')
+        self.assertIn('grid-template-columns:var(--pane-columns)', bar.replace(' ', ''),
+                      'the header no longer shares the editor grid\'s column tracks')
+        self.assertIn('--pane-columns:', CSS,
+                      'the pane widths must be defined once, for both the header and the grid')
+        name = _base('.topbar>.project-heading')
+        self.assertEqual(_decl(name, 'justify-content'), 'center',
+                         'a left-aligned name drifts wherever the controls end')
+        # This one is subtle and cost a browser measurement to find: the shared
+        # `.project-heading` rule (the one the documentary workspace uses) is a
+        # COLUMN flexbox. In a column, `justify-content` acts on the vertical axis,
+        # so `justify-content:center` centres nothing horizontally and the name is
+        # centred only by `align-items`. That works by accident until someone
+        # changes align-items -- and a test that asserts on justify-content alone
+        # passes while the name sits hundreds of pixels off its line.
+        self.assertEqual(_decl(name, 'flex-direction'), 'row',
+                         'in a column flexbox, justify-content cannot centre the name '
+                         'horizontally; the horizontal axis must be the main axis')
+        self.assertNotIn('border-left', name,
+                         'a rule between the controls and the name is not in the drawing')
+
+    def test_the_grid_and_the_header_cannot_drift_apart(self):
+        """One definition of the three pane widths, not two that can disagree."""
+        self.assertEqual(CSS.count('--pane-columns:'), 5,
+                         'the widths are redefined per breakpoint; each breakpoint must '
+                         'move the header and the grid together')
+        grid = _base('.editor-grid')
+        self.assertIn('34fr', grid, 'the editor grid must keep its own proportional tracks')
 
     def test_the_actions_stay_on_the_right(self):
         # The rule that decides this is the one for the bar's own child, written last.
@@ -84,7 +131,7 @@ class HeaderLayoutTest(unittest.TestCase):
     def test_the_buttons_keep_a_readable_foreground(self):
         """The image showed the button text on no background at all. Whatever the cause,
         the rule that survives the cascade must keep a light colour and a dark fill."""
-        body = _last('.head-tool')
+        body = _base('.head-tool')
         self.assertTrue(_decl(body, 'color'), 'the button has no text colour')
         self.assertTrue(_decl(body, 'background') or _decl(body, 'background-color'),
                         'the button has no fill')
@@ -92,15 +139,30 @@ class HeaderLayoutTest(unittest.TestCase):
         self.assertIn(colour, ('#eef2f7', 'var(--text)', 'rgb(238, 242, 247)'),
                       f'the library buttons lost their readable colour ({colour!r})')
 
-    def test_the_controls_are_hidden_only_where_they_are_reachable_elsewhere(self):
-        """Narrow screens drop them rather than overflow, but only because the transport
-        bar offers both. If that ever changes, this test should fail."""
-        rules = _rules('.head-tools')
-        hidden = [body for _media, body in rules if 'display:none' in body.replace(' ', '')]
-        self.assertTrue(hidden, 'nothing hides the library buttons on a narrow screen')
-        # The transport bar must still carry both doors.
-        self.assertIn('openTransitionLibrary()', HTML.split('transport-right')[1])
-        self.assertIn('toggleEditorCaptions()', HTML.split('transport-right')[1])
+    def test_the_controls_are_never_hidden(self):
+        """The drawing keeps the two boxes in the bar, so they stay there at every width.
+
+        An earlier version hid them below 1240px "because the transport bar offers
+        both". That was true and still wrong: the drawing puts them in the header, and
+        a layout that deletes its own controls once the window narrows is not the
+        layout that was asked for. They may shrink; they may not vanish.
+        """
+        for selector in ('.head-tools', '.head-tool'):
+            for media, body in _rules(selector):
+                compact = body.replace(' ', '')
+                self.assertNotIn('display:none', compact,
+                                 f'{selector} is hidden under @media({media})')
+                self.assertNotIn('visibility:hidden', compact,
+                                 f'{selector} is hidden under @media({media})')
+
+    def test_no_action_button_is_hidden_at_any_width(self):
+        """Each of these is the only route to its dialog, so hiding one strands it."""
+        for selector in ('#setup-button', '#performance-button', '#documentary-button',
+                         '#render-button'):
+            for media, body in _rules(selector):
+                self.assertNotIn('display:none', body.replace(' ', ''),
+                                 f'{selector} is hidden under @media({media}), '
+                                 f'and nothing else opens that dialog')
 
 
 if __name__ == '__main__':

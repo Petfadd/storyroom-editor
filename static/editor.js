@@ -1002,6 +1002,28 @@ async function chooseAspect(format){closeAspectMenu();if(!P||P.format===format)r
 document.addEventListener('click',e=>{if(!aspectMenuOpen())return;if(e.target.closest&&e.target.closest('#aspect-menu,#aspect-toggle'))return;closeAspectMenu()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&aspectMenuOpen()){closeAspectMenu();$('#aspect-toggle')?.focus()}});
 window.addEventListener('resize',()=>{if(aspectMenuOpen())placeAspectMenu()});
+/* The production name sits on the monitor's centre line. That line is fixed by the
+   grid, but the action buttons are wider than the inspector column, so on anything
+   narrower than a wide desktop they reach back towards it. Rather than guess at the
+   space in the stylesheet, measure it: the name is allowed exactly the room between
+   the two boxes and the first button. A long title therefore ends in an ellipsis
+   before it can run into the buttons, and the line itself never moves. */
+function fitHeaderName(){
+  const name=document.querySelector('#project-name'),head=name&&name.closest('.project-heading'),
+        tools=document.querySelector('.head-tools'),actions=document.querySelector('.topbar>.top-actions');
+  if(!name||!head||!tools||!actions)return;
+  // The name is centred on the monitor's line, so its room is symmetric: twice the
+  // smaller of the two gaps beside that line. Measuring min() rather than assuming
+  // the buttons are the nearer neighbour means the name never overlaps either of them.
+  name.style.removeProperty('--name-room');
+  const centre=head.getBoundingClientRect().left + head.getBoundingClientRect().width/2;
+  const left=tools.getBoundingClientRect().right, right=actions.getBoundingClientRect().left;
+  const room=Math.max(0,Math.floor(2*Math.min(centre-left,right-centre)-24));
+  name.style.setProperty('--name-room',room+'px');
+}
+window.addEventListener('resize',fitHeaderName);
+document.addEventListener('DOMContentLoaded',fitHeaderName);
+if(document.readyState!=='loading')fitHeaderName();
 window.addEventListener('scroll',()=>{if(aspectMenuOpen())placeAspectMenu()},true);
 function syncMonitorShape(){const box=$('#monitor');if(!box)return;const shape=MONITOR_SHAPES[P?.format]||'16:9';box.dataset.aspect=shape;box.dataset.fit=shape==='16:9'?'contain':'cover';
  // A vertical film gets a taller panel so the frame can be a useful size; leaving

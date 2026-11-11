@@ -14,10 +14,10 @@
 .monitor-panel,.panel,.topbar,.timeline-panel{min-width:0}.project-heading{flex:0 1 auto;overflow:hidden}.project-heading strong,.project-heading span{overflow:hidden;text-overflow:ellipsis}.top-actions{flex:0 0 auto}.transport-buttons{flex:0 0 auto}.timecode{white-space:nowrap;flex:0 0 auto}.validation-card{min-width:0;overflow-wrap:anywhere}.validation-heading{gap:12px}.validation-heading span{flex:0 0 auto}
 @media(max-width:1000px){
  .topbar{gap:10px;padding:0 10px}.brand{flex:0 0 auto}.brand>span:last-child{display:none}.project-heading strong{font-size:12px;white-space:nowrap}.project-heading span{font-size:10px;white-space:nowrap}.top-actions{gap:6px}.top-actions .button{padding:8px 10px;font-size:11px;white-space:nowrap}
- .editor-grid{grid-template-columns:220px minmax(0,1fr)}.inspector-panel{display:none}.monitor-panel{overflow:hidden}.transport-buttons button{width:27px}.audio-toggle,.caption-toggle{padding:6px 8px}.timecode{font-size:10px}.validation-card{margin:0 12px 10px}.timeline-panel{overflow:hidden}.timeline-toolbar{gap:10px}.timeline-toolbar .track-legend{display:none}
+ .editor-grid{grid-template-columns:220px minmax(0,1fr)}:root{--pane-columns:220px minmax(0,1fr) 0}.inspector-panel{display:none}.monitor-panel{overflow:hidden}.transport-buttons button{width:27px}.audio-toggle,.caption-toggle{padding:6px 8px}.timecode{font-size:10px}.validation-card{margin:0 12px 10px}.timeline-panel{overflow:hidden}.timeline-toolbar{gap:10px}.timeline-toolbar .track-legend{display:none}
 }
 @media(max-width:720px){
- .editor-grid{grid-template-columns:180px minmax(0,1fr)}.project-heading span{display:none}.top-actions .button{padding:8px;font-size:10px}.top-actions #validate-button{display:none}.media-section-label{padding-left:9px}.media-list,.semantic-list{padding-left:4px;padding-right:4px}.media-hint{padding-left:9px;padding-right:9px}.audio-toggle{font-size:0;min-width:35px}.audio-toggle::first-letter{font-size:12px}.timecode{font-size:9px}
+ .editor-grid{grid-template-columns:180px minmax(0,1fr)}:root{--pane-columns:180px minmax(0,1fr) 0}.project-heading span{display:none}.top-actions .button{padding:8px;font-size:10px}.top-actions #validate-button{display:none}.media-section-label{padding-left:9px}.media-list,.semantic-list{padding-left:4px;padding-right:4px}.media-hint{padding-left:9px;padding-right:9px}.audio-toggle{font-size:0;min-width:35px}.audio-toggle::first-letter{font-size:12px}.timecode{font-size:9px}
 }
 /* Reference-layout repair: keep all three panes visible at laptop preview sizes.
    Proportions follow CapCut, measured from the reference at 1916px: left side
@@ -25,11 +25,18 @@
    absorb all the leftover width, so it swelled to two thirds of the window while
    the inspector stayed a narrow strip. Proportional shares make the three panes
    hold that balance at any width; the minmax floors stop a pane collapsing. */
+/* The pane widths live in ONE custom property, because the header has to line up
+   with them: the production name sits over the monitor column, on the same vertical
+   line as the play button in the transport below. Two copies of these three values
+   would drift apart the moment either side was retuned. */
 .editor-grid{grid-template-columns:
   minmax(240px,34fr)
   minmax(0,40fr)
   minmax(250px,26fr);
   overflow:hidden}
+/* The header borrows the same three tracks from the same place, so it cannot drift
+   away from the panes below when either side is retuned. */
+:root{--pane-columns:minmax(240px,34fr) minmax(0,40fr) minmax(250px,26fr)}
 .inspector-panel{display:flex!important;min-width:0}.monitor-panel{overflow:auto;min-width:0}
 
 .monitor video,.monitor img{object-fit:contain}
@@ -37,8 +44,8 @@
 .validation-card{max-height:130px;overflow:auto;flex:0 0 auto}
 .media-panel{overflow:auto}.media-list{flex:1 0 125px;max-height:210px}.semantic-list{flex:0 0 100px}
 .timeline-scroll{min-width:0;overflow:auto;scrollbar-gutter:stable}.shot-clip strong{font-size:9px}.shot-clip span{font-size:9px}
-@media(max-width:1000px){.editor-grid{grid-template-columns:200px minmax(0,1fr) 225px}.inspector-panel{display:flex}.semantic-list{flex-basis:90px}.topbar{gap:8px}.brand>span:last-child{display:none}}
-@media(max-width:760px){body{overflow:auto;min-width:680px}.editor-grid{grid-template-columns:170px minmax(270px,1fr) 210px;min-height:410px}.topbar{min-width:680px}.timeline-panel{min-width:680px}.top-actions .button{padding:7px;font-size:10px}}
+@media(max-width:1000px){.editor-grid{grid-template-columns:200px minmax(0,1fr) 225px}:root{--pane-columns:200px minmax(0,1fr) 225px}.inspector-panel{display:flex}.semantic-list{flex-basis:90px}.topbar{gap:8px}.brand>span:last-child{display:none}}
+@media(max-width:760px){body{overflow:auto;min-width:680px}.editor-grid{grid-template-columns:170px minmax(270px,1fr) 210px;min-height:410px}:root{--pane-columns:170px minmax(270px,1fr) 210px}.topbar{min-width:680px}.timeline-panel{min-width:680px}.top-actions .button{padding:7px;font-size:10px}}
 /* Keep the monitor box itself 16:9, including on wide/short displays. */
 
 /* Full-frame soft backdrop; foreground is never stretched or cropped. */
@@ -392,19 +399,28 @@
    to, and the rounded bottom corners turned it into a separate floating bar.
    With no margin and no radius the media pool, the transport and the inspector
    meet at one edge, and the strip is exactly as wide as the picture above it. */
-.transport{height:44px;flex:0 0 44px;display:flex;align-items:center;gap:10px;
+/* Three columns with EQUAL side tracks, so the middle one is the bar's own centre
+   line whatever widths the timecode and the right-hand chips happen to be. With the
+   previous flex row the play cluster was centred in the space left over between two
+   unequal groups, which put the play button a few pixels off the centre of the
+   picture above it -- and the production name is now anchored to that same line. */
+.transport{height:44px;flex:0 0 44px;display:grid;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  align-items:center;gap:10px;
   padding:0 12px;margin:0;border-radius:0;background:var(--deck-chrome);
   box-sizing:border-box;min-width:0;overflow:hidden}
 .timecode{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;
-  letter-spacing:.4px;display:flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto}
+  letter-spacing:.4px;display:flex;align-items:center;gap:6px;white-space:nowrap;flex:0 0 auto;
+  justify-self:start}
 #timecode-current{color:var(--deck-tc)}
 .timecode-sep,#timecode-total{color:var(--deck-total)}
 
-.transport-buttons{display:flex;gap:3px;flex:1 1 auto;justify-content:center}
+.transport-buttons{display:flex;gap:3px;justify-content:center;justify-self:center}
 .transport-buttons button{border:0;background:transparent;color:var(--deck-ink);
   width:34px;height:30px;border-radius:4px;cursor:pointer;font-size:15px;line-height:1}
 .transport-buttons button:hover{background:#383838;color:#fff}
-.transport-right{display:flex;align-items:center;gap:7px;flex:0 0 auto;margin-left:auto}
+.transport-right{display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  justify-self:end;margin-left:auto}
 .transport-chip{border:1px solid #4c4c4c;background:transparent;color:#c8c8c8;
   border-radius:3px;padding:2px 7px;font-size:11px;font-weight:700;cursor:pointer;min-width:0}
 .transport-chip:hover{border-color:#7a7a7a;color:#fff}
@@ -694,38 +710,97 @@
 .transition-row button:hover{background:#1b170e;border-color:#c9a227}
 
 /* ---- header ------------------------------------------------------------
-   The top bar carries the production's name and two library doors. Everything
-   that used to narrate the workspace underneath the name has gone: the name is
-   the name, and the two boxes are the two things that change the look of the
-   film from one place. */
-/* The bar reads left to right: identity, the two look controls, the production
-   name, then the actions. The name takes the middle so it is the thing the eye
-   lands on between two groups of controls, and it is allowed to be long. */
+   The bar carries three things: identity and the two look controls, the
+   production's name, and the actions.
+
+   The name is not simply "next to" the controls. It sits on the same vertical line
+   as the play button in the transport below, which is the centre of the monitor
+   column. A title anywhere else reads as an afterthought drifting along the bar; on
+   that line it reads as the name of the picture it sits above.
+
+   An offset would not hold: the bar has to line up at every window width, and the
+   panes are proportional. So the bar is laid out on the SAME three-column template
+   as the editor grid (--pane-columns). The name's column IS the monitor's column by
+   construction, so retuning the panes moves the header with them in the same edit.
+   The controls stay over the media pool, where the drawing puts them, and the
+   actions keep the right-hand end.
+
+   The bar has no side padding and a 1px column gap, because the panes below have a
+   1px gap and none: any padding here would make these columns a few pixels wider
+   than the ones they are supposed to sit on, and the name would drift off the line
+   by exactly that amount. The two end groups carry their own inset instead. */
+.topbar{display:grid;grid-template-columns:var(--pane-columns);
+  padding:0;column-gap:1px;row-gap:0;align-items:center;overflow:visible}
+.head-left{display:flex;align-items:center;gap:10px;min-width:0;padding-left:14px}
 .head-tools{display:flex;gap:8px;flex:0 0 auto}
 .head-tool{padding:7px 16px;background:#161a21;border:1px solid #2b323d;border-radius:9px;
   cursor:pointer;color:#eef2f7;font:inherit;font-size:12.5px;font-weight:650;line-height:1.15;
-  transition:border-color .12s,background .12s}
+  transition:border-color .12s,background .12s;white-space:nowrap}
 .head-tool:hover{border-color:var(--accent);background:#1c2129}
-/* Laid out as one reading line rather than three equal columns.
-   The previous rule gave the brand, the two look controls and the action group an
-   equal third of the bar each. That stretched two small groups of buttons across the
-   whole window, so the controls sat at the far edge of their share with a wide empty
-   gap beside them, and the production name floated in the space between. On a wide
-   screen it read as blank boxes with a few words drifting between them.
-   Now the identity and the two controls sit together on the left, a rule marks the end
-   of that group, the name follows it immediately, and the actions stay on the right. */
-.topbar>.brand{flex:0 0 auto}
-.topbar>.head-tools{flex:0 0 auto;min-width:max-content}
-.topbar>.top-actions{flex:0 0 auto;margin-left:auto}
-.project-heading{flex:0 1 auto;display:flex;justify-content:flex-start;align-items:center;
-  min-width:0;margin-left:4px;padding:0 18px;border-left:1px solid #2b323d}
+/* Centred in its column, not stretched across it: `justify-content:center` puts the
+   name's own midpoint on the column's midpoint however long the name is.
+   `text-align:center` would centre the text inside a full-width box instead, which
+   only coincides with the line for a name that happens to fill the box. */
+.topbar>.project-heading{display:flex;flex-direction:row;justify-content:center;align-items:center;
+  min-width:0;padding:0 12px;justify-self:center}
 .project-heading strong{font-size:16px;font-weight:700;letter-spacing:.01em;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;max-width:44vw;color:#f4f7fb}
-/* Below the width where the whole reading line fits, the two library buttons are the
-   first thing to go: both are also reachable from the transport bar under the monitor
-   (Transitions, and the CC toggle), so nothing becomes unreachable, and the name and
-   the actions keep the room they need. */
-@media(max-width:1240px){.head-tools{display:none}}
+  overflow:hidden;text-overflow:ellipsis;text-align:center;color:#f4f7fb;
+  max-width:var(--name-room,100%)}
+/* The action group keeps the right-hand end. It is wider than the inspector column,
+   so on all but the widest screens it reaches back over the monitor column; the name
+   is kept clear of it at runtime (see fitHeaderName in editor.js), which measures the
+   actual gap rather than guessing it here. */
+.topbar>.top-actions{grid-column:2 / -1;display:flex;justify-content:flex-end;align-items:center;
+  gap:6px;min-width:0;padding-right:14px}
+/* These six buttons are navigation chrome in a 60px bar, so they sit tighter than a
+   dialog's buttons. The room they give back goes to the production's name, which is
+   the only thing on this line that can stretch. Measured: at 1600px the action row
+   was 632px wide and reached 104px past the centre line, which is what squeezed the
+   name. Each pixel taken off this row is a pixel the name can use, twice over,
+   because the name is centred and its room is limited by the nearer side. */
+.topbar>.top-actions .button{padding:8px 10px;font-size:11px}
+/* The action group gives way first, because it is the only part of the bar that can:
+   the two boxes are the bar's purpose, and the name shares its line with the picture
+   below. Every one of these buttons is a single-click route to something that has no
+   other route in the interface -- Projects, Performance and the documentary tools in
+   particular -- so none of them is ever hidden. They only get tighter.
+   These selectors repeat `.topbar>` on purpose: the base rule above is the most
+   specific one in the block, and a plainer selector here would lose to it. */
+@media(max-width:1700px){
+  .topbar>.top-actions{gap:5px}
+  .topbar>.top-actions .button{padding:8px 9px;font-size:10.5px;letter-spacing:-.01em}
+}
+@media(max-width:1500px){
+  .topbar>.top-actions .button{padding:7px 8px;font-size:10px}
+}
+@media(max-width:1240px){
+  .topbar>.top-actions .button{padding:7px 7px;font-size:9.5px}
+  .project-heading strong{font-size:15px}
+}
+/* Measured, not chosen by eye: at 1460px of window the centred name still gets about
+   210px, enough for a real title. Below that the six action buttons and the two boxes
+   leave too little either side of the centre line, and a centred name decays into an
+   ellipsis and an initial. So below 1460px the bar becomes one row again -- identity,
+   controls, name, actions -- where the name sits beside the boxes and keeps its full
+   width. The drawing's arrangement applies at every width that can carry it, which
+   includes a maximised window on any laptop or desktop screen. */
+@media(max-width:1460px){
+  .topbar{display:flex;gap:10px;padding:0 14px;column-gap:0}
+  .head-left{padding-left:0}
+  .topbar>.project-heading{flex:0 1 auto;justify-content:flex-start;padding:0}
+  .topbar>.top-actions{grid-column:auto;flex:0 0 auto;margin-left:auto;padding-right:0}
+  .project-heading strong{text-align:left;max-width:100%}
+}
+@media(max-width:1100px){
+  .topbar .brand>span:last-child{display:none}
+  .head-tool{padding:6px 12px;font-size:11.5px}
+  .topbar>.top-actions .button{padding:7px 7px;font-size:10px}
+}
+/* The last resort. Even in one row, a name and six buttons do not both fit; the name
+   goes, and the production is still named in the window title and its tab. */
+@media(max-width:820px){
+  .topbar>.project-heading{visibility:hidden}
+}
 
 /* ---- caption library --------------------------------------------------- */
 .caption-preview{display:flex;align-items:center;justify-content:center;height:52px;
