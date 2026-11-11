@@ -12,10 +12,42 @@ from PIL import Image
 # 1920x1080 clip, 0.76s vs 1.36s per 6s segment, SSIM 0.99998 vs 0.99964. A faster preset
 # spends its bits on fidelity instead of on motion-search heuristics. SEGMENT_VERSION is
 # part of the cache key, so changing these re-encodes rather than silently mixing them.
-SEGMENT_VERSION = 2
-PICTURE_ENCODER = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '16']
+SEGMENT_VERSION = 3
+DEFAULT_CRF = 16
+PICTURE_ENCODER = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', str(DEFAULT_CRF)]
+
+
+def picture_encoder(crf=DEFAULT_CRF):
+    """Encoder arguments for one quality level.
+
+    The preset stays `ultrafast` at every quality: it is what the measurements above
+    chose, and a slower preset buys almost nothing on a CRF target this high. Quality
+    is expressed only as CRF and audio bitrate, so 'High' means a finer quantiser, not
+    a different codec or a different programme.
+    """
+    return ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', str(int(crf))]
+
+QUALITY_PRESETS = {'high': (18, 256), 'standard': (20, 192), 'compact': (23, 160)}
+
+
+def quality_settings(story):
+    """(video CRF, audio kbps) for a storyboard's chosen quality preset.
+
+    Read defensively because a job may be built without a settings block at all -- the
+    strict-cut tests construct one that way -- and an export must never fail over a
+    missing preference; it falls back to Standard.
+    """
+    quality = ((story or {}).get('settings') or {}).get('quality', 'standard')
+    return QUALITY_PRESETS.get(quality, QUALITY_PRESETS['standard'])
+
 
 class RenderJob:
+    @property
+    def encoder(self):
+        # Resolved on access so a job built by hand (no __init__) still encodes, and so
+        # the arguments always agree with the CRF actually chosen for this job.
+        return picture_encoder(getattr(self, 'crf', DEFAULT_CRF))
+
     def __init__(self, root: Path, on_change=None, story_path=None, catalog_path=None, output_name=None):
         self.root = Path(root)
         self.story_path = Path(story_path) if story_path else self.root / 'storyboard.json'
@@ -28,6 +60,10 @@ class RenderJob:
         if output_name: self.output = self.render_dir / Path(output_name).name
         self.on_change = on_change
         self.lock = threading.Lock(); self.process = None; self.cancelled = False; self.captions_enabled = False
+        # Quality is a CRF and an audio bitrate, nothing else. The preset stays
+        # `ultrafast` at every level so a higher setting never changes how the
+        # timeline is assembled -- only how finely it is quantised.
+        self.crf, self.audio_kbps = quality_settings(self.story)
         self.script_caption_srt = None
         self._audio_cache = {}; self._duration_cache = {}
         # Encode with the machine, not a constant: two threads per core up to a sane cap,
@@ -217,11 +253,22 @@ class RenderJob:
                 cmd+=['-ss',f'{start:.6f}','-t',f'{read_duration:.6f}','-i',str(visual['path'])]
                 prefix=f'setpts=PTS-STARTPTS,fps={fps},setsar=1'
             w,h=self._dimensions(visual['path']);ratio=w/h
+            # How a differently-shaped source meets the canvas. None of these stretch:
+            # every one keeps the source's own aspect ratio and only chooses what
+            # happens in the space that is left over.
+            framing=shot.get('framing') or settings.get('framing') or 'auto'
             if abs(ratio-ow/oh)>.05:
-                graph=(f'[0:v]{prefix},split=2[backsrc][frontsrc];'
-                       f'[backsrc]scale={ow}:{oh}:force_original_aspect_ratio=increase,crop={ow}:{oh},gblur=sigma=24,eq=brightness=-0.10:saturation=0.75[back];'
-                       f'[frontsrc]scale={ow}:{oh}:force_original_aspect_ratio=decrease[front];'
-                       f'[back][front]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=end_frame={frames}[picture]')
+                if framing=='fit':
+                    graph=(f'[0:v]{prefix},scale={ow}:{oh}:force_original_aspect_ratio=decrease,'
+                           f'pad={ow}:{oh}:(ow-iw)/2:(oh-ih)/2:color=black,trim=end_frame={frames}[picture]')
+                elif framing=='crop':
+                    graph=(f'[0:v]{prefix},scale={ow}:{oh}:force_original_aspect_ratio=increase,'
+                           f'crop={ow}:{oh},trim=end_frame={frames}[picture]')
+                else:
+                    graph=(f'[0:v]{prefix},split=2[backsrc][frontsrc];'
+                           f'[backsrc]scale={ow}:{oh}:force_original_aspect_ratio=increase,crop={ow}:{oh},gblur=sigma=24,eq=brightness=-0.10:saturation=0.75[back];'
+                           f'[frontsrc]scale={ow}:{oh}:force_original_aspect_ratio=decrease[front];'
+                           f'[back][front]overlay=(W-w)/2:(H-h)/2:shortest=1,trim=end_frame={frames}[picture]')
             else: graph=f'[0:v]{prefix},scale={ow}:{oh},trim=end_frame={frames}[picture]'
         scale=shot.get('picture_scale',settings.get('picture_scale',100))
         if isinstance(scale,bool) or not isinstance(scale,int) or not 100<=scale<=200:raise RuntimeError('Invalid picture scale.')
@@ -232,7 +279,7 @@ class RenderJob:
             # Fixed, mild processing only: no generated detail, timing, crop or audio changes.
             graph=graph.replace('[picture]',',hqdn3d=1:1:0:0,unsharp=5:5:0.35:5:5:0[picture]')
         graph=graph.replace('[picture]',',setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[picture]')
-        cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads',str(self.threads)]+PICTURE_ENCODER+['-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
+        cmd+=['-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads',str(self.threads)]+self.encoder+['-pix_fmt','yuv420p','-video_track_timescale','90000','-progress','pipe:1','-nostats',str(segment)]
         return cmd
 
     def _xfade_command(self, segments, output):
@@ -256,7 +303,7 @@ class RenderJob:
             if i+1>=len(shots):raise RuntimeError('A transition cannot extend past the final scene.')
             out=self.work_dir/f'flow_{i+1:03d}_{i+2:03d}.mp4';frames=shots[i]['duration_frames']+shots[i+1]['duration_frames']
             graph=f'[0:v]settb=1/{fps},setpts=N[a];[1:v]settb=1/{fps},setpts=N[b];[a][b]xfade=transition=fade:duration={n/fps:.9f}:offset={shots[i]["duration_frames"]/fps:.9f},setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[picture]'
-            cmd=[self.ffmpeg,'-y','-v','warning','-i',str(segments[i]),'-i',str(segments[i+1]),'-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads','2']+PICTURE_ENCODER+['-pix_fmt','yuv420p','-video_track_timescale','90000',str(out)]
+            cmd=[self.ffmpeg,'-y','-v','warning','-i',str(segments[i]),'-i',str(segments[i+1]),'-filter_complex_threads','1','-filter_complex',graph,'-map','[picture]','-an','-frames:v',str(frames),'-threads','2']+self.encoder+['-pix_fmt','yuv420p','-video_track_timescale','90000',str(out)]
             self.update(stage='Blending short, handle-backed picture transitions',progress=82+i/len(shots)*3)
             self._run_process(cmd);cap=cv2.VideoCapture(str(out));actual=int(cap.get(7));cap.release()
             if actual!=frames:raise RuntimeError('A picture transition changed the timeline length; export stopped.')
@@ -421,8 +468,7 @@ class RenderJob:
             if self.captions_enabled:
                 cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path,
                        '-filter_complex', picture_filter,
-                       '-map', '[picture]', '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),
-                       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '16', '-pix_fmt', 'yuv420p', '-an',
+                       '-map', '[picture]', '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads)]+self.encoder+['-pix_fmt', 'yuv420p', '-an',
                        '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
             else:
                 cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-i', base_path,
@@ -431,14 +477,14 @@ class RenderJob:
         elif self.captions_enabled:
             cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-reinit_filter','0','-i', base_path, '-i', voiceover,
                    '-filter_complex', f'{picture_filter};{audio_filter}', '-map', '[picture]', '-map', '[narration]',
-                   '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads),'-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '16',
-                   '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+                   '-t', f'{duration:.6f}', '-frames:v', str(total_frames), '-threads',str(self.threads)]+self.encoder+[
+                   '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', f'{self.audio_kbps}k', '-ar', '48000', '-ac', '2',
                    '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
         else:
             cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'warning', '-i', base_path, '-i', voiceover,
                    '-filter_complex', audio_filter, '-map', '0:v:0', '-map', '[narration]',
                    '-t', f'{duration:.6f}', '-c:v', 'copy',
-                   '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+                   '-c:a', 'aac', '-b:a', f'{self.audio_kbps}k', '-ar', '48000', '-ac', '2',
                    '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
         end_mux = self._stage('mux')
         caption_stage = 'Burning selected captions' if self.captions_enabled else 'Exporting with captions off'

@@ -592,3 +592,23 @@
 /* Checks now sits at the foot of the shot inspector: a verdict, not media. */
 .inspector-panel .validation-card{margin:0;border:0;border-top:1px solid #252b34;
   border-radius:0;background:#12161c;padding:10px 12px;flex:0 0 auto}
+
+/* The three export resolutions. Cards rather than a dropdown because the pixel pair and
+   what it costs the footage has to be readable before the choice is made. Each one shows
+   the numbers for THIS project's shape, so a 9:16 film never reads 1920x1080. */
+.render-page .resolution-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:4px 0 10px}
+.render-page .resolution-choice{display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+ padding:11px 12px;border-radius:7px;border:1px solid #3a4759;background:#131a24;cursor:pointer;
+ transition:border-color .15s,background .15s;min-width:0}
+.render-page .resolution-choice:hover{border-color:#5a6b83;background:#182130}
+.render-page .resolution-choice strong{font-size:12px;font-weight:700;color:#eef3fa;letter-spacing:.2px}
+.render-page .resolution-choice span{font-size:10px;color:#93a3b8;line-height:1.35}
+.render-page .resolution-choice .small{font-size:9px;color:#7b8ca1;margin:2px 0 0}
+.render-page .resolution-choice.is-on{border-color:#ed4560;background:#2a1a22;box-shadow:inset 0 0 0 1px #ed4560}
+.render-page .resolution-choice.is-on strong{color:#fff}
+.render-page .resolution-choice.is-on .small{color:#d59aa6}
+.render-page .resolution-choice:focus-visible{outline:2px solid #8fb5e8;outline-offset:2px}
+@media(max-width:620px){.render-page .resolution-row{grid-template-columns:1fr}}
+
+/* Checks now live in the export page, under the controls, where the render decision is made. */
+.render-page .validation-card{margin:14px 0 0;background:#121821;border:1px solid #2b3542;border-radius:7px;padding:11px 13px;max-height:none;overflow:visible;flex:none}

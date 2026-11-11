@@ -10,6 +10,7 @@ from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 import cv2, imageio_ffmpeg
 BASE=Path(__file__).resolve().parent
 from engine import RenderJob
+import upscale
 # Verified playback schedules, keyed by project. Rebuilt only when the project or
 # plan revision changes.
 SCHEDULE_CACHE={}
@@ -48,10 +49,34 @@ TRANSITION_POLICIES=['clean_cuts_only','allow_dissolves']
 ASPECTS={'landscape':(16,9),'portrait':(9,16),'square':(1,1),'vertical_4_5':(4,5),'cinema':(239,100)}
 DEFAULT_SIZE={'landscape':'1080p','portrait':'1080p','square':'1080p','vertical_4_5':'1080p','cinema':'1080p'}
 SIZES={'480p':480,'540p':540,'720p':720,'1080p':1080,'1440p':1440,'4k':2160}
+# The export page offers three named resolutions. Each is a pair of pixel numbers people
+# recognise, but the project still stores the SHORT side so a vertical film stays vertical:
+# 2K QHD is 2560x1440 landscape and 1440x2560 portrait, never 1920 wide.
+EXPORT_RESOLUTIONS=[
+ {'key':'2k','label':'2K QHD','width':2560,'height':1440,'short':1440},
+ {'key':'4k','label':'4K UHD','width':3840,'height':2160,'short':2160},
+]
+# 1080p is the default and names the short side already, so it is listed first for display
+# but kept in SIZES where every existing caller expects it.
+EXPORT_CHOICES=[
+ {'key':'1080p','label':'1080p Full HD','width':1920,'height':1080,'short':1080},
+ {'key':'2k','label':'2K QHD','width':2560,'height':1440,'short':1440},
+ {'key':'4k','label':'4K UHD','width':3840,'height':2160,'short':2160},
+]
+EXPORT_CHOICE_KEYS={c['key'] for c in EXPORT_CHOICES}
+# `2k` is stored as the `1440p` short side: one number, no second code path.
+SIZE_ALIASES={'2k':'1440p'}
+# What the AI stage is allowed to do to a picture. Nothing here changes duration, frame
+# rate, aspect, audio or a single frame's timing; they are picture-quality settings only.
+PICTURE_UPSCALERS={'auto':'Decide from the source','realesrgan':'Real-ESRGAN (AI)','lanczos':'Lanczos (no AI)'}
+FRAMING_MODES={'auto':'Fit, crop or blur by source shape','fit':'Fit whole frame','crop':'Crop to fill','blur':'Blurred background'}
+QUALITY_PRESETS={'high':{'crf':18,'audio_kbps':256,'label':'High'},"standard":{'crf':20,'audio_kbps':192,'label':'Standard'},'compact':{'crf':23,'audio_kbps':160,'label':'Compact'}}
 def valid_size(size):
  """True for a named target or an explicit WxH in a sane range."""
  size=str(size or '').strip()
  if size in SIZES:return True
+ # The export page names 2K by what it is. It is stored as the 1440p short side.
+ if size in SIZE_ALIASES:return True
  match=re.fullmatch(r'\s*(\d{2,5})\s*[x×]\s*(\d{2,5})\s*',size)
  if not match:return False
  w,h=int(match[1]),int(match[2])
@@ -74,6 +99,76 @@ def output_size(fmt,size):
  if aw>=ah:w,h=int(round(short*aw/ah)),short       # landscape: short side is the height
  else:w,h=short,int(round(short*ah/aw))             # portrait: short side is the width
  return max(2,w//2*2),max(2,h//2*2)
+
+def export_choice(key):
+ """The export-page resolution entry for a key, or None for anything else.
+
+ Resolves in both directions: `2k` for a fresh request, and `1440p` for a project
+ that was saved through the alias, so the label survives a reload.
+ """
+ key=str(key or '')
+ key=SIZE_ALIASES.get(key,key)
+ found=next((c for c in EXPORT_CHOICES if c['key']==key),None)
+ if found:return found
+ # Reverse lookup: the stored short side identifies the choice it came from.
+ return next((c for c in EXPORT_CHOICES if c['key'] in SIZE_ALIASES and SIZE_ALIASES[c['key']]==key),None) or \
+        next((c for c in EXPORT_CHOICES if c['key']==key),None)
+
+def stored_size(key):
+ """Turn an export-page choice into the size value a project stores.
+
+ 2K QHD is stored as `1440p` because a size names the short side: 1440 is what
+ distinguishes it from 1080p and 2160. Keeping one spelling avoids two settings that
+ mean the same thing and can therefore disagree.
+ """
+ key=str(key or '').strip()
+ return SIZE_ALIASES.get(key,key)
+
+def upscale_factor(source_short,target_short):
+ """Smallest power-of-two factor that reaches the target, or 1 when none is needed.
+
+ Real-ESRGAN works at x2 and x4. Asking for the smallest factor that covers the gap
+ means a 720p source going to 1080p is not thrown through a x4 network and then
+ crushed back down: it takes x2 and the resize finishes the job.
+ """
+ if not source_short or source_short<=0:return 1
+ if target_short<=source_short:return 1
+ return 2 if target_short<=source_short*2 else 4
+
+def export_plan(p,fmt=None,size=None):
+ """Everything the export page needs to describe a render before it starts.
+
+ Returned to the browser so the number shown beside a resolution is the same number
+ the renderer acts on, computed from the actual source dimensions.
+ """
+ fmt=fmt or p.get('format','landscape')
+ requested=size if size is not None else p.get('size')
+ size=stored_size(requested)
+ # The choice is resolved from the REQUESTED value, not the stored alias: after `2k`
+ # is stored as `1440p`, looking up `1440p` would lose the 2K label it came from.
+ choice=export_choice(requested)
+ width,height=output_size(fmt,size)
+ target_short=min(width,height)
+ sources=[]
+ for a in p.get('assets') or []:
+  if a.get('derived_from'):continue
+  dims=asset_dimensions(a)
+  if not dims:continue
+  sw,sh=dims;source_short=min(sw,sh)
+  sources.append({'id':a['id'],'name':a.get('original_name') or a.get('name'),'kind':a.get('kind'),
+                  'width':sw,'height':sh,'factor':upscale_factor(source_short,target_short)})
+ return {'size':size,'choice':choice['key'] if choice else None,'label':choice['label'] if choice else size,
+         'width':width,'height':height,'target_short':target_short,'sources':sources,
+         'max_factor':max([s['factor'] for s in sources],default=1),
+         'choices':EXPORT_CHOICES}
+
+def asset_dimensions(a):
+ """Width and height of an uploaded asset, read once and cached on the asset itself."""
+ dims=a.get('dimensions')
+ if isinstance(dims,list) and len(dims)==2 and all(isinstance(x,int) and x>0 for x in dims):
+  return tuple(dims)
+ return None
+
 
 # clips_only keeps native moving footage everywhere; mixed allows verified stills as well.
 POLICIES={'clips_only':'Moving footage only','mixed':'Moving footage and photographs'}
@@ -150,7 +245,11 @@ def probe(path):
  try:out=subprocess.run([FFMPEG,'-nostdin','-hide_banner','-probesize','2097152','-analyzeduration','3000000','-threads','2','-i',str(path)],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15).stderr
  except subprocess.TimeoutExpired:raise ValueError('Metadata check timed out after 15 seconds. No full-video analysis was attempted. Check that the file is fully downloaded and playable locally.')
  m=re.search(r'Duration: (\d+):(\d+):(\d+\.\d+)',out)
- return {'duration':int(m[1])*3600+int(m[2])*60+float(m[3]) if m else 0,'has_audio':'Audio:' in out,'has_video':'Video:' in out}
+ # Width and height are recorded here because ffmpeg has already decoded the stream
+ # header; opening the file again in OpenCV just to learn its size is wasted work.
+ v=re.search(r'Video:.*?(\d{2,5})x(\d{2,5})',out)
+ return {'duration':int(m[1])*3600+int(m[2])*60+float(m[3]) if m else 0,'has_audio':'Audio:' in out,'has_video':'Video:' in out,
+         'width':int(v[1]) if v else 0,'height':int(v[2]) if v else 0}
 
 def intent(text,people,profile):
  """A coarse guess at a beat's tone, from wording alone.
@@ -414,6 +513,9 @@ def public(p):
   from plain_script import is_plain_script
   if p.get('edit_mode')=='documentary' or is_plain_script(p['production_script'].get('text','')) or is_cue_script(p['production_script'].get('text','')) or re.search(r'^###\s+Srt\d+-[A-Za-z]+\s*$',p['production_script'].get('text',''),re.M|re.I):d['script_reading']=script_reading(p)
  d['validation']=check(p);d['final_validation']=check(p,True)
+ # What each resolution would actually mean for this project's sources. Computed from
+ # the recorded dimensions, so the export page never has to estimate a factor.
+ d['export_plan']=export_plan(p)
  saved=folder(p['id'])/'render_status.json'
  d['render']=JOBS[p['id']].snapshot() if p['id'] in JOBS else json.loads(saved.read_text()) if saved.exists() else {'status':'idle','progress':0,'stage':'No export yet'}
  if p['id'] not in JOBS and d['render']['status'] in ['running','queued']:d['render'].update(status='interrupted',stage='Previous export interrupted; start a new export',progress=0)
@@ -475,12 +577,22 @@ def public(p):
  width,height=output_size(p.get('format','landscape'),p.get('size'))
  d['output']={'format':p.get('format','landscape'),'size':p.get('size'),'width':width,'height':height,
               'label':str(width)+'×'+str(height),'aspect':ASPECTS.get(p.get('format','landscape'))}
+ d['picture_tools']={'upscaler':p.get('upscaler','auto'),'framing':p.get('framing','auto'),'quality':p.get('quality','standard'),
+                     'quality_presets':QUALITY_PRESETS,'framing_modes':FRAMING_MODES,'upscalers':PICTURE_UPSCALERS}
  return d
 
 @app.get('/')
 def home():
  options=''.join('<option value="'+name+'"'+( ' selected' if name=='documentary' else '')+'>'+str(meta.get('name') or name)+'</option>' for name,meta in PROFILES.items())
- return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options)
+ return render_template('index.html',asset_revision=max(p.stat().st_mtime_ns for p in (BASE/'static').glob('*') if p.is_file()),profile_options=options,
+                        ai_upscale=upscale.describe())
+
+@app.get('/api/picture-tools')
+def picture_tools():
+ # Reported to the browser so the export page can say plainly whether AI upscaling is
+ # installed on this machine instead of offering a control that would quietly do nothing.
+ return jsonify({'upscale':upscale.describe(),'factors':list(upscale.SUPPORTED_FACTORS),
+                 'resolutions':EXPORT_CHOICES,'framing_modes':FRAMING_MODES,'quality_presets':QUALITY_PRESETS})
 @app.after_request
 def cache(response):
  # Two things are immutable once written and too large to re-fetch on every seek:
@@ -520,6 +632,7 @@ def create():
  if profile not in PROFILES or fmt not in ASPECTS:raise BadRequest('Choose a supported profile and format.')
  requested_size=d.get('size') or DEFAULT_SIZE.get(fmt)
  if not isinstance(requested_size,str) or not valid_size(requested_size):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
+ requested_size=stored_size(requested_size)
  pid=uid();root=PROJECTS/pid;root.mkdir()
  for name in ['inputs','inputs/semantic','sources','assets','renders','reviews']: (root/name).mkdir(parents=True,exist_ok=True)
  requested=d.get('picture_policy')
@@ -608,9 +721,23 @@ def update_project(pid):
    if scale!=p.get('picture_scale',100):p['picture_scale']=scale;p['picture_rebuilt']=False
   if 'size' in d:
    if not isinstance(d['size'],str) or not valid_size(d['size']):raise BadRequest('Choose an export size: '+', '.join(SIZES)+', or a pixel size such as 1920x1080.')
-   if str(d['size'])!=str(p.get('size')):
-    p['size']=str(d['size'])
+   # The export page sends `2k`; store the one short-side number that means it.
+   stored=stored_size(d['size'])
+   if stored!=str(p.get('size')):
+    p['size']=stored
     p['picture_rebuilt']=False
+  # Export picture settings. These describe how a frame is made larger and how a
+  # differently-shaped source sits in the canvas; none of them move a cut, retime a
+  # frame or touch the audio.
+  if 'framing' in d:
+   if d['framing'] not in FRAMING_MODES:raise BadRequest('Choose a framing mode: '+', '.join(FRAMING_MODES))
+   p['framing']=d['framing']
+  if 'upscaler' in d:
+   if d['upscaler'] not in PICTURE_UPSCALERS:raise BadRequest('Choose a picture upscaler: '+', '.join(PICTURE_UPSCALERS))
+   p['upscaler']=d['upscaler']
+  if 'quality' in d:
+   if d['quality'] not in QUALITY_PRESETS:raise BadRequest('Choose an export quality: '+', '.join(QUALITY_PRESETS))
+   p['quality']=d['quality']
   # On-screen script captions are opt-in. Turning them off only changes what is
   # burned into the picture; the script, the SRT and every cut stay as reviewed.
   if 'burn_captions' in d:
@@ -795,16 +922,20 @@ def perform_upload(pid,key=''):
     if photo:
      with Image.open(dest) as im:im.verify()
      duration=0
+     with Image.open(dest) as im:source_dims=[int(im.width),int(im.height)]
     else:
      info=probe(dest)
      if not info['has_video'] or not info['duration']:raise ValueError('No decodable video')
      duration=info['duration']
+     source_dims=[int(info['width']),int(info['height'])] if info.get('width') and info.get('height') else None
     check(pid,key)
    except Exception as e:
     dest.unlink(missing_ok=True)
     if isinstance(e,BadRequest):raise
     raise BadRequest('Media check failed: '+str(e)[:350])
-   asset={'id':aid,'name':name,'original_name':name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':'','revision':uid()}
+   # Source dimensions are recorded once, at upload, so the export page can say what
+   # upscale factor a resolution actually needs instead of guessing from a filename.
+   asset={'id':aid,'name':name,'original_name':name,'path':dest.relative_to(root).as_posix(),'kind':'image' if photo else 'video','duration':duration,'dimensions':source_dims,'source':'','people':[],'category':'general','verified':False,'rights':'unreviewed','notes':'','revision':uid()}
    if matches:
     duplicate_ids={a['id'] for a in matches};derived_ids={a['id'] for a in related};affected=0;unassigned=0
     # Derived images came from the old bytes: preserve them, but never keep them on the timeline as if they came from the replacement.
@@ -1478,21 +1609,35 @@ def manifest(p, strict=None, enhance_picture=False):
   signatures.add(signature);extra=s.get('transition_handle_frames',4) if s['transition']=='dissolve' else 0
   shot={'shot':i+1,'kind':'narration','slot':None,'subject':s['focus'],'srt_blocks':s['srt_blocks'],'frame_in':s['frame_in'],'frame_out':s['frame_out'],'duration_frames':frames,'duration_ms':frames/30*1000,'timeline_in_ms':s['frame_in']/30*1000,'timeline_out_ms':s['frame_out']/30*1000,'voiceover_in_ms':s['frame_in']/30*1000,'voiceover_out_ms':s['frame_out']/30*1000,'narration_text':s['narration'],'source_id':reserve_id(a) or a.get('editorial_source_id') or ((a.get('document_plan') or {}).get('source_ids') or [a['id']])[0],'original_filename':a.get('original_name',a['name']),'source_role':'reserve' if reserve_id(a) else 'primary','source_file':Path(a['path']).name,'media_type':a['kind'],'video_in_ms':s['in_s']*1000,'video_out_ms':math.ceil((s['in_s']+(frames+extra)/30)*1000)+1,'motion_plan':m,'transition_handle_frames':extra,'image_approved':a['verified'],'match_note':s['notes'],'loop_required':False,'hold_last':False}
   if a['kind']=='image':
-   out=root/'.cache/prepared_images'/f'{a["id"]}.png';out.parent.mkdir(parents=True,exist_ok=True)
-   im=ImageOps.exif_transpose(Image.open(root/a['path'])).convert('RGB')
-   if p.get('image_layout')=='full_bleed':
-    ImageOps.fit(im,(w,h)).save(out)
-   else:
-    bg=ImageEnhance.Brightness(ImageOps.fit(im,(w,h)).filter(ImageFilter.GaussianBlur(28))).enhance(.58);fg=ImageOps.contain(im,(int(w*.88),int(h*.86)));bg.paste(fg,((w-fg.width)//2,(h-fg.height)//2));bg.save(out)
+   # A photograph is prepared once per (source revision, canvas, framing, mode) and then
+   # reused. Without the revision in the key, replacing a photo would silently keep
+   # serving the old enhanced file.
+   import upscale
+   framing=(shot.get('framing') or p.get('framing') or 'auto')
+   if framing=='auto':framing='full_bleed' if p.get('image_layout')=='full_bleed' else 'blur'
+   mode='full_bleed' if framing=='crop' else ('fit' if framing=='fit' else 'blur')
+   key=f'{a["id"]}-{a.get("revision","0")}-{w}x{h}-{mode}'
+   out=root/'.cache/prepared_images'/f'{key}.png';out.parent.mkdir(parents=True,exist_ok=True)
+   report=None
+   if not out.is_file():
+    with Image.open(root/a['path']) as opened:
+     im=ImageOps.exif_transpose(opened).convert('RGB')
+    prepared,report=upscale.prepare(im,(w,h),prefer_ai=(p.get('upscaler','auto')!='lanczos'),
+                                    framing=mode,cache_dir=root/'.cache'/'upscaled',cache_key=f'{a["id"]}-{a.get("revision","0")}')
+    prepared.save(out)
+   shot['picture_upscale']=report or {'framing':mode}
    shot['image']=out.relative_to(root).as_posix()
   if strict and strict.get('required') and a['kind']=='video':
    timing=strict['shots'][i]
    shot['strict_source_frames']=[timing['source_start_frame'],timing['source_end_frame']]
    shot['video_in_ms']=timing['placed_in_ms'];shot['video_out_ms']=timing['placed_out_ms']
   shot['picture_scale']=s.get('picture_scale',p.get('picture_scale',100))
+  # Framing is per shot so a single differently-shaped insert can be fitted without
+  # changing how the rest of the film is framed.
+  shot['framing']=s.get('framing') or p.get('framing','auto')
   if a['kind']=='video':shot['motion_plan'].update(mode='native_video',move='Preserve source camera and human action')
   shots.append(shot)
- result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
+ result={'project':p['title'],'version':1,'editorial_approved':all(s['approved'] for s in p['scenes']),'captions_burned_in':False,'settings':{'width':w,'height':h,'fps':30,'caption_srt':'inputs/captions.srt','transition_frames':0,'picture_scale':p.get('picture_scale',100),'enhance_picture':enhance_picture,'framing':p.get('framing','auto'),'quality':p.get('quality','standard')},'shots':shots,'reserve_sources':[{'source_id':reserve_id(a),'original_filename':a.get('original_name',a['name']),'source_file':Path(a['path']).name,'status':'explicitly_selected' if asset_used(p,a) else 'held_in_reserve'} for a in p['assets'] if reserve_id(a) and not a.get('derived_from')]}
  write(root/'storyboard.json',result);return result
 @app.post('/api/projects/<pid>/continuous-preview')
 def prepare_continuous_preview(pid):
