@@ -74,6 +74,30 @@ crash comes back marked interrupted with a retry, rather than restarting by itse
 folder elsewhere. Set another location in Processing and storage if the system drive is
 not an SSD; the folder is write-tested before it is accepted.
 
+### What was measured
+
+The acceptance tests below were run on the development machine — two cores, no graphics
+card, so the figures are a floor rather than a target. Every number is a measurement, not
+an estimate.
+
+| Check | Result |
+|---|---|
+| Four videos uploaded, four editing copies made at once | p95 response **53 ms**, worst 99 ms, **0 failed requests** (idle 2 ms) |
+| Memory during that work | **18–19%** of 16 GB, two encoders at 100% CPU |
+| Re-requesting four existing editing copies | **149 ms**, no bytes added to the cache: nothing rebuilt |
+| 4K 6-second source → editing copy | 43.07 MB → 0.51 MB (**1.2%**), 1.9 s, duration/fps/audio preserved |
+| A 180-second 1.3 GB 4K source, paused mid-encode | encoder stopped (**T**), **0 CPU ticks** over 3 s, progress held; **+201 ticks** after resume |
+| Same source, cancelled | encoder gone 2 s later, job marked cancelled, retry accepted and running again |
+| Two jobs mid-encode, server killed | both came back **interrupted**, not restarted, retry accepted |
+| Export path with ten editing copies in the cache | all four sources resolve the **full-resolution original** |
+| Whole test suite | **595 tests, OK** (11 skipped without optional pieces) |
+
+**What is not proven here.** The development machine has no graphics card, so `h264_amf`,
+Quick Sync and `nvidia-smi` readings were never exercised — the fallback to software
+encoding was, and it is what runs when a card or driver is missing. Hardware acceleration
+therefore reports itself only when a real one-frame encode succeeds on the actual machine.
+The Windows-specific graphics query is written but untested on Windows.
+
 ## Requirements
 
 - Python 3.10+
