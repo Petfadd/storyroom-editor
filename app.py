@@ -2814,15 +2814,17 @@ def asset_file(pid,aid):
   # reach a delivered frame. Only an existing proxy is used: this request must not
   # trigger an encode, or the monitor would stall waiting for one.
   try:
-   if SETTINGS.load().get('proxies_enabled'):
+   # Read the settings once, not twice. This runs on every video request, including
+   # every scrub, and each load re-parses settings.json from disk.
+   settings=SETTINGS.load()
+   if settings.get('proxies_enabled'):
     store,_detail=SETTINGS.cache_store()
     prepared=proxy_module.metadata(store,source)
     # Only a proxy made at the CURRENTLY selected quality is used. A proxy built at a
     # different quality is not wrong, just not what was asked for, and serving it would
     # make the quality setting appear to do nothing.
-    wanted=SETTINGS.load().get('proxy_quality') or proxy_module.DEFAULT_QUALITY
-    if (prepared and Path(prepared.get('path','')).is_file()
-            and prepared.get('quality')==wanted):
+    wanted=settings.get('proxy_quality') or proxy_module.DEFAULT_QUALITY
+    if prepared and prepared.get('quality')==wanted:
      return send_file(prepared['path'],conditional=True)
   except (OSError,ValueError):pass
   # A player cannot seek a file whose index is at the end without fetching all of

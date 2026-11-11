@@ -19,8 +19,17 @@ LOCAL_LIBS = Path(__file__).resolve().parent / '.cache' / 'pylibs'
 
 
 def _local_import_path():
+    """Make the private library copy importable.
+
+    APPENDED, not prepended. The folder contains its own numpy, av and packaging, and
+    putting it at the front of sys.path let those shadow the application's own
+    dependencies for the whole process: after any speech check, `import numpy` resolved
+    to the private copy instead of the one the rest of the editor was tested against.
+    At the end of sys.path the private copy still satisfies `from faster_whisper import
+    ...` while anything already installed keeps winning.
+    """
     if LOCAL_LIBS.is_dir() and str(LOCAL_LIBS) not in sys.path:
-        sys.path.insert(0, str(LOCAL_LIBS))
+        sys.path.append(str(LOCAL_LIBS))
 
 
 def _import_whisper():

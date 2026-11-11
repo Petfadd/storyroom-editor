@@ -24,6 +24,48 @@ A local Flask application that builds an SRT-driven video storyboard from upload
 - Source audio is muted; added captions are off.
 - Document/validator checks are separate from semantic identity or rights verification.
 
+## Performance and processing
+
+On a machine with an editor open, the expensive work is the problem: a 4K source is
+sixteen times the pixels of 1080p, and several operations that each want every core will
+between them make the interface stop responding.
+
+**Editing copies (proxies).** Uploaded video above 900 pixels high is copied once to 540p
+or 720p and that copy is what playback and scrubbing use. Measured on a 4K source:
+43.07 MB becomes 0.51 MB, 1.2% of the original, with duration, frame rate and audio
+preserved. Export never sees a proxy -- the renderer opens `sources/` directly and never
+reads over HTTP, so a delivered frame cannot come from one. The quality is chosen in
+Processing and storage, and changing it rebuilds the existing copies.
+
+**One queue.** Every heavy operation -- proxy making, media analysis, reframing, AI
+enhancement -- is submitted to a single dispatcher instead of starting its own threads.
+The order is: playback and editing, essential media loading, background analysis, AI
+enhancement, thumbnails. One heavy and one AI job run at a time, because two of them on
+16 GB is slower than one after the other. Pause, resume, cancel, retry and the queue
+itself are in Processing and storage; a cancelled job also terminates its ffmpeg child,
+so the machine is not still working on something the queue has forgotten.
+
+**Hardware.** Encoders are tested rather than assumed: a build can list `h264_nvenc` on a
+machine with no NVIDIA driver, so each one is checked with a real one-frame encode.
+Hardware encoding is used for proxies only. Delivery stays on the software encoder,
+because at equal bitrate the hardware path is visibly worse.
+
+**Caching.** Everything expensive is cached under a key built from the source file's size,
+its modification time and the settings that shaped the result, so an entry cannot go
+stale and two scenes asking for the same frame share one file. Processing and storage
+shows what each kind holds, frees unused entries, or clears the cache. Cleanup only ever
+touches the cache folder; original footage and project files are outside it and a test
+plants a file beside it to prove it survives.
+
+**Recovery.** The project file was already written atomically, so a crash during a save
+could not corrupt it. Every save now also keeps a copy in `.history` inside the project,
+so a bad bulk edit can be undone. Jobs record their state, and a job interrupted by a
+crash comes back marked interrupted with a retry, rather than restarting by itself.
+
+**Where caches live.** Default is the local application data folder on Windows or the home
+folder elsewhere. Set another location in Processing and storage if the system drive is
+not an SSD; the folder is write-tested before it is accepted.
+
 ## Requirements
 
 - Python 3.10+
@@ -425,6 +467,8 @@ Setup on the computer running Storyroom:
    `pip install -r requirements-local-ai.txt`. FFmpeg is supplied by imageio-ffmpeg.
 2. Install the pinned CPU Whisper-small model with
    `python tools/install_local_whisper.py` (about 484 MB, one-time GitHub download).
+   This can also be done from the app: Processing and storage reports which of the two
+   halves -- the package or the model -- is missing, and installs it on request.
    The installer verifies SHA-256 hashes and stores it under `.cache/storyroom-models`;
    Storyroom detects that location automatically. Alternatively download a CTranslate2
    Faster-Whisper model yourself and set `STORYROOM_WHISPER_MODEL_DIR` to its directory

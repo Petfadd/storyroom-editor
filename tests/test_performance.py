@@ -6,6 +6,7 @@ comment it was measured on a real file rather than guessed.
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -438,6 +439,268 @@ class HistoryTest(unittest.TestCase):
         project_history.clear(self.root)
         self.assertTrue(original.exists(), 'clearing history deleted the project')
         self.assertEqual(project_history.versions(self.root), [])
+
+
+class AuditRegressionTest(unittest.TestCase):
+    """Fixes found during the pre-merge audit. Each one was a real defect."""
+
+    def test_a_truncated_proxy_is_not_served(self):
+        # A crash mid-write left a 9-byte "proxy" that metadata() reported as usable,
+        # so the player was handed a file it could not decode.
+        folder = Path(tempfile.mkdtemp())
+        try:
+            import imageio_ffmpeg
+            store = cache.Store(folder / 'cache')
+            source = folder / 'video.mp4'
+            source.write_bytes(b'x' * 5000)
+            broken = store.path('proxies', 'broken', '.mp4')
+            broken.parent.mkdir(parents=True, exist_ok=True)
+            broken.write_bytes(b'tiny')
+            store.write_json('proxies', 'broken',
+                             {'path': str(broken), 'quality': '540p', 'height': 540})
+            real_key = cache.entry_key(source, 'proxy')
+            store.write_json('proxies', real_key,
+                             {'path': str(broken), 'quality': '540p', 'height': 540})
+            self.assertIsNone(proxy.metadata(store, source),
+                              'a truncated proxy was offered to the player')
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_concurrent_saves_do_not_lose_settings(self):
+        # Save is read-modify-write. Measured one lost update in sixty concurrent
+        # saves before the lock was added.
+        import settings_store
+        for _ in range(25):
+            folder = Path(tempfile.mkdtemp())
+            try:
+                store = settings_store.Settings(folder / 'settings.json')
+                barrier = threading.Barrier(2)
+
+                def first():
+                    barrier.wait()
+                    store.save({'proxy_quality': '720p'})
+
+                def second():
+                    barrier.wait()
+                    store.save({'keep_cache_days': 30})
+
+                threads = [threading.Thread(target=first), threading.Thread(target=second)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+                final = store.load()
+                self.assertEqual(final['proxy_quality'], '720p')
+                self.assertEqual(final['keep_cache_days'], 30)
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+
+    def test_the_private_library_folder_does_not_shadow_app_dependencies(self):
+        # Prepending .cache/pylibs made its own numpy win for the whole process after
+        # any speech check, so the editor ran on versions it was not tested against.
+        import bite_speech
+        import numpy
+        before = numpy.__file__
+        bite_speech.available()
+        self.assertEqual(numpy.__file__, before,
+                         'a speech check changed which numpy the app is using')
+        self.assertNotIn('pylibs', numpy.__file__)
+        # The folder may be on sys.path, but only at the end, so nothing can shadow
+        # a dependency that is already installed.
+        for entry in sys.path:
+            if Path(entry).name == 'pylibs':
+                self.assertNotEqual(sys.path[0], entry,
+                                    'the private library folder is still being prepended')
+
+    def test_cancelling_a_job_kills_its_child_process(self):
+        queue = jobqueue.Queue()
+        started = threading.Event()
+
+        def work(context):
+            started.set()
+            context.run_process([sys.executable, '-c',
+                                 'import time; time.sleep(30)'])
+            return 'should not finish'
+
+        job = queue.submit(jobqueue.Job('kill', 'long child', work,
+                                        priority=jobqueue.PRIORITY_ANALYSIS))
+        started.wait(10)
+        time.sleep(0.5)
+        queue.cancel(job.id)
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if queue.snapshot()['metrics']['started'] and not queue.snapshot()['running']:
+                break
+            time.sleep(0.1)
+        queue.stop()
+        statuses = [j['status'] for j in queue.snapshot()['finished']]
+        self.assertIn('cancelled', statuses)
+
+
+class FreshInstallTest(unittest.TestCase):
+    """The app must work on a machine that has none of the local cache state."""
+
+    def test_settings_defaults_are_usable_without_a_settings_file(self):
+        import settings_store
+        folder = Path(tempfile.mkdtemp())
+        try:
+            store = settings_store.Settings(folder / 'missing.json')
+            loaded = store.load()
+            self.assertEqual(loaded['proxy_quality'], '540p')
+            self.assertTrue(loaded['proxies_enabled'])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_a_cache_root_that_cannot_be_written_is_refused(self):
+        import settings_store
+        folder = Path(tempfile.mkdtemp())
+        try:
+            store = settings_store.Settings(folder / 'settings.json')
+            with self.assertRaises(ValueError):
+                store.save({'cache_root': '/proc/definitely-not-writable/x'})
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+class RunningLongJobsTest(unittest.TestCase):
+    """A cancelled job must return promptly and leave nothing running.
+
+    Both halves matter and both were once wrong. The process was killed, but a
+    grandchild kept the output pipes open, so the caller blocked until that grandchild
+    finished -- twenty seconds for an upscaled picture, an hour for a long encode.
+    """
+
+    def setUp(self):
+        import jobqueue
+        self.jobqueue = jobqueue
+
+    def _scratch_script(self, body: str) -> str:
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, True)
+        script = folder / 'work.sh'
+        script.write_text('#!/bin/sh\n' + body + '\n')
+        script.chmod(0o755)
+        return str(script)
+
+    def test_a_cancelled_job_returns_promptly_even_with_a_grandchild(self):
+        import threading, time
+        # The script spawns a long-lived grandchild, exactly as a launcher does.
+        script = self._scratch_script('sleep 30 &\nwait\n')
+        context = self.jobqueue.JobContext('cancel-test')
+        outcome = {}
+
+        def run():
+            try:
+                context.run_process([script], timeout=60)
+                outcome['result'] = 'finished'
+            except self.jobqueue.JobCancelled:
+                outcome['result'] = 'cancelled'
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        time.sleep(0.5)
+        started = time.monotonic()
+        context.cancel()
+        thread.join(10)
+        elapsed = time.monotonic() - started
+
+        self.assertFalse(thread.is_alive(), 'cancel did not unblock the caller')
+        self.assertEqual(outcome.get('result'), 'cancelled')
+        self.assertLess(elapsed, 3.0,
+                        f'cancel took {elapsed:.1f}s, so the caller sat waiting for a '
+                        'child it no longer cared about')
+
+    def test_output_is_still_captured_exactly_as_before(self):
+        script = self._scratch_script('echo out-line; echo err-line >&2; exit 0')
+        result = self.jobqueue.JobContext('capture-test').run_process([script], timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), 'out-line')
+        self.assertEqual(result.stderr.strip(), 'err-line')
+
+    def test_a_non_zero_exit_is_reported_rather_than_raised(self):
+        script = self._scratch_script('echo nope; exit 3')
+        result = self.jobqueue.JobContext('exit-test').run_process([script], timeout=30)
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stdout.strip(), 'nope')
+
+    def test_a_timeout_is_still_raised(self):
+        import subprocess
+        script = self._scratch_script('sleep 20')
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.jobqueue.JobContext('timeout-test').run_process([script], timeout=1)
+
+    def test_a_large_amount_of_output_does_not_deadlock(self):
+        script = self._scratch_script('seq 1 40000')
+        result = self.jobqueue.JobContext('pipe-test').run_process([script], timeout=60)
+        self.assertEqual(len(result.stdout.splitlines()), 40000)
+
+    def test_cancellation_is_not_mistaken_for_a_failure_worth_retrying(self):
+        """The picture upscaler retries on the CPU when the GPU path fails. A cancel
+        must not look like such a failure, or cancelling would start the work again."""
+        import upscale
+        self.assertTrue(issubclass(self.jobqueue.JobCancelled, Exception))
+        source = Path(upscale.__file__).read_text()
+        self.assertIn('except JobCancelled:\n                raise',
+                      source.replace('\r\n', '\n'),
+                      'the CPU-fallback handler would swallow a cancellation')
+
+    def test_pausing_a_running_job_stops_its_encoder(self):
+        """Pausing used to only change the label. The encoding carried on at full
+        speed while the queue said the job was waiting, which is the opposite of what
+        pause is for."""
+        import threading, time
+        script = self._scratch_script('i=0\nwhile true; do i=$((i+1)); done')
+        context = self.jobqueue.JobContext('pause-test')
+        finished = {}
+
+        def run():
+            try:
+                context.run_process([script], timeout=30)
+            except Exception:
+                finished['done'] = True
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        time.sleep(0.4)
+        self.assertFalse(finished, 'the script finished too quickly to test')
+
+        context.pause()
+        time.sleep(0.5)
+        with context._lock:
+            child = context._processes[0] if context._processes else None
+        self.assertIsNotNone(child, 'the child disappeared, so pause proved nothing')
+        before = child.pid
+        self.assertEqual(_process_state(before), 'T',
+                         'the encoder kept running while the job was paused')
+
+        context.resume()
+        time.sleep(0.5)
+        self.assertIn(_process_state(before), ('S', 'R'),
+                      'the encoder did not restart after a resume')
+        context.cancel()
+        thread.join(5)
+
+    def test_a_paused_job_is_reported_as_paused_and_resumable(self):
+        import jobqueue
+        queue = jobqueue.Queue()
+        queue._started = True          # do not start the real dispatcher in a test
+        job = jobqueue.Job('pause-labels', 'Testing pause', lambda ctx: None)
+        queue._jobs[job.id] = job
+        queue._running[job.id] = job
+        job.status = 'running'
+        self.assertTrue(queue.pause(job.id))
+        self.assertEqual(job.status, 'paused')
+        self.assertTrue(queue.resume(job.id))
+        self.assertEqual(job.status, 'running')
+
+
+def _process_state(pid: str) -> str:
+    """The single-letter Linux process state, or '' where that is not available."""
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().split(')')[1].split()[0]
+    except (OSError, IndexError):
+        return ''
+
 
 
 if __name__ == '__main__':

@@ -125,10 +125,18 @@ def build(ffmpeg: str, source: Path, destination: Path, quality: str = DEFAULT_Q
     if context is not None:
         context.set(5, 'Preparing an editing copy')
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        # Through the job context when there is one, so cancelling actually stops the
+        # encode instead of leaving it running to completion out of sight.
+        if context is not None and hasattr(context, 'run_process'):
+            result = context.run_process(cmd, timeout=3600)
+        else:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     except subprocess.SubprocessError as error:
         temp.unlink(missing_ok=True)
         raise RuntimeError(f'The editing copy could not be made: {error}') from error
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
     if result.returncode != 0 or not temp.exists() or temp.stat().st_size < 1024:
         temp.unlink(missing_ok=True)
         detail = (result.stderr or '').strip().splitlines()
@@ -144,13 +152,30 @@ def build(ffmpeg: str, source: Path, destination: Path, quality: str = DEFAULT_Q
             'audio': made.get('audio', False)}
 
 
+# A proxy smaller than this cannot be a real video. Anything shorter is a half-written
+# file or a failed run, and serving it would leave the monitor black with no error shown.
+MIN_PROXY_BYTES = 4096
+
+
 def metadata(store: cache.Store, source: Path) -> dict | None:
-    """The recorded description of an existing proxy, if it is still current."""
+    """The recorded description of a usable existing proxy, if there is one.
+
+    Existence alone is not enough. A truncated proxy -- a crash mid-write, an
+    interrupted copy, a disk that filled -- is present and would be served, so the size
+    is checked too and a bad file is reported as absent. The caller then rebuilds it
+    rather than handing the player something it cannot decode.
+    """
     name = cache.entry_key(source, 'proxy')
     if not store.has('proxies', name, '.json'):
         return None
     data = store.read_json('proxies', name)
-    if not data or not Path(data.get('path') or '').is_file():
+    if not data:
+        return None
+    path = Path(data.get('path') or '')
+    try:
+        if not path.is_file() or path.stat().st_size < MIN_PROXY_BYTES:
+            return None
+    except OSError:
         return None
     return data
 

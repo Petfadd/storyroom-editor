@@ -38,6 +38,9 @@ Design rules that matter:
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
 import threading
 import time
 import traceback
@@ -170,6 +173,7 @@ class JobContext:
         self._paused = threading.Event()
         self._paused.set()            # set means "not paused"
         self._lock = threading.Lock()
+        self._processes: list = []
 
     def set(self, progress: float | None = None, detail: str | None = None) -> None:
         with self._lock:
@@ -191,6 +195,110 @@ class JobContext:
     def cancel(self) -> None:
         self.cancelled = True
         self._paused.set()            # a cancelled job must not stay blocked on pause
+        # Kill any child process this job started. Without this, cancelling a proxy or
+        # an enhancement leaves ffmpeg running to completion: the job disappears from
+        # the queue while the machine is still working on it.
+        with self._lock:
+            for process in list(self._processes):
+                _terminate_tree(process)
+            self._processes.clear()
+
+    def pause_process(self, process) -> None:
+        """Suspend a child process while the job is paused, and resume it after.
+
+        Cancelling already kills the child; pausing used to do nothing at all, so a
+        paused encoding job kept saturating the machine while the queue said it was
+        waiting. Suspending the process is the only way to actually stop an encoder
+        short of throwing away the work it has done.
+        """
+        suspended = False
+        while True:
+            if self.cancelled:
+                return
+            if self._paused.is_set():
+                if suspended:
+                    _resume_os_process(process)
+                    suspended = False
+                return
+            if not suspended:
+                suspended = _suspend_os_process(process)
+            # A short wait keeps the check cheap while still reacting quickly.
+            self._paused.wait(0.25)
+
+    def run_process(self, command, timeout=None):
+        """Run a command so that cancelling the job also terminates it.
+
+        Returns the same CompletedProcess that subprocess.run gives, so callers do not
+        have to care which was used.
+        """
+        if self.cancelled:
+            raise JobCancelled()
+        # Its own process group, so cancelling can reach grandchildren rather than
+        # orphaning them onto the machine.
+        if os.name == 'posix':
+            process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True,
+                                       start_new_session=True)
+        else:
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
+        with self._lock:
+            self._processes.append(process)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        try:
+            # A reader thread per pipe rather than communicate().
+            #
+            # communicate() waits for end-of-file, not just for the process to exit.
+            # A cancelled encoder kills its own child, but any grandchild it started
+            # still holds the write end of these pipes, so EOF never arrives and the
+            # caller blocks until that grandchild finishes -- which for an upscaler is
+            # the whole picture. Reading in threads lets us return as soon as the
+            # process we are responsible for is gone.
+            buffers = {}
+            readers = []
+            for name, stream in (('out', process.stdout), ('err', process.stderr)):
+                buffers[name] = []
+                thread = threading.Thread(
+                    target=_drain, args=(stream, buffers[name], process, self),
+                    daemon=True)
+                thread.start()
+                readers.append(thread)
+            while True:
+                if not self._paused.is_set():
+                    # A paused job must not keep encoding: park the child process
+                    # until the job is resumed.
+                    self.pause_process(process)
+                try:
+                    process.wait(timeout=_POLL_SECONDS)
+                    break
+                except subprocess.TimeoutExpired:
+                    if deadline is not None and time.monotonic() > deadline:
+                        _terminate_tree(process)
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    if self.cancelled:
+                        _terminate_tree(process)
+                        break
+            # Give the readers a moment to collect what was written. A grandchild still
+            # holding a pipe means we stop waiting rather than hang, and the output
+            # collected so far is what the caller sees.
+            for thread in readers:
+                thread.join(_DRAIN_GRACE_SECONDS)
+        finally:
+            with self._lock:
+                if process in self._processes:
+                    self._processes.remove(process)
+            for stream in (process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except Exception:
+                    pass
+        if self.cancelled:
+            raise JobCancelled()
+        return subprocess.CompletedProcess(command, process.returncode,
+                                           ''.join(buffers.get('out', [])),
+                                           ''.join(buffers.get('err', [])))
 
     def pause(self) -> None:
         self._paused.clear()
@@ -521,6 +629,103 @@ class Queue:
         with self._lock:
             return [job.as_dict() for job in self._jobs.values()
                     if job.status == 'interrupted']
+
+
+# How often a running child is checked for cancellation or for running past its
+# deadline. Short enough that Cancel feels immediate, long enough to cost nothing.
+_POLL_SECONDS = 0.2
+
+# How long to wait for a child's output to finish arriving once the child has exited.
+# A process that leaves a grandchild holding its pipes never sends more output.
+_DRAIN_GRACE_SECONDS = 1.0
+
+
+def _drain(stream, into: list, process, context) -> None:
+    """Collect a child's output in the background, one line at a time.
+
+    The loop stops at end-of-file, when the process has exited, or when the job is
+    cancelled -- whichever comes first. Without that last condition a reader would stay
+    blocked on a pipe kept open by a grandchild for as long as the grandchild lives.
+    """
+    if stream is None:
+        return
+    try:
+        for line in stream:
+            into.append(line)
+            if context.cancelled or process.poll() is not None:
+                # Keep reading only while the process is alive; after that the buffer
+                # already holds everything that was written.
+                if context.cancelled:
+                    return
+    except (ValueError, OSError):
+        pass
+
+
+def _suspend_os_process(process) -> bool:
+    """Park a child process. Returns whether it was actually suspended.
+
+    Windows has no SIGSTOP, so a small Win32 call does the same job there. On any
+    other platform SIGSTOP is enough. If neither works the job still runs, just
+    without being able to pause: a document that cannot be paused is better than one
+    that cannot be finished.
+    """
+    try:
+        if os.name == 'nt':
+            import ctypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x0800, False, process.pid)
+            if not handle:
+                return False
+            suspended = ctypes.windll.ntdll.NtSuspendProcess(handle) == 0
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return suspended
+        os.kill(process.pid, signal.SIGSTOP)
+        return True
+    except Exception:
+        return False
+
+
+def _resume_os_process(process) -> bool:
+    """Undo `_suspend_os_process`."""
+    try:
+        if os.name == 'nt':
+            import ctypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x0800, False, process.pid)
+            if not handle:
+                return False
+            resumed = ctypes.windll.ntdll.NtResumeProcess(handle) == 0
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return resumed
+        os.kill(process.pid, signal.SIGCONT)
+        return True
+    except Exception:
+        return False
+
+
+def _terminate_tree(process) -> None:
+    """Stop a child and anything it started.
+
+    Killing the child alone is not enough: an encoder that runs a filter subprocess, or
+    a launcher that spawns the real work, leaves a process behind that keeps using the
+    machine after the job has been cancelled. The child is killed directly, then its
+    process group is signalled, which is the only portable way to reach grandchildren.
+    """
+    try:
+        if process.poll() is None:
+            if os.name == 'posix':
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            else:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                               capture_output=True)
+    except Exception:
+        pass
+    try:
+        process.kill()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=5)
+    except Exception:
+        pass
 
 
 class JobCancelled(Exception):

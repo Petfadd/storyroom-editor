@@ -17,6 +17,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from jobqueue import JobCancelled
+
 # Factors Real-ESRGAN's ncnn build actually provides. Anything else has to be reached
 # by a resize after one of these, which is why the app never asks for x3.
 SUPPORTED_FACTORS = (2, 4)
@@ -64,7 +66,7 @@ def describe():
                       'No AI detail is invented.'}
 
 
-def _upscale_tiled(binary, image, factor, work, name, leftovers):
+def _upscale_tiled(binary, image, factor, work, name, leftovers, context=None):
     """Enlarge a large picture piece by piece.
 
     Each tile is cut with an overlap, enlarged, and pasted back with the overlap cropped
@@ -89,10 +91,12 @@ def _upscale_tiled(binary, image, factor, work, name, leftovers):
             leftovers.extend([tile_source, tile_output])
             tile.save(tile_source, 'PNG')
             try:
-                _run(binary, tile_source, tile_output, factor)
+                _run(binary, tile_source, tile_output, factor, context=context)
+            except JobCancelled:
+                raise
             except (RuntimeError, OSError, subprocess.SubprocessError):
                 # Retry this one tile on the CPU before giving up on the whole picture.
-                _run(binary, tile_source, tile_output, factor, gpu=False)
+                _run(binary, tile_source, tile_output, factor, gpu=False, context=context)
             with Image.open(tile_output) as enlarged:
                 piece = enlarged.convert('RGB')
             # Keep only the part of the enlarged tile that belongs outside the overlap.
@@ -141,7 +145,7 @@ def tiled(size: tuple[int, int]) -> bool:
     return width * height > TILE_PIXELS
 
 
-def _run(binary, source, destination, factor, timeout=600, gpu=True):
+def _run(binary, source, destination, factor, timeout=600, gpu=True, context=None):
     """One Real-ESRGAN pass. Raises on failure so the caller can fall back.
 
     `gpu=False` asks the ncnn binary for its CPU path. It is much slower, but it is the
@@ -152,14 +156,23 @@ def _run(binary, source, destination, factor, timeout=600, gpu=True):
                '-n', MODEL_LABEL, '-s', str(int(factor)), '-f', 'png']
     if not gpu:
         command += ['-g', '0']          # ncnn: use no GPU device, run on the CPU
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
-                            cwd=str(Path(binary).parent))
+    # Through the job context when there is one, so that cancelling an enhancement
+    # stops the upscaler instead of letting it finish a picture nobody is waiting for.
+    if context is not None and hasattr(context, 'run_process'):
+        try:
+            result = context.run_process(command, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise subprocess.SubprocessError(str(error)) from error
+    else:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
+                                cwd=str(Path(binary).parent))
     if result.returncode != 0 or not Path(destination).is_file():
         detail = (result.stderr or result.stdout or '').strip()[:400]
         raise RuntimeError(f'Real-ESRGAN did not produce a picture: {detail or "no output"}')
 
 
-def upscale(image, factor, cache_dir=None, cache_key=None, prefer_ai=True):
+def upscale(image, factor, cache_dir=None, cache_key=None, prefer_ai=True,
+            context=None):
     """Enlarge a PIL image by an integer factor.
 
     Returns (image, used) where `used` is 'realesrgan', 'lanczos', or 'none'. A factor
@@ -201,10 +214,10 @@ def upscale(image, factor, cache_dir=None, cache_key=None, prefer_ai=True):
         try:
             if tiled(image.size):
                 result = _upscale_tiled(binary, image, factor, work, cache_key or 'source',
-                                        leftoers)
+                                        leftoers, context=context)
             else:
                 image.save(source, 'PNG')
-                _run(binary, source, destination, factor)
+                _run(binary, source, destination, factor, context=context)
                 with Image.open(destination) as im:
                     result = im.convert('RGB')
             if cached is not None:
@@ -213,6 +226,8 @@ def upscale(image, factor, cache_dir=None, cache_key=None, prefer_ai=True):
                 except OSError:
                     pass
             return result, 'realesrgan'
+        except JobCancelled:
+            raise
         except (OSError, RuntimeError, subprocess.SubprocessError):
             # A missing Vulkan driver or an incomplete release is not a reason to
             # lose the render. Lanczos is worse, but it is honest and it finishes.
@@ -228,7 +243,8 @@ def upscale(image, factor, cache_dir=None, cache_key=None, prefer_ai=True):
     return image.resize((width, height), Image.LANCZOS), 'lanczos'
 
 
-def prepare(image, target_size, prefer_ai=True, framing='auto', cache_dir=None, cache_key=None):
+def prepare(image, target_size, prefer_ai=True, framing='auto', cache_dir=None,
+            cache_key=None, context=None):
     """Fit a source picture into a canvas, upscaling first when that helps.
 
     `target_size` is the canvas (w, h). Returns (picture, report) where report names
@@ -240,7 +256,8 @@ def prepare(image, target_size, prefer_ai=True, framing='auto', cache_dir=None, 
     # The factor is decided on the short side, the same rule the export page shows.
     short_gap = min(target_w, target_h) / max(1, min(source_w, source_h))
     factor = 1 if short_gap <= 1.0 else 2 if short_gap <= 2.0 else 4
-    enhanced, used = upscale(image, factor, cache_dir=cache_dir, cache_key=cache_key, prefer_ai=prefer_ai)
+    enhanced, used = upscale(image, factor, cache_dir=cache_dir, cache_key=cache_key,
+                             prefer_ai=prefer_ai, context=context)
 
     # Every branch returns exactly the canvas. A picture that came back a different
     # size than the frame it was drawn for would break the "consistent output
@@ -291,6 +308,6 @@ def prepare_queued(image, target_size, prefer_ai=True, framing='auto',
         context.wait_if_paused()
     try:
         return prepare(image, target_size, prefer_ai=prefer_ai, framing=framing,
-                       cache_dir=cache_dir, cache_key=cache_key)
+                       cache_dir=cache_dir, cache_key=cache_key, context=context)
     finally:
         release_models()

@@ -168,8 +168,13 @@ def read_frame(cap, seconds: float):
 
 def analyse(path: Path, out_width: int, out_height: int, mode: str = 'smart_crop',
             detector: Detector | None = None,
-            progress=None) -> AnalysisResult:
-    """Analyse one source clip into a plan. Silent, offline, no network."""
+            progress=None, context=None) -> AnalysisResult:
+    """Analyse one source clip into a plan. Silent, offline, no network.
+
+    `context` is the queue's job handle. Detecting people is a run of heavy steps on
+    opens frames, so between samples the job is given the chance to stop: cancel and
+    pause both take effect within one sample rather than at the end of the clip.
+    """
     import reframe_plan
 
     path = Path(path)
@@ -188,6 +193,13 @@ def analyse(path: Path, out_width: int, out_height: int, mode: str = 'smart_crop
 
     samples: list[tuple[float, list]] = []
     for i, moment in enumerate(times):
+        if context is not None:
+            # Raises JobCancelled when cancelled, and blocks while paused.
+            context.wait_if_paused()
+            if context.cancelled:
+                cap.release()
+                from jobqueue import JobCancelled
+                raise JobCancelled()
         frame = read_frame(cap, moment)
         if frame is None:
             continue

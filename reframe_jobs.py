@@ -15,6 +15,8 @@ import time
 import traceback
 from pathlib import Path
 
+from jobqueue import JobCancelled
+
 GUARD = threading.Lock()
 JOBS: dict[str, dict] = {}
 _PENDING: set[str] = set()
@@ -52,7 +54,7 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
                      'started_at': time.time(), 'updated_at': time.time(),
                      'source': str(source), 'mode': mode}
 
-    def work(report=None):
+    def work(report=None, context=None):
         try:
             import reframe_analyse
             _set(pid, status='running', detail='Looking for people and scene changes',
@@ -63,7 +65,8 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
                 if report is not None:report.set(percent, f'Analysed {done} of {total} samples')
 
             result = reframe_analyse.analyse(
-                Path(source), out_width, out_height, mode=mode, progress=on_sample)
+                Path(source), out_width, out_height, mode=mode, progress=on_sample,
+                context=context)
             payload = result.plan.as_dict()
             payload['notes'] = result.notes
             save(payload)
@@ -73,6 +76,9 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
                  scenes=len(payload.get('scenes') or []), detector=result.detector)
             if on_done:
                 on_done(payload)
+        except JobCancelled:
+            # Cancelling is not a failure and must not raise an error dialog.
+            _set(pid, status='cancelled', progress=0, detail='Analysis cancelled.')
         except Exception as error:                        # pragma: no cover
             traceback.print_exc()
             _set(pid, status='failed', progress=0,
@@ -85,10 +91,7 @@ def start(pid: str, source: Path, out_width: int, out_height: int, mode: str,
     # used to run alongside renders; now it waits its turn at priority 3.
     import jobqueue
     def queued(context):
-        try:
-            return work(report=context)
-        finally:
-            pass
+        return work(report=context, context=context)
 
     jobqueue.QUEUE.submit(jobqueue.Job(
         f'reframe-{pid}', 'Framing analysis', queued,

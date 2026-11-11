@@ -33,7 +33,7 @@ _RUNNING: dict[str, dict] = {}
 
 def _package_available() -> tuple[bool, str]:
     if LIB_DIR.is_dir() and str(LIB_DIR) not in sys.path:
-        sys.path.insert(0, str(LIB_DIR))
+        sys.path.append(str(LIB_DIR))
     try:
         module = importlib.import_module('faster_whisper')
         return True, getattr(module, '__version__', 'installed')
@@ -101,7 +101,7 @@ def _run(kind: str) -> None:
     finally:
         importlib.invalidate_caches()
         if LIB_DIR.is_dir() and str(LIB_DIR) not in sys.path:
-            sys.path.insert(0, str(LIB_DIR))
+            sys.path.append(str(LIB_DIR))
 
 
 def start(kind: str = 'auto') -> dict:

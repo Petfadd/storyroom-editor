@@ -1304,7 +1304,10 @@ function performanceHTML(s){
  const running=q.running.concat(q.queued).map(job).join('')||'<p class="small">Nothing is processing.</p>';
  const finished=(q.finished||[]).slice(0,6).map(job).join('');
  const cache=(s.cache||{}),kinds=cache.kinds||{};
- const cacheRows=Object.entries(kinds).map(([k,v])=>`<div class="perf-row"><span>${E(v.label)}</span><span>${v.files?fmtBytes(v.bytes):'–'}</span></div>`).join('');
+ // Only kinds that hold something: a list of dashes tells the user nothing.
+ const cacheRows=Object.entries(kinds).filter(([,v])=>v.files)
+   .map(([,v])=>`<div class="perf-row"><span>${E(v.label)}</span><span>${fmtBytes(v.bytes)}</span></div>`).join('')
+   ||'<p class="small">Nothing cached yet.</p>';
  const hw=(caps.hardware||[]).map(h=>h.vendor).join(', ');
  return `<section class="perf-section">
    <h3>Now${q.paused?' · paused':''}</h3>
@@ -1316,7 +1319,7 @@ function performanceHTML(s){
    <div class="perf-row"><span>Processor</span><span>${Math.round(sys.cpu_percent||0)}%</span></div>${bar(sys.cpu_percent)}
    <div class="perf-row"><span>Memory</span><span>${Math.round(sys.memory_percent||0)}% · ${fmtBytes((sys.memory_available_mb||0)*1024*1024)} free</span></div>${bar(sys.memory_percent)}
    <div class="perf-row"><span>Load</span><span>${E(sys.pressure||'')}</span></div>
-   <p class="small">${E(sys.detail||'')}</p>
+   ${sys.disk_free_gb!=null?`<div class="perf-row"><span>Disk</span><span>${sys.disk_free_gb} GB free</span></div>`:''}
    <p class="small">${hw?`Hardware encoding available: ${E(hw)}.`:'No hardware encoder detected; processing uses the processor.'}</p>
   </section>
   <section class="perf-section">

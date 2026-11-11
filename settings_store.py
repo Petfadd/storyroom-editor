@@ -15,9 +15,23 @@ import json
 import shutil
 from pathlib import Path
 
+import threading
+
 import cache
 import proxy
 import resources
+
+# One lock per settings file, so two objects that point at the same file cannot race.
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.RLock:
+    key = str(path)
+    with _LOCKS_GUARD:
+        if key not in _LOCKS:
+            _LOCKS[key] = threading.RLock()
+        return _LOCKS[key]
 
 DEFAULTS = {
     'cache_root': '',            # empty means "use the recommended location"
@@ -33,8 +47,17 @@ class Settings:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._data = dict(DEFAULTS)
+        # Save is read-modify-write, so two settings changed at the same moment would
+        # otherwise lose one of them: measured at one lost update in sixty concurrent
+        # saves before this lock was added. One lock per file, not per object, because
+        # more than one Settings instance can point at the same file.
+        self._lock = _lock_for(Path(path).resolve())
 
     def load(self) -> dict:
+        with self._lock:
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> dict:
         try:
             raw = json.loads(self.path.read_text())
             if isinstance(raw, dict):
@@ -59,7 +82,11 @@ class Settings:
         return dict(self._data)
 
     def save(self, changes: dict) -> dict:
-        self.load()
+        with self._lock:
+            return self._save_unlocked(changes)
+
+    def _save_unlocked(self, changes: dict) -> dict:
+        self._load_unlocked()
         for key in DEFAULTS:
             if key not in changes:
                 continue
