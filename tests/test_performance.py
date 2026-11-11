@@ -757,6 +757,20 @@ class GraphicsReportingTest(unittest.TestCase):
                         f'50 calls took {elapsed*1000:.0f} ms, so detection is not cached')
         self.assertEqual(first, resources.gpu_info())
 
+    def test_a_status_reading_stays_cheap_enough_to_poll(self):
+        """The panel asks once a second. Asking a driver for a figure starts a
+        process, so a reading must not do that every time or monitoring would cost
+        more than the work it describes."""
+        import resources, time
+        resources.snapshot()                       # warm both caches
+        started = time.monotonic()
+        for _ in range(25):
+            resources.snapshot()
+        each = (time.monotonic() - started) / 25
+        self.assertLess(each, 0.02,
+                        f'a status reading took {each*1000:.1f} ms, which is too slow '
+                        'to run every second')
+
 
 if __name__ == '__main__':
     unittest.main()

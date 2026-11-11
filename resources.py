@@ -200,21 +200,37 @@ def gpu_info() -> dict:
     return value
 
 
+_VRAM_SAMPLE: dict = {'at': 0.0, 'value': None}
+# Asking a driver for a reading means starting a process. The status panel asks once a
+# second, and on Windows that process is a shell; doing it every time would cost more
+# than the monitoring is worth. A few seconds of staleness changes nothing.
+_VRAM_TTL_SECONDS = 5.0
+
+
 def vram_usage_mb() -> float | None:
     """Video memory in use right now, where the driver can be asked.
 
     Only nvidia-smi reports this in a way that is worth parsing. Elsewhere the answer is
     None, and the panel says the figure is unavailable rather than showing a zero that
-    would read as "nothing is using the GPU".
+    would read as "nothing is using the GPU". A machine with no such tool is remembered
+    as such, so the search for it does not repeat on every reading.
     """
-    raw = _run_quiet(['nvidia-smi', '--query-gpu=memory.used',
-                      '--format=csv,noheader,nounits'])
-    for line in raw.splitlines():
-        try:
-            return float(line.strip())
-        except ValueError:
-            continue
-    return None
+    now = time.monotonic()
+    if now - _VRAM_SAMPLE['at'] < _VRAM_TTL_SECONDS:
+        return _VRAM_SAMPLE['value']
+    value = None
+    if shutil.which('nvidia-smi'):
+        raw = _run_quiet(['nvidia-smi', '--query-gpu=memory.used',
+                          '--format=csv,noheader,nounits'])
+        for line in raw.splitlines():
+            try:
+                value = float(line.strip())
+                break
+            except ValueError:
+                continue
+    _VRAM_SAMPLE['at'] = now
+    _VRAM_SAMPLE['value'] = value
+    return value
 
 
 def snapshot(cache_dir: Path | None = None) -> Snapshot:
@@ -372,6 +388,8 @@ def reset_capabilities() -> None:
     _CAPABILITIES = None
     _GPU_CACHE['value'] = None
     _GPU_CACHE['at'] = 0.0
+    _VRAM_SAMPLE['value'] = None
+    _VRAM_SAMPLE['at'] = 0.0
 
 
 def encoder_for(purpose: str) -> list[str]:
