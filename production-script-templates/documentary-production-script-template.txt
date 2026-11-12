@@ -12,6 +12,14 @@ a build instead of during one.
 Read the RULES section once, then fill in the TWO PARTS. Delete every line in square
 brackets; they are instructions, not script.
 
+The templates, in the order you will need them:
+
+  A — a narration beat                        D — a second bite at the same pause
+  B — a sound bite                            E — a sound-bite hook that opens the film
+  C — narration that resumes after bites      F — a photograph of a person, on screen
+                                                  while their name is said, and again
+                                                  every time the name comes back
+
 ================================================================================
 PART 1 — THE NARRATION TABLE (this becomes your SRT)
 ================================================================================
@@ -139,6 +147,168 @@ Continuity note: VO is paused. Plays straight after Beat 003 at the same pause.
 
 [Beat 005 then resumes the narration at 00:01:48,666, using Template C.]
 
+
+--------------------------------------------------------------------------------
+TEMPLATE E — a sound-bite hook, before any narration
+--------------------------------------------------------------------------------
+
+A film may open on one to three bites with no narration at all. That is the hook: the
+first thing the viewer hears is a person speaking, not a narrator explaining. Begin at
+Master 00:00:00,000 and put the first narration beat at the master mark where the last
+hook bite ends. No narration clock exists yet, so a bite that opens the film is anchored
+at 00:00:00,000 and does not name a pause.
+
+Beat: 001
+Type: DOCUMENTARY SOUND BITE
+Master timeline: 00:00:00,000 --> 00:00:11,000 (Duration: 11 sec)
+Narration clock: PAUSED at 00:00:00,000
+Narration state: PAUSED (Suspended for duration of bite)
+Speaker: [the person on screen — and they must BE on screen for this range]
+Exact spoken dialogue: "[the line that stops a viewer scrolling]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:00:03,500
+Source out: 00:00:14,500
+Footage audio: UNMUTED (100% Dialogue Level, Clean)
+Cut action: HARD CUT TO SPEAKER
+Visual direction: [their face, one unbroken take, live footage — never a station card]
+On-screen caption: [their name and role, or None]
+Continuity note: Opens the film. Narration begins at master 00:00:11,000.
+
+Beat: 002
+Type: DOCUMENTARY SOUND BITE
+Master timeline: 00:00:11,000 --> 00:00:23,000 (Duration: 12 sec)
+Narration clock: PAUSED at 00:00:00,000
+Narration state: PAUSED (Suspended for duration of bite)
+Speaker: [a second voice, if the hook needs one]
+Exact spoken dialogue: "[the counterweight or the detail that raises the question]"
+Full source: [exact uploaded filename, with extension]
+Source in: [a range where THIS speaker is visible]
+Source out: [inside the same file's live picture]
+Footage audio: UNMUTED (100% Dialogue Level, Clean)
+Cut action: HARD CUT TO SPEAKER
+Visual direction: [the second face]
+On-screen caption: [their name and role, or None]
+Continuity note: Second hook bite, same pause point. Narration starts after it.
+
+Beat: 003
+Type: VOICE OVER
+Master timeline: 00:00:23,000 --> 00:00:41,000
+Narration clock: 00:00:00,000 --> 00:00:18,000
+Narration state: PLAYING
+Spoken narration: "[the narration picks up from the very start of the audio file]"
+Full source: [exact uploaded filename, with extension]
+Source in: 00:00:00,000
+Source out: 00:00:18,000
+Footage audio: MUTED (0%)
+Cut action: CUT TO [the new picture]
+Visual direction: [what the picture must show here]
+On-screen caption: None
+Continuity note: First narration. Its narration clock starts at 0 because nothing was
+  consumed before it; the hook bites do not advance the narration clock.
+
+Two rules for a hook:
+  - Every hook bite must have its speaker visible for its whole range. A hook on a
+    station graphic is the worst possible opening.
+  - Keep it short. Two bites and about twenty seconds is a hook; four bites is an
+    introduction, and the viewer has already decided.
+
+Three bites work exactly the same way: give every one of them ALL of these three lines,
+because consecutive bites must share one pause point and that shared point is what
+anchors them at the start of the film —
+
+    Narration clock: PAUSED at 00:00:00,000
+    Narration state: PAUSED (Suspended for duration of bite)
+    Master timeline: [each starts where the one before it ended]
+
+A common way to get this wrong is to give bite two a pause time equal to bite one's
+master OUT. That makes it a bite *after* narration that does not exist, and the build
+refuses it. All three hook bites are paused at 00:00:00,000; only their Master timeline
+moves forward.
+
+TEMPLATE F — a photograph of a person, and the same photograph again later
+--------------------------------------------------------------------------------
+
+A downloaded picture of a victim, a suspect, a family member or anyone else strong in
+the case belongs on screen while the narrator says their name — and it should come back
+every time the name comes back.
+
+A Beat cannot hold a Photograph. The Beat reader requires a video filename and a source
+range, and the documentary renderer, frame audit and preview all refuse anything that is
+not video. The way to put a still on screen is to turn the photograph into a short,
+silent, motionless video once, and then name that video in the beats that mention the
+person. The picture is identical in every frame, so what the viewer sees is the still.
+
+STEP 1 — make one hold clip per person. In Command Prompt, from the app folder:
+
+    .venv\Scripts\python tools\photo_to_clip.py photos --out clips --seconds 90
+
+The older Python on this machine is fine too:
+
+    python tools\photo_to_clip.py photos --out clips --seconds 90
+
+`photos` is a folder of downloads (JPG, PNG or WebP). Each becomes
+`<name>_hold.mp4` in `clips` — silent, 29.97 fps, 1920x1080, with the picture never
+stretched and never cropped. A portrait or a 4:3 mugshot is filled out with a blurred,
+darkened copy of itself, which is how a still is normally framed on television. Use
+`--background black` if this production already matches the plain letterbox look.
+Ninety seconds is about half a megabyte, because every frame is the same picture, and
+it is enough for roughly thirty separate mentions of one person. FFmpeg is already
+inside this app; never install one.
+
+STEP 2 — upload the hold clips with your footage, exactly as you upload the MP4s.
+
+STEP 3 — in every beat that names the person, point at that one clip and take a
+different, non-overlapping source window for each mention. The hold is silent, so the
+narration beat's own rule applies unchanged: ordinary footage is MUTED.
+
+Beat: 012
+Type: VOICE OVER
+Master timeline: 00:00:41,000 --> 00:00:44,500
+Narration clock: 00:00:18,000 --> 00:00:21,500
+Narration state: PLAYING
+Spoken narration: "her daughter, Maliyah Bass, was two years old"
+Full source: Maliyah_Bass_hold.mp4
+Source in: 00:00:00,000
+Source out: 00:00:03,500
+Footage audio: MUTED (0%)
+Cut action: CUT TO THE PHOTOGRAPH
+Visual direction: Maliyah Bass's photograph, held still. Her face fills the screen while
+  the narrator says her name.
+On-screen caption: Maliyah Bass, 2
+Continuity note: First mention of the child. The photograph returns at 00:01:52,000.
+
+Beat: 027
+Type: VOICE OVER
+Master timeline: 00:01:52,000 --> 00:01:55,000
+Narration clock: 00:01:29,000 --> 00:01:32,000
+Narration state: PLAYING
+Spoken narration: "Maliyah Bass had been missing for two days"
+Full source: Maliyah_Bass_hold.mp4
+Source in: 00:00:20,000
+Source out: 00:00:23,000
+Footage audio: MUTED (0%)
+Cut action: CUT BACK TO THE PHOTOGRAPH
+Visual direction: The same photograph again, held still.
+On-screen caption: Maliyah Bass, 2
+Continuity note: Second mention. Same file, a different window, so the build accepts it.
+
+Three rules for photographs:
+  - A different window for every mention. Two beats may not reuse the same source
+    range on one file: that is an unapproved overlap and the build refuses it. Separate
+    windows need no approval, and since every frame of a hold is the same picture, the
+    viewer sees the same photograph each time.
+  - Keep each hold on screen about 2–4 seconds. Long enough to read a face, short enough
+    that the film keeps moving. The 10% stills limit is generous — an eighteen-minute
+    film allows almost two minutes of photographs — but it is enforced, and the app will
+    name the beats that break it.
+  - A caption with the name and role stays on the photograph. When the narrator says a
+    name and the picture is on screen, the caption is what tells a viewer who they are
+    looking at.
+
+What a photograph cannot do: it cannot be the picture for a sound bite. A bite is a
+person speaking; showing a still while they speak breaks the rule that whoever is
+talking must be visible. Photographs go on narration, and only narration.
+
 ================================================================================
 RULES — READ THIS ONCE, THEN KEEP TO IT
 ================================================================================
@@ -166,6 +336,19 @@ THE MASTER CLOCK IS THE FINISHED DOCUMENTARY CLOCK
 It runs from 00:00:00,000 to the total runtime and it does not pause. A narration beat
 takes up exactly the narration it covers. A bite takes up its own duration. So each beat
 starts where the previous one ended.
+
+Your TOTAL MASTER RUNTIME is therefore arithmetic, not a wish:
+
+  TOTAL MASTER RUNTIME = length of the narration audio + duration of every bite
+
+Write the number that comes out of that sum. A header that says 550 seconds on a film
+whose bites alone run 749 seconds is not a rounding error, and it is not a small mistake:
+it means the master clock cannot match the picture anywhere in the second half. Measured
+on the project this template came from, the stated runtime was 550s and the real sum was
+1117.6s — the hook had been designed for a 9-minute film that turned out to be 18.
+
+Bites are the expensive part of the runtime, and they are the part people forget to add
+up. Total them first, then plan the narration to fit the piece you actually want.
 
 Picture length must equal timeline length. For a narration beat:
   (Narration out − Narration in) = (Source out − Source in) = (Master out − Master in)
@@ -207,9 +390,59 @@ begins a new beat. Other notes are safe: `Continuity note:` or `Note:` are read 
 editorial text and ignored by the checks.
 
 ORDER OF BEATS
-Start with narration, end with narration, and put every bite between narration. Two bites
-in a row are allowed only when they share the same pause time, which is how a two-voice
-exchange is written (Template D).
+Either kind of beat may open or close the film, so a documentary can start on real speech
+before the first line of narration, and end on a bite instead of a voice-over. A bite with
+no narration before it is anchored at 00:00:00,000; a closing bite starts at the end of
+your narration. Inside the film a bite must follow narration, or another bite at the same
+pause time. Two bites in a row are allowed only when they share the same pause time, which
+is how a two-voice exchange is written (Template D).
+
+A NOTE ON THE NARRATION CLOCK BETWEEN BEATS
+The narration clock is the clock of your narration file, not of the finished film. When a
+bite interrupts narration, the next narration beat begins a few hundred milliseconds
+after the previous one ended, because that is where the speech actually resumes. Those
+hundredths are not an error and not a hole in your planning: they are the pauses you
+left for the bites, and the bites cover them on the finished timeline. Do not close them
+up by hand. What the script must get right is that every bite's PAUSED time equals the
+narration OUT immediately before it, and that the final narration OUT equals your audio
+duration.
+
+THE PICTURE MUST STILL BE LIVE WHERE YOU QUOTE SOMEONE
+Every arithmetic rule above can pass and the film still fail, because the numbers are
+about *time*, not about *what is on screen*. The commonest way a broadcast recording
+breaks a script is a house card: a station ident, "click to subscribe", an app promo.
+The recorder keeps capturing sound while the picture cuts away, so a speaker you quote
+from that stretch has a correct timecode and a correct duration, and the reader will
+accept it — but in the finished film that person is heard over a logo.
+
+  Before you write a bite's Source in/out, look at the picture at those marks and
+  confirm a person is on screen.
+
+  - Thumbnails, a contact sheet, or just opening the file at that time — anything that
+    shows you frames — is the only reliable check. These graphics are animated, so a
+    "frozen picture" check does not find them, and their colour changes as they loop.
+  - A broadcast file is often live for its first seconds and a card for the rest. If a
+    file is 90 seconds long and the picture is a card from 15 seconds, then every bite
+    taken after 15 seconds has no speaker on screen.
+  - If the speaker cannot be shown, either quote them from a range where they can, or
+    do not quote them. Do not let a name run over a graphic.
+
+THE SAME GOES FOR THE OPENING
+If the film opens on sound bites, those bites are the hook, and a hook on a card is
+worse than no hook: the first thing a viewer sees is a station logo. Open on a face or
+on live footage. The reader allows a bite at 00:00:00,000 with no narration before it;
+that is how a hook is written.
+
+ONE PERSON, ONE RANGE
+A script may quote the same speaker in several bites, but each bite must name a range
+where that speaker is visible. Two bites that both open on a logo are two bites with
+nobody on screen, no matter whose name is on the caption.
+
+CHECK THE PICTURE, THEN THE NUMBERS
+The arithmetic checks in the app are exhaustive and will refuse a script whose numbers
+do not add up. They cannot tell whether your footage was live at that moment. That is
+the one check that stays yours, and it is the one that decides whether the finished
+edit looks like television or like a slideshow.
 
 REUSING A SHOT
 A shot may come back later under different narration — that is normal documentary
@@ -250,13 +483,20 @@ The app will tell you all of this on upload, but fixing it here saves a round tr
      OUT equals your audio duration to within a quarter second.
   4. Master clock. Each beat's Master in is the previous beat's Master out, and the last
      Master out is your TOTAL MASTER RUNTIME.
-  5. Filenames. Every Full source line is an exact uploaded filename, used the same way
-     in SOURCES at the top.
-  6. Table. Every block starts where the previous ended, block 1 starts at zero, and the
+  5. Runtime. Narration length plus the duration of every bite equals your TOTAL MASTER
+     RUNTIME. Do not write the runtime you want; write the sum you get.
+  6. Live picture. Look at the frames at each bite's Source in and Source out. A person
+     must be on screen. A station card, an ident or an app promo is not a speaker, and
+     the app cannot check this for you.
+  7. Hook. If the film opens on bites, the first frames are a face or live footage.
+  8. Table. Every block starts where the previous ended, block 1 starts at zero, and the
      last block ends at your audio duration.
-  7. Captions. Every beat has an On-screen caption line: the literal text, or None.
+  9. Captions. Every beat has an On-screen caption line: the literal text, or None.
+ 10. Photographs. Every person the narration names has a hold clip (see TEMPLATE F),
+     every mention of them points at that clip, and no two mentions reuse the same
+     source window. Every photograph is on a narration beat, never a sound bite.
 
-If numbers 1 to 4 hold, the storyboard can be built and the only remaining work is
+If numbers 1 to 5 hold, the storyboard can be built and the only remaining work is
 editorial review.
 
 AFTER YOU UPLOAD
@@ -272,6 +512,111 @@ speaker or reuse rights. Those stay your review.
 
 ================================================================================
 WORKED EXAMPLE — A SHORT BUT COMPLETE SCRIPT
+================================================================================
+TEMPLATE G — b-roll that comes from your own footage
+================================================================================
+
+The picture in this production is three things and nothing else:
+
+  1. PHOTOGRAPHS of the people the narration names          (Template F)
+  2. FOOTAGE of people speaking, and the scene the sentence is about
+  3. B-ROLL — a place, an object or an atmosphere, cut from that same footage
+
+B-roll is not stock and it is not a graphic. It is a window you lift out of a video
+you already uploaded: the police cars, the street, the bayou, the playground, the
+courtroom benches, the memorial. This template is the part that goes wrong silently,
+because a wrong b-roll shot renders perfectly and nobody notices until they watch it.
+
+STEP 1 — find out what is really inside each file.
+
+Do not trust a shot list you were handed, and do not trust a filename. A file called
+`S04_apartments.mp4` may open on a photograph with baked-in blur, cut to a reporter
+talking to camera, and only reach the apartments at forty-six seconds. Open the file
+and look at frames before you write a single Beat. Extract them without installing
+anything:
+
+    .venv\Scripts\python -c "import imageio_ffmpeg,subprocess as s;f=imageio_ffmpeg.get_ffmpeg_exe();[s.run([f,'-y','-loglevel','error','-ss',str(t),'-i','S04.mp4','-frames:v','1',f'f{t}.png']) for t in range(0,140,10)]"
+
+Then open the PNGs. Five seconds apart is enough to find the cuts; one second apart
+around a boundary you care about. Write down, for each usable stretch, what is on
+screen and which second it starts and ends.
+
+STEP 2 — record what you found, once.
+
+`data/broll_catalog.json` holds one entry per usable window. Each entry says the file,
+the in and out, the words that should bring it up, what is on screen, and what kind of
+picture it is. The `kind` field matters more than the tags:
+
+    place     a location or an object. Safe to cut to on the matching word.
+    speaker   a person talking to camera. Only when that person is the subject.
+    people    a named individual going about their business. Only on their name.
+    graphic   a map, a lower third, a photo on a screen. Never b-roll.
+
+    {"id": "B06", "source": "S10", "in": 36.0, "out": 41.5,
+     "tags": ["search", "searcher", "water", "bayou"],
+     "what": "Two searchers in red and yellow rain jackets on the bank",
+     "kind": "place", "verified": true}
+
+`verified: true` means a frame from that window was actually looked at. Leave it false
+and the planner refuses the window rather than guessing, because an unchecked guess
+about what is on screen is worse than leaving footage up.
+
+STEP 3 — let the narration choose.
+
+    python tools/place_broll.py --project projects/<id> --plan
+
+The planner reads the SRT, scores every spoken cue against the catalog's words, and
+throws away four kinds of cue before it matches anything:
+
+  - a cue that names a person. That cue takes their photograph (Template F), not a
+    place. Cutting to the bayou while the narrator says "Maliyah Bass" is a picture of
+    nowhere while somebody's name is spoken.
+  - a cue that is somebody speaking — "here is", "listen to", "is about to tell",
+    "says", "described". That cue belongs to the speaker's face.
+  - a cue whose two subjects score the same. "Texas EquuSearch and an air unit were
+    searching" does not say whether to show the searchers or the sky. A coin toss here
+    is how the wrong picture ends up behind the words.
+  - a cue too short to cut away from, under 0.9 s. It would flash.
+
+A long take is not one opportunity. `S10` is ninety-seven seconds of one flood with
+thirteen shots in it, so each shot keeps a cursor and three consecutive cues can take
+three slices of it. No frame is ever used twice, so you never create the unapproved
+overlap that the build refuses.
+
+STEP 4 — read the plan before you write anything.
+
+`--plan` prints every cut: the cue, its clock, the shot, the in and out, and the words
+it covers. Read the words against the shot description on every line. This is the
+whole review. If a line says "the community believed the mother" and the shot is a
+courtroom gallery, the tag is wrong — fix the catalog, not the script.
+
+STEP 5 — write the Beats the plan gives you.
+
+Beat: 041
+Type: VOICE OVER
+Master timeline: 00:01:45,500 --> 00:01:48,500
+Narration clock: 00:01:45,500 --> 00:01:48,500
+Narration state: PLAYING
+Spoken narration: "Rescue pulled a small child from the Bayou"
+Full source: S10.mp4
+Source in: 00:00:00,000
+Source out: 00:00:03,000
+Footage audio: MUTED (0%)
+Cut action: CUT TO B-ROLL
+Visual direction: The bayou out over the roadway, no presenter, no lower third.
+On-screen caption: None
+Continuity note: B-roll from the uploaded flood footage. Nothing new was sourced.
+
+Five rules for b-roll:
+  - Every window comes from a file you uploaded. No stock, no library, no downloads.
+  - The subject on screen is the subject in the sentence. If you cannot say which
+    word brings the picture up, it does not belong on that cue.
+  - A speaker is never covered with b-roll, and a name is never covered with a place.
+  - No window is used twice. Take the next slice of a long take instead.
+  - Look at the frames before you trust the entry. The catalog is only as good as the
+    last time somebody actually watched the file.
+
+
 ================================================================================
 
 This is a whole, valid script. Two sources, four blocks, one bite, one caption each way.

@@ -1,0 +1,994 @@
+{
+ "version": 2,
+ "method": "Every window below was set by extracting frames from the named file and looking at them. Nothing is carried over from a shot list or inferred from a filename.",
+ "never_broll": [
+  3,
+  12,
+  24,
+  29,
+  30,
+  34,
+  35,
+  40,
+  59,
+  63,
+  69,
+  88
+ ],
+ "sources": {
+  "S01": {
+   "duration": 93.72,
+   "real_window": [
+    0,
+    93.72
+   ],
+   "what": "Travion Thompson in a red shirt, one continuous take, standing in the street outside the complex. Apartments, parked cars and a blue recycling bin behind him.",
+   "note": "A talking head for its whole length: he is the one speaking, so it is a sound-bite source only. Never scenery."
+  },
+  "S02": {
+   "duration": 158.75,
+   "real_window": [
+    0,
+    158.75
+   ],
+   "what": "ABC13 package: a developing-story card, an anchor, a Houston map with a playground pin and a Brays Bayou pin, then street shots by the complex - a woman by police tape, patrol cars, searchers in tall grass, a playground, Travion in the street, neighbours. From 110 s it is Bill Barajas standing in front of the bayou.",
+   "note": "The anchor (0-11 s), the map (11-21 s) and the reporter stand-up (110 s on) are not b-roll. Everything else on the street is usable."
+  },
+  "S03": {
+   "duration": 831.83,
+   "real_window": [
+    0,
+    831.83
+   ],
+   "what": "Chief Art Acevedo, continuous press conference, police tape and greenery behind him.",
+   "note": "One press-conference setup for the whole 831 s. He is a named person speaking, so this is useable only when he is the person being shown or quoted. There is no crowd, no police car and no neighbourhood in this file."
+  },
+  "S04": {
+   "duration": 141.9,
+   "real_window": [
+    0,
+    141.9
+   ],
+   "what": "Sunset Crossing Apartments: Maliyah stills (0-15 s), a Beechnut and Westcrest map (16-24 s), a reporter stand-up (26-45 s), then the real place - brick walkways, AC units, external stairs, a ground-floor window, the parking court, and two playground sets (46-124 s).",
+   "note": "The apartment exteriors start at 46 s, not at 4 s. The first 15 s is two Maliyah photographs with baked-in blur, and 26-45 s is Taisha Walker on camera. Ends on an ABC13 card at 140 s."
+  },
+  "S05": {
+   "duration": 102.4,
+   "real_window": [
+    0,
+    102.4
+   ],
+   "what": "Memorial and vigil: a family in purple behind police tape (0-6 s), a crowd in pink Justice for Maliyah Bass shirts (16-19 s), a memorial of soft toys, balloons and a portrait (19-25 s), the playground behind rows of chairs (40-41 s), a walkway with neighbours (41-47 s), a Texas EquuSearch command centre sign (72-74 s), an open field with search vehicles (75-80 s), a crowd in pink and a woman being consoled (82-99 s).",
+   "note": "6-14 s is an unrelated studio interview and 47-71 s is a speaker addressing the crowd - neither is b-roll."
+  },
+  "S06": {
+   "duration": 136.77,
+   "real_window": [
+    0,
+    136.77
+   ],
+   "what": "Maliyah playing in a red top and a grey romper (1.5-19 s, 100-110 s), exterior stairs and a balcony (19-21 s), low apartment blocks across a lawn (60-64 s), the bayou and a path with searchers (80-88 s), apartment blocks at dusk (90-95 s).",
+   "note": "The child footage is the only moving picture of Maliyah. From 110 s it is a reporter and then a KHOU app promo."
+  },
+  "S07": {
+   "duration": 189.34,
+   "real_window": [
+    0,
+    189.34
+   ],
+   "what": "Maliyah playing and at a railing (6-20 s), Sahara Erving on the stairs in a mask (66-76 s, 118-134 s), the two accused in a split screen (78-84 s), Travion Thompson in a red shirt by parked cars (88-96 s), a woman by a black car (112-116 s), Andy Kahan (136-152 s).",
+   "note": "25-62 s and 168 s on are Taisha Walker on camera - not b-roll. The two-accused split screen is a graphic, not a place."
+  },
+  "S08": {
+   "duration": 87.31,
+   "real_window": [
+    0,
+    87.31
+   ],
+   "what": "A marked police unit on a night street (0-11 s), a courtroom gallery (36-38 s), a dispatch desk and a console operator (40-47 s), a Justice For poster (49-51 s), an apartment complex at dusk with a police SUV in the lot (51-53 s), a path with a green sign (53.5-56.5 s), HPD officers detaining a man by a brick wall (60.5-64.5 s), apartment buildings in daylight (65-67.5 s), searchers in yellow vests on a path (71-76 s).",
+   "note": "The night reporter in the red dress (13-30 s, 82 s on) is a field reporter and may not appear. This file is the richest b-roll in the set after S10 and the old inventory called it a reporter stand-up."
+  },
+  "S09": {
+   "duration": 180.74,
+   "real_window": [
+    0,
+    180.74
+   ],
+   "what": "An anchor (0-14 s), a reporter on a city street (15-57 s), deputies escorting a man in an orange jumpsuit (58-60 s), a Harris County patrol car with a crowd behind (61-63.5 s), a man in orange at an intake counter (64-70 s), a courtroom with a judge at the bench (71-73.5 s).",
+   "note": "180 s long, not 9.5 s. The old inventory stopped at a card that is not there. The reporter stretches (15-57 s, 140-175 s) may not appear; the jail and court shots at 58-73.5 s are the only courthouse picture in the whole set."
+  },
+  "S10": {
+   "duration": 97.2,
+   "real_window": [
+    0,
+    97.2
+   ],
+   "what": "The flood, start to finish, with no presenter and no lower third: flooded street, apartment block behind a fence, a submerged stop sign, debris, the roadway under water, two searchers in rain jackets, a flooded underpass with a car, a barricaded road, bridge supports in the water, fast water, a low bridge, a brick apartment block in the flood, a spillway.",
+   "note": "The best b-roll in the set and the only source that is b-roll for its entire length. Thirteen distinct shots, none of them reused."
+  }
+ },
+ "shots": [
+  {
+   "id": "B01",
+   "source": "S10",
+   "in": 0.0,
+   "out": 6.0,
+   "tags": [
+    "bayou",
+    "flood",
+    "neighbourhood",
+    "road",
+    "street",
+    "water"
+   ],
+   "what": "A residential street with the bayou out over the roadway",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B02",
+   "source": "S10",
+   "in": 6.0,
+   "out": 13.0,
+   "tags": [
+    "apartments",
+    "flood",
+    "neighbourhood",
+    "water"
+   ],
+   "what": "An apartment block behind a fence, standing in floodwater",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B03",
+   "source": "S10",
+   "in": 13.5,
+   "out": 20.0,
+   "tags": [
+    "bayou",
+    "flood",
+    "object",
+    "sign",
+    "water"
+   ],
+   "what": "A stop sign half submerged, reflected in still water",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B04",
+   "source": "S10",
+   "in": 20.5,
+   "out": 26.0,
+   "tags": [
+    "debris",
+    "flood",
+    "water"
+   ],
+   "what": "Debris and branches caught against a wire fence in the flood",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B05",
+   "source": "S10",
+   "in": 26.5,
+   "out": 35.5,
+   "tags": [
+    "bayou",
+    "flood",
+    "road",
+    "street",
+    "water"
+   ],
+   "what": "Floodwater lying across the road and the grass verge",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B06",
+   "source": "S10",
+   "in": 36.0,
+   "out": 41.5,
+   "tags": [
+    "bayou",
+    "search",
+    "searcher",
+    "water"
+   ],
+   "what": "Two searchers in red and yellow rain jackets on the bank",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B07",
+   "source": "S10",
+   "in": 42.0,
+   "out": 50.5,
+   "tags": [
+    "car",
+    "flood",
+    "street",
+    "underpass",
+    "water"
+   ],
+   "what": "A flooded underpass, water halfway up a parked car",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B08",
+   "source": "S10",
+   "in": 51.0,
+   "out": 62.5,
+   "tags": [
+    "barricade",
+    "flood",
+    "object",
+    "road",
+    "water"
+   ],
+   "what": "A barricaded road, an orange cone standing in the water",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B09",
+   "source": "S10",
+   "in": 63.0,
+   "out": 71.5,
+   "tags": [
+    "bayou",
+    "bridge",
+    "flood",
+    "water"
+   ],
+   "what": "Concrete bridge supports standing in the floodwater",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B10",
+   "source": "S10",
+   "in": 72.0,
+   "out": 79.5,
+   "tags": [
+    "bayou",
+    "flood",
+    "water"
+   ],
+   "what": "Fast moving muddy water over the bayou bank",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B11",
+   "source": "S10",
+   "in": 80.0,
+   "out": 81.8,
+   "tags": [
+    "bayou",
+    "bridge",
+    "water"
+   ],
+   "what": "A low bridge crossing the swollen bayou",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B12",
+   "source": "S10",
+   "in": 82.0,
+   "out": 90.5,
+   "tags": [
+    "apartments",
+    "flood",
+    "neighbourhood",
+    "water"
+   ],
+   "what": "A brick apartment block with floodwater at its doors",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B13",
+   "source": "S10",
+   "in": 91.0,
+   "out": 97.2,
+   "tags": [
+    "bayou",
+    "flood",
+    "object",
+    "spillway",
+    "water"
+   ],
+   "what": "A spillway gate with water rushing through it",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B14",
+   "source": "S08",
+   "in": 0.0,
+   "out": 10.8,
+   "tags": [
+    "car",
+    "night",
+    "police",
+    "street"
+   ],
+   "what": "A night street by the bayou with a marked police unit",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B15",
+   "source": "S08",
+   "in": 36.0,
+   "out": 38.0,
+   "tags": [
+    "court",
+    "courtroom"
+   ],
+   "what": "A courtroom gallery, people spaced along the benches",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B16",
+   "source": "S08",
+   "in": 40.0,
+   "out": 44.5,
+   "tags": [
+    "dispatch",
+    "object"
+   ],
+   "what": "A dispatch desk with a clerk working at a computer",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B17",
+   "source": "S08",
+   "in": 45.0,
+   "out": 47.2,
+   "tags": [
+    "dispatch",
+    "people"
+   ],
+   "what": "A woman at a dispatch console wearing a headset",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B18",
+   "source": "S08",
+   "in": 49.0,
+   "out": 50.8,
+   "tags": [
+    "object",
+    "poster"
+   ],
+   "what": "A \"Justice For\" poster carrying two girls photographs",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B19",
+   "source": "S08",
+   "in": 51.0,
+   "out": 52.8,
+   "tags": [
+    "apartments",
+    "car",
+    "dusk",
+    "neighbourhood",
+    "night",
+    "police"
+   ],
+   "what": "An apartment complex at dusk with a police SUV in the lot",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B20",
+   "source": "S08",
+   "in": 53.5,
+   "out": 56.5,
+   "tags": [
+    "neighbourhood",
+    "path",
+    "search",
+    "street"
+   ],
+   "what": "A paved path and grass verge with a green wayfinding sign",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B21",
+   "source": "S08",
+   "in": 60.5,
+   "out": 64.5,
+   "tags": [
+    "arrest",
+    "people",
+    "police"
+   ],
+   "what": "HPD officers detaining a man against a brick wall",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B22",
+   "source": "S08",
+   "in": 65.0,
+   "out": 67.5,
+   "tags": [
+    "apartments",
+    "car",
+    "neighbourhood"
+   ],
+   "what": "Low-rise apartment buildings, cars parked, in daylight",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B23",
+   "source": "S08",
+   "in": 71.0,
+   "out": 76.0,
+   "tags": [
+    "path",
+    "people",
+    "search",
+    "searcher",
+    "water"
+   ],
+   "what": "Searchers in yellow vests walking a path along the water",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B24",
+   "source": "S05",
+   "in": 0.5,
+   "out": 6.0,
+   "tags": [
+    "family",
+    "grief",
+    "memorial",
+    "police",
+    "tape",
+    "vigil"
+   ],
+   "what": "A family in purple embracing behind yellow police tape at a vigil",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B25",
+   "source": "S05",
+   "in": 16.0,
+   "out": 19.0,
+   "tags": [
+    "crowd",
+    "memorial",
+    "shirt",
+    "vigil"
+   ],
+   "what": "A crowd in pink \"Justice for Maliyah Bass\" shirts holding signs",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B26",
+   "source": "S05",
+   "in": 19.5,
+   "out": 21.0,
+   "tags": [
+    "balloons",
+    "grief",
+    "memorial",
+    "teddy",
+    "vigil"
+   ],
+   "what": "Stuffed animals, balloons and a framed portrait at a memorial",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B27",
+   "source": "S05",
+   "in": 23.0,
+   "out": 25.0,
+   "tags": [
+    "apartments",
+    "balloons",
+    "memorial",
+    "stairs",
+    "teddy",
+    "vigil"
+   ],
+   "what": "Balloons and a memorial table at the foot of the stairs",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B28",
+   "source": "S05",
+   "in": 40.0,
+   "out": 41.3,
+   "tags": [
+    "apartments",
+    "crowd",
+    "memorial",
+    "playground"
+   ],
+   "what": "Rows of chairs and the playground behind a vigil",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B29",
+   "source": "S05",
+   "in": 41.5,
+   "out": 47.0,
+   "tags": [
+    "apartments",
+    "neighbourhood",
+    "people",
+    "walkway"
+   ],
+   "what": "A second-floor walkway with neighbours watching from it",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B30",
+   "source": "S05",
+   "in": 72.0,
+   "out": 74.0,
+   "tags": [
+    "object",
+    "search",
+    "searcher",
+    "sign"
+   ],
+   "what": "A \"Texas EquuSearch Command Center\" sign on a building",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B31",
+   "source": "S05",
+   "in": 75.0,
+   "out": 80.0,
+   "tags": [
+    "car",
+    "field",
+    "neighbourhood",
+    "search",
+    "searcher",
+    "water"
+   ],
+   "what": "An open field and track with search vehicles in the distance",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B32",
+   "source": "S05",
+   "in": 82.0,
+   "out": 99.0,
+   "tags": [
+    "crowd",
+    "family",
+    "grief",
+    "memorial"
+   ],
+   "what": "A crowd in pink, a man speaking, a woman being consoled",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B33",
+   "source": "S02",
+   "in": 11.0,
+   "out": 21.0,
+   "tags": [
+    "location",
+    "map"
+   ],
+   "what": "A Houston map marked with a playground pin and a Brays Bayou pin",
+   "kind": "graphic",
+   "verified": true
+  },
+  {
+   "id": "B34",
+   "source": "S02",
+   "in": 48.0,
+   "out": 56.0,
+   "tags": [
+    "apartments",
+    "car",
+    "grief",
+    "police",
+    "tape"
+   ],
+   "what": "A woman with a hand to her head beside police tape and patrol cars",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B35",
+   "source": "S02",
+   "in": 58.0,
+   "out": 60.0,
+   "tags": [
+    "apartments",
+    "car",
+    "police"
+   ],
+   "what": "A marked HPD patrol SUV at the complex, a woman in the distance",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B36",
+   "source": "S02",
+   "in": 62.0,
+   "out": 64.0,
+   "tags": [
+    "bayou",
+    "search",
+    "searcher",
+    "water"
+   ],
+   "what": "Searchers moving through tall grass near the water",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B37",
+   "source": "S02",
+   "in": 74.0,
+   "out": 76.0,
+   "tags": [
+    "apartments",
+    "playground"
+   ],
+   "what": "A red and green playground set behind a fence",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B38",
+   "source": "S02",
+   "in": 88.0,
+   "out": 96.0,
+   "tags": [
+    "car",
+    "people",
+    "street",
+    "suspect"
+   ],
+   "what": "Travion Thompson in a red shirt walking past parked cars",
+   "kind": "people",
+   "verified": true
+  },
+  {
+   "id": "B39",
+   "source": "S02",
+   "in": 98.0,
+   "out": 102.0,
+   "tags": [
+    "crowd",
+    "neighbourhood",
+    "search",
+    "street"
+   ],
+   "what": "Neighbours and searchers standing out in the street",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B40",
+   "source": "S02",
+   "in": 104.0,
+   "out": 110.0,
+   "tags": [
+    "apartments",
+    "family",
+    "neighbourhood",
+    "walkway"
+   ],
+   "what": "A woman and a child at a gate on an apartment walkway",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B41",
+   "source": "S04",
+   "in": 46.0,
+   "out": 56.0,
+   "tags": [
+    "apartments",
+    "neighbourhood",
+    "stairs",
+    "walkway"
+   ],
+   "what": "An apartment walkway: brick wall, AC units, an external stair",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B42",
+   "source": "S04",
+   "in": 58.0,
+   "out": 62.0,
+   "tags": [
+    "apartments",
+    "object",
+    "window"
+   ],
+   "what": "A brick facade, a window and air-conditioning units",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B43",
+   "source": "S04",
+   "in": 64.0,
+   "out": 68.0,
+   "tags": [
+    "apartments",
+    "car",
+    "neighbourhood",
+    "street"
+   ],
+   "what": "A parking court with people walking between the buildings",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B44",
+   "source": "S04",
+   "in": 68.0,
+   "out": 70.0,
+   "tags": [
+    "apartments",
+    "object",
+    "window"
+   ],
+   "what": "A ground-floor window with vertical blinds",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B45",
+   "source": "S04",
+   "in": 72.0,
+   "out": 76.0,
+   "tags": [
+    "apartments",
+    "playground"
+   ],
+   "what": "A red and green playground set on the grass",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B46",
+   "source": "S04",
+   "in": 79.0,
+   "out": 82.5,
+   "tags": [
+    "object",
+    "playground"
+   ],
+   "what": "A green slide and climbing frame",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B47",
+   "source": "S04",
+   "in": 116.0,
+   "out": 124.0,
+   "tags": [
+    "apartments",
+    "neighbourhood",
+    "playground"
+   ],
+   "what": "Brick apartment blocks with a red playground between them",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B48",
+   "source": "S06",
+   "in": 19.0,
+   "out": 21.0,
+   "tags": [
+    "apartments",
+    "stairs"
+   ],
+   "what": "Exterior stairs and a balcony walkway",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B49",
+   "source": "S06",
+   "in": 60.0,
+   "out": 64.0,
+   "tags": [
+    "apartments",
+    "neighbourhood"
+   ],
+   "what": "Low apartment blocks seen across a lawn",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B50",
+   "source": "S06",
+   "in": 80.0,
+   "out": 88.0,
+   "tags": [
+    "bayou",
+    "search",
+    "searcher",
+    "water"
+   ],
+   "what": "Bayou, grass and a path with searchers in the distance",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B51",
+   "source": "S06",
+   "in": 90.0,
+   "out": 95.0,
+   "tags": [
+    "apartments",
+    "car",
+    "dusk",
+    "night"
+   ],
+   "what": "Apartment blocks at dusk with cars in the lot",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B52",
+   "source": "S07",
+   "in": 66.0,
+   "out": 76.0,
+   "tags": [
+    "apartments",
+    "family",
+    "mother",
+    "stairs"
+   ],
+   "what": "Sahara Erving in a mask on the stairs",
+   "kind": "people",
+   "verified": true
+  },
+  {
+   "id": "B53",
+   "source": "S07",
+   "in": 88.0,
+   "out": 96.0,
+   "tags": [
+    "car",
+    "street",
+    "suspect"
+   ],
+   "what": "Travion Thompson in a red shirt beside parked cars",
+   "kind": "people",
+   "verified": true
+  },
+  {
+   "id": "B54",
+   "source": "S07",
+   "in": 112.0,
+   "out": 116.0,
+   "tags": [
+    "car",
+    "grief",
+    "street"
+   ],
+   "what": "A woman by a black car with a hand to her face",
+   "kind": "people",
+   "verified": true
+  },
+  {
+   "id": "B55",
+   "source": "S07",
+   "in": 118.0,
+   "out": 134.0,
+   "tags": [
+    "apartments",
+    "family",
+    "mother",
+    "stairs"
+   ],
+   "what": "Sahara Erving in a mask, a doorway and stairs behind her",
+   "kind": "people",
+   "verified": true
+  },
+  {
+   "id": "B56",
+   "source": "S09",
+   "in": 58.0,
+   "out": 60.5,
+   "tags": [
+    "arrest",
+    "jail",
+    "police"
+   ],
+   "what": "Deputies escorting a man in an orange jumpsuit",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B57",
+   "source": "S09",
+   "in": 61.0,
+   "out": 63.5,
+   "tags": [
+    "car",
+    "jail",
+    "police"
+   ],
+   "what": "A marked Harris County patrol car with a crowd behind it",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B58",
+   "source": "S09",
+   "in": 64.0,
+   "out": 70.5,
+   "tags": [
+    "court",
+    "jail"
+   ],
+   "what": "A man in an orange jumpsuit seated at a counter",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B59",
+   "source": "S09",
+   "in": 71.0,
+   "out": 73.5,
+   "tags": [
+    "court",
+    "courtroom",
+    "judge"
+   ],
+   "what": "A courtroom: a judge at the bench, a man in orange before him",
+   "kind": "place",
+   "verified": true
+  },
+  {
+   "id": "B60",
+   "source": "S03",
+   "in": 0.0,
+   "out": 831.83,
+   "tags": [
+    "official",
+    "police",
+    "press",
+    "speaker"
+   ],
+   "what": "Chief Art Acevedo at a press conference, police tape behind him",
+   "kind": "speaker",
+   "verified": true
+  }
+ ]
+}

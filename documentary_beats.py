@@ -81,7 +81,10 @@ def read_beats(text):
                 if field('Duration', False): duration = time_ms(field('Duration'))
                 else:
                     # Duration may be written on the master timeline line instead.
-                    found = re.search(r'\(\s*Duration:\s*'+CLOCK+r'\s*\)', field('Master Timeline', False))
+                    # The timecode has to be its own capture group. Without the
+                    # parentheses group(1) raised IndexError on every script that
+                    # wrote the duration this way instead of in a Duration field.
+                    found = re.search(r'\(\s*Duration:\s*('+CLOCK+r')\s*\)', field('Master Timeline', False))
                     if found: duration = time_ms(found.group(1))
                     else:
                         secs = re.search(r'\(\s*Duration:\s*(?:([\d.]+)\s*sec|(\d+)\s*min\s*(\d+)\s*sec)\s*\)', field('Master Timeline', False), re.I)
@@ -100,8 +103,10 @@ def read_beats(text):
 def audit_beats(beats, project, root):
     """Validate explicit source identities and audio continuity. Return all issues."""
     root=Path(root).resolve();issues=[];cursor=0;used={};assets=project.get('assets') or [];short=[]
-    if not beats or beats[0]['kind']!='narration' or beats[-1]['kind']!='narration':
-        issues.append('Documentary must start and end with narration.')
+    # Opening or closing on a sound bite is a legitimate choice, so it is no longer an
+    # issue. The narration-timing checks below still catch every real fault: bites must
+    # sit at a pause point, pauses must match the narration endpoint they follow, and
+    # the narration intervals must meet end to end.
     for i,beat in enumerate(beats):
         label=beat['label'];matches=[a for a in assets if (a.get('original_name') or a.get('name'))==beat['source_file']]
         if len(matches)!=1:
