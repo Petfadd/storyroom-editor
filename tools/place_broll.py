@@ -124,6 +124,40 @@ def spoken(blocks):
     return out
 
 
+# Words that make a description actually about a subject, rather than merely
+# adjacent to it.
+SUBJECT_WORDS = {
+    'court': ('court', 'judge', 'bench', 'gallery'),
+    'search': ('search', 'searcher', 'vest'),
+    'searcher': ('search', 'searcher', 'vest'),
+    'water': ('water', 'bayou', 'flood', 'bank'),
+    'bayou': ('bayou', 'water', 'bank'),
+    'memorial': ('memorial', 'balloon', 'teddy', 'stuffed', 'portrait', 'frame'),
+    'vigil': ('vigil', 'candle', 'crowd', 'memorial'),
+    'arrest': ('arrest', 'detain', 'handcuff'),
+    'jail': ('jail', 'cell', 'orange', 'inmate', 'custody'),
+    'apartments': ('apartment', 'block', 'complex', 'walkway'),
+    'police': ('police', 'patrol', 'officer', 'hpd', 'deputy', 'deputies'),
+    'crowd': ('crowd', 'people', 'shirt', 'sign'),
+    'playground': ('playground', 'swing', 'slide'),
+    'pool': ('pool', 'water'),
+    'dog': ('dog', 'k9'),
+}
+
+
+RECORD = re.compile(r'\b(?:conviction|convictions|probation|record|records|'
+                    r'parole|plea|pleaded|indict\w*|charge[sd]?)\b', re.I)
+
+
+def _described(shot, tag):
+    """True when the shot's own description is about `tag`."""
+    words = SUBJECT_WORDS.get(tag)
+    if not words:
+        return True
+    text = (shot.get('what') or '').lower()
+    return any(w in text for w in words)
+
+
 def plan_broll(catalog, cues, min_score=2, keep=None, kinds=NOT_BROLL,
                exclude=DEFAULT_EXCLUSIONS):
     """Assign b-roll to narration cues, spending each shot from its head forward.
@@ -150,6 +184,12 @@ def plan_broll(catalog, cues, min_score=2, keep=None, kinds=NOT_BROLL,
             # place would be a picture of somewhere while somebody is being named.
             skipped.append((cue['number'], 'cue names ' + ', '.join(cue['named'])))
             continue
+        # A record search is not a jail. "five convictions since 2017 and a
+        # probation never revoked" is a paper trail; cutting to a cell says he was
+        # locked up, which is a different fact. Those lines stay on footage.
+        if RECORD.search(cue['text']):
+            skipped.append((cue['number'], 'cue is about a record, not a place'))
+            continue
         if keep.search(cue['text']):
             skipped.append((cue['number'], 'cue is somebody speaking'))
             continue
@@ -166,8 +206,21 @@ def plan_broll(catalog, cues, min_score=2, keep=None, kinds=NOT_BROLL,
         need = min(duration, 8.0)   # a long cue gets a long shot, but not an endless one
         pick = None
         for tag in wanted:
+            # The shot must be about what the cue is about. Every shot carries a
+            # plain description, and that sentence is the real test: a "path and
+            # grass verge" cannot illustrate a drained pool however it was tagged,
+            # and a jail cell cannot illustrate a probation record. Requiring the
+            # description to name the subject is what keeps a near-miss shot off a
+            # specific line instead of merely reducing the count of b-roll cuts.
             options = [s for s in shots
-                       if tag in s['tags'] and s['out'] - cursor[s['id']] >= need]
+                       if tag in s['tags'] and s['out'] - cursor[s['id']] >= need
+                       and _described(s, tag)]
+            if not options:
+                # No shot carries enough of what this cue is about. A near-miss puts
+                # the wrong picture behind a specific line - a jail cell under a
+                # probation record, a footpath under a drained pool. The narration
+                # stays on footage instead.
+                continue
             if options:
                 # Prefer the shot that matches the most of what the cue is about,
                 # then the one with the least left to spare so the long ambient

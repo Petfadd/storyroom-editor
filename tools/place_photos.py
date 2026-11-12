@@ -50,6 +50,10 @@ PEOPLE = {
 # Footage between two mentions of one person shorter than this is not worth a cut;
 # the photograph simply stays up. Below about half a second the picture would flash.
 MIN_GAP_MS = 700
+# A still is a held beat, not a slide. Past this it stops reading as a portrait and
+# starts looking like the picture has frozen, so the coverage goes back to moving
+# footage and the name is still spoken over the person's own clip.
+MAX_PHOTO_MS = 9000
 # A photograph is held at least this long so a face can be read. A mention shorter
 # than this is not lengthened past the end of its Beat, because the picture must not
 # stay on screen after the narrator has moved on to somebody else.
@@ -93,7 +97,9 @@ def field(body, name, required=True):
 
 
 def span_of(value):
-    match = re.fullmatch(r'\s*(' + CLOCK + r')\s*(?:-->|→|->)\s*(' + CLOCK + r')\s*', value)
+    # The supplied production script writes an optional "(Duration: N sec)" after
+    # the span; it is a restatement of the same two timecodes, not part of them.
+    match = re.match(r'\s*(' + CLOCK + r')\s*(?:-->|→|->)\s*(' + CLOCK + r')', value)
     return (clock_ms(match.group(1)), clock_ms(match.group(2))) if match else None
 
 
@@ -110,6 +116,28 @@ def beat_span(body):
     if not master:
         raise ValueError('A narration Beat needs a Master timeline span.')
     return {'narration': narration, 'master': master}
+
+
+POSSESSIVE = re.compile(r"^\s*(?:'s|\u2019s|s')\b")
+
+
+def _subject(hits, text):
+    """Who a sentence naming several people is about.
+
+    The first name is the subject unless it is only there as a possessive - "Thompson's
+    mother Angel Harris" is Angel's line, and showing Thompson would put one person
+    under another person's words.
+    """
+    def at(name):
+        m = re.search(PEOPLE[name][0], text, re.I)
+        return m.start() if m else 10 ** 9
+    ordered = sorted(hits, key=at)
+    head = ordered[0]
+    m = re.search(PEOPLE[head][0], text, re.I)
+    # "Thompson's mother" - the name is a possessive pointing at somebody else.
+    if m and POSSESSIVE.search(text[m.end():]):
+        return ordered[1] if len(ordered) > 1 else None
+    return head
 
 
 def mentions(blocks, people):
@@ -130,23 +158,32 @@ def mentions(blocks, people):
                           'start': int(cue['start_ms']), 'end': int(cue['end_ms']),
                           'text': cue.get('text', '')})
         elif len(hits) > 1:
-            # "Thompson says Malia knew her ABCs" names two people. A still cannot
-            # show both, and cutting mid-name to the second one would put the wrong
-            # face under the first name. The person most recently named stays on
-            # screen, which is what a documentary editor does here: the picture
-            # follows the subject the sentence is about, not the newest noun. Where
-            # no earlier name exists the cue stays as footage and is reported.
-            ambiguous.append((cue.get('number'), hits, cue.get('text', '')))
-            if previous_name in hits:
-                found.append({'name': previous_name, 'cue': int(cue['number']),
-                              'start': int(cue['start_ms']), 'end': int(cue['end_ms']),
-                              'text': cue.get('text', ''), 'carried': True})
+            # "her boyfriend Travion Thompson is about to tell cameras... Thompson
+            # says Malia knew her ABCs" names two people. A still cannot show both.
+            # Carrying the name from the previous cue put Maliyah's photograph under
+            # a sentence whose subject is Travion - the one thing the picture must
+            # never do. The subject of these sentences is the person named FIRST, so
+            # that is who the still shows. A cue that leads with neither stays as
+            # footage and is reported.
+            text = cue.get('text', '')
+            # The subject is whoever the sentence opens on, not whoever is named
+            # most often. "Thompson's mother Angel Harris is about to tell you..."
+            # opens on Thompson but is Angel's story: the possessive is a pointer to
+            # a different person, so that cue takes the still of HER.
+            subject = _subject(hits, text)
+            if subject is None:
+                ambiguous.append((cue.get('number'), hits, text))
+                continue
+            previous_name = subject
+            found.append({'name': subject, 'cue': int(cue['number']),
+                          'start': int(cue['start_ms']), 'end': int(cue['end_ms']),
+                          'text': text, 'carried': True})
         elif not cue.get('text', '').strip():
             continue
     return found, ambiguous
 
 
-def merge(found, min_gap_ms=MIN_GAP_MS):
+def merge(found, min_gap_ms=MIN_GAP_MS, max_ms=MAX_PHOTO_MS):
     """Join mentions of one person that are separated by almost no footage."""
     out = []
     for item in sorted(found, key=lambda m: m['start']):
@@ -155,8 +192,13 @@ def merge(found, min_gap_ms=MIN_GAP_MS):
             previous['end'] = max(previous['end'], item['end'])
             previous['cues'].append(item['cue'])
             continue
-        out.append({'name': item['name'], 'start': item['start'], 'end': item['end'],
+        out.append({'name': item['name'], 'start': item['start'],
+                    'end': min(item['end'], item['start'] + max_ms),
                     'cues': [item['cue']]})
+    # A window that ran long is cut back to the held beat; the rest of the passage
+    # plays on footage.
+    for w in out:
+        w['end'] = min(w['end'], w['start'] + max_ms)
     return out
 
 

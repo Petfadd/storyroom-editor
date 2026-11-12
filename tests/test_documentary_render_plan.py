@@ -22,9 +22,12 @@ class DocumentaryRenderPlanTest(unittest.TestCase):
         self.assertEqual(len(result['spans']), 2)
         self.assertEqual(result['spans'][0]['labels'], ['a', 'b'])
         self.assertEqual(result['captions'][0], {'text': 'Hello', 'timeline_in_ms': 0, 'timeline_out_ms': 2000})
-        # A sound bite carries no on-screen text at all, not even its caption label.
-        self.assertEqual(len(result['captions']), 1)
-        self.assertFalse(any(c['text'] == 'Speaker' for c in result['captions']))
+        # A sound bite carries the caption its Beat asked for, exactly as a narration
+        # beat does. The writer's On-screen Caption field is an instruction to show
+        # that text, and skipping bites left every named speaker unlabelled.
+        self.assertEqual(len(result['captions']), 2)
+        self.assertEqual(result['captions'][1],
+                         {'text': 'Speaker', 'timeline_in_ms': 2000, 'timeline_out_ms': 3000})
 
     @patch('documentary_render_plan.playback_schedule')
     def test_never_hides_frame_difference_or_different_scale(self, schedule):
@@ -69,16 +72,19 @@ class DocumentaryRenderPlanTest(unittest.TestCase):
             self.assertFalse(plan(project,root,sound,decisions)['picture_compatible'])
 
 
-class NoTextOnBitesTest(unittest.TestCase):
-    """On-screen text belongs to narration only."""
+class BiteCaptionsTest(unittest.TestCase):
+    """The caption a Beat asks for is shown, on a bite as much as on narration."""
 
     @patch('documentary_render_plan.playback_schedule')
-    def test_a_bite_gets_no_caption_even_with_speech_and_a_label(self, schedule):
+    def test_a_bite_shows_its_own_label_and_never_its_transcript(self, schedule):
         bite = event('bite', 1000, 3000, 0, 60, kind='sound_bite', caption='Maria Sharapova — Press Conference')
         bite['speech'] = [{'start_s': 0.2, 'end_s': 1.0, 'text': 'I did fail the test'}]
         schedule.return_value = [event('a', 0, 1000, 0, 30, caption='March 7, 2016'), bite]
         result = plan({}, '.', {})
-        self.assertEqual([c['text'] for c in result['captions']], ['March 7, 2016'])
+        self.assertEqual([c['text'] for c in result['captions']],
+                         ['March 7, 2016', 'Maria Sharapova — Press Conference'])
+        # The spoken words are never burned in; only the writer's caption is.
+        self.assertNotIn('I did fail the test', [c['text'] for c in result['captions']])
 
     @patch('documentary_render_plan.playback_schedule')
     def test_narration_captions_still_render(self, schedule):

@@ -643,3 +643,32 @@ The documentary timeline displays narration before and after each inserted sound
 An adjusted SRT can be downloaded separately from the planner. If a pause falls inside a cue, you must listen and choose a word boundary for that cue. This is an editorial choice, not automatic word alignment; cue words remain unchanged and in order. The original SRT remains unchanged.
 
 **This is a low-resolution review preview, not a final documentary export.** The normal review workspace and its export checks remain separate. Final documentary MP4 rendering is not yet implemented; the preview does not constitute editorial approval or rights clearance.
+
+#### Any script, not one script
+
+A Beat storyboard is a reusable editor, not a one-off. It is verified against the
+ranges it recorded when it was built — the fitted `IN`/`OUT` of every Beat, the
+approved gaps and the approved overlaps — not against the current text of the
+production script. That distinction matters:
+
+- The script is an **input**. It can be uploaded again, edited, replaced and edited
+  again. Nothing about an existing timeline becomes invalid because its text moved on.
+- A built timeline is **internally consistent or it is not**: every slot must still
+  match the range the build placed, and every saved bite must still match its own
+  recorded range. Those checks fail closed and name the scene or Beat.
+- A script edited after a build is reported as a **warning that names the Beats that
+  moved** — never as an anonymous failure of scene 1. The timeline keeps playing the
+  picture it was built with, and **Rebuild the Beat timeline** applies the new script.
+
+Nothing in the reader or the planner is tied to one production. `Beat: 001` blocks
+may start or end with a narration or a sound bite; the source may be named by `Video
+File` or `Full Source`, the clock by `Narration Clock` or `VO Clock`, the speaker by
+`Speaker` or `Speaker & Role`. Any number of Beats, any filenames, any narration
+length. A confirmed rebuild replaces the saved timeline and its bites, and restores
+the previous scenes if the rebuild fails, so a failed attempt never leaves the
+project without a timeline.
+
+Any failure the frame audit reports is shown **in the monitor itself**. A schedule
+that cannot be built used to be swallowed, which left a black monitor with the empty
+state hidden and nothing on the page saying why; it now states the reason and marks
+the preview blocked.

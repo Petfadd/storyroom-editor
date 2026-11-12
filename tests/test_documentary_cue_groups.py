@@ -17,7 +17,9 @@ class DocumentaryCueGroupsTest(StoryboardPreparationTest):
     def test_groups_slots_without_mutating_timing_or_approvals(self):
         p, _ = self.grouped_project();before=copy.deepcopy(p);result=groups(p)
         self.assertEqual(len(result),2)
-        self.assertEqual([len(g['slots']) for g in result],[2,1])
+        # Slots: approved gap, Beat 001, the sound bite, Beat 003. The bite is picture
+        # too, so it belongs to the same cue group as the narration around it.
+        self.assertEqual([len(g['slots']) for g in result],[2,2])
         self.assertEqual(result[0]['slots'][0]['continuity'],'Documentary beat approved-gap')
         self.assertEqual(p,before)
 
@@ -35,5 +37,7 @@ class DocumentaryCueGroupsTest(StoryboardPreparationTest):
         p,_=self.grouped_project();frame.return_value={'errors':['Real cut mismatch'], 'adjustments':[], 'output_fps':'30'}
         r=strict_report(p,self.root)
         self.assertEqual(r['mode'],'documentary-cue-groups')
-        self.assertEqual(len(r['shots']),2);self.assertEqual(r['physical_slots'],3)
+        # Two cue groups, four physical slots: the approved gap, Beat 001, the bite,
+        # and Beat 003. The bite is a slot of its own, so it is counted here.
+        self.assertEqual(len(r['shots']),2);self.assertEqual(r['physical_slots'],4)
         self.assertIn('Real cut mismatch',r['errors'])
