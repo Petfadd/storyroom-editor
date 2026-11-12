@@ -107,3 +107,16 @@ class AlternateLabelsTest(unittest.TestCase):
   self.assertEqual(read_beats(script)[1]['speaker'],'Witness (unverified)')
  def test_path_style_source_still_rejected(self):
   with self.assertRaises(ValueError):read_beats(ALT.replace('Full Source: S01.mp4','Full Source: ../S01.mp4',1))
+ def test_duration_may_be_written_on_the_master_timeline(self):
+  # A sound bite that carries its Duration on the Master Timeline line instead of
+  # in its own Duration field used to crash with IndexError: the timecode pattern
+  # had no capture group, so group(1) did not exist. A script written this way is
+  # valid and must read back with the duration it declares.
+  script=ALT.replace('Master Timeline: 00:00:02,000 --> 00:00:04,000 (Duration: 2 sec)',
+                     'Master Timeline: 00:00:02,000 --> 00:00:04,000 (Duration: 00:00:02,000)')
+  beat=read_beats(script)[1]
+  self.assertEqual(beat['duration_ms'],2000)
+  self.assertEqual(beat['kind'],'sound_bite')
+  # The declared duration still has to agree with the source range.
+  with self.assertRaises(ValueError):
+   read_beats(script.replace('(Duration: 00:00:02,000)','(Duration: 00:00:03,000)'))

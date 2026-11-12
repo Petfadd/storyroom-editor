@@ -72,13 +72,12 @@ class BiteCaptionPlanTest(unittest.TestCase):
         finally:
             module.playback_schedule = original
         texts = [(c['text'], c['timeline_in_ms'], c['timeline_out_ms']) for c in result['captions']]
-        # A bite carries picture and its own sound, never burned-in words. The
-        # transcribed speech is kept on the bite for review and subtitles, but it
-        # is not drawn over the picture, and neither is the caption label.
+        # A bite carries picture and its own sound. The transcribed speech stays on
+        # the bite for review and subtitles and is never drawn over the picture; the
+        # caption the writer gave the Beat is drawn, exactly as for narration.
         self.assertNotIn(('Spoken in the footage.', 1500, 3000), texts)
-        self.assertNotIn('Label only', [c['text'] for c in result['captions']])
-        # Only the narration beat contributes text; both bites contribute none.
-        self.assertEqual([c['text'] for c in result['captions']], ['Opening'])
+        self.assertEqual([c['text'] for c in result['captions']],
+                         ['Opening', 'Label only', 'Scripted label'])
 
 
 class PlaybackScheduleSpeechTest(unittest.TestCase):

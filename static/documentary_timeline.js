@@ -96,26 +96,48 @@ function docRenderProgram(){
 const docScheduleCache=new Map();
 async function docLoadSchedule(id,version,revision,token){
  const key=id+':'+version;const cached=docScheduleCache.get(key);
- const apply=events=>{const d=window.docTimelineData;
+ const apply=(events,warnings)=>{const d=window.docTimelineData;
   if(!d||d.id!==id||d.version!==version||token!==docTimelineGeneration)return;
-  d.schedule=events||[];d.scheduleReady=true;docUpdatePosition();
+  d.schedule=events||[];d.scheduleReady=true;d.scheduleWarnings=warnings||[];docUpdatePosition();
   // The schedule is what tells the monitor WHICH frame belongs here. Until it
   // arrives nothing can be loaded, so its arrival must repaint the picture --
   // otherwise the monitor stays black while the player sits marked active.
   if(!editorPlaying)d.schedule.length&&docDirectSwitch(narrNode.currentTime||0,false);
  };
- if(cached){apply(cached);return}
+ if(cached){apply(cached.events,cached.warnings);return}
  if(docScheduleCache.get(key+':loading'))return;
  docScheduleCache.set(key+':loading',true);
  try{
   const data=await api(`/api/projects/${id}/documentary-beat-playback-schedule`);
   if(data&&data.project_version!==version)return;           // storyboard moved on
-  const events=data?.events||[];
-  docScheduleCache.set(key,events);apply(events);
+  const events=data?.events||[],warnings=data?.warnings||[];
+  docScheduleCache.set(key,{events,warnings});
+  apply(events,warnings);
+  // A changed script is worth saying out loud: the picture still plays, but it is
+  // the one built earlier. It used to fail silently, so the monitor simply stayed
+  // black with no explanation anywhere on the page.
+  if(warnings.length)toast(warnings[0]);
  }catch(e){
-  // A schedule is an accuracy upgrade, never a blocker: the segments already
-  // drive playback, so a failure here leaves the editor fully usable.
+  // The segments still drive playback, so a missing schedule must not stop the
+  // editor -- but it also must not be silent, because without a schedule the
+  // monitor has no frame to show and sitting there black looks like a crash.
+  const d=window.docTimelineData;
+  if(d&&d.id===id&&d.version===version&&token===docTimelineGeneration){
+   d.scheduleUnavailable=e.message;
+   if(!editorPlaying)docShowScheduleFailure(e.message);
+  }
+  toast('Frame-accurate playback could not be prepared: '+e.message);
  }finally{docScheduleCache.delete(key+':loading')}
+}
+// When the frame schedule cannot be built the monitor has no picture to show, and
+// that must be visible in the monitor itself. It used to be swallowed, so the
+// player was marked active, the empty-state was hidden, and the screen was black
+// with nothing anywhere saying why.
+function docShowScheduleFailure(detail){
+ const box=$('#monitor-empty');if(!box)return;
+ box.hidden=false;
+ box.innerHTML=`<strong>This timeline cannot be played yet</strong><span>${E(detail||'The frame-accurate picture schedule could not be built.')}</span>`;
+ const mode=$('#preview-mode');if(mode)mode.textContent='DOCUMENTARY PREVIEW BLOCKED';
 }
 function docNarrationSpans(start,end){const d=window.docTimelineData;if(!d)return [];return d.segments.filter(x=>x.kind==='narration'||x.kind==='picture_tail').flatMap(x=>{const a=Math.max(start,x.source_in_s),b=Math.min(end,x.source_out_s);return b>a?[{start:x.timeline_in_s+a-x.source_in_s,end:x.timeline_in_s+b-x.source_in_s}]:[]})}
 // A cue shot is a display group, not a merge of source ranges. Physical slots

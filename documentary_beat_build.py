@@ -117,8 +117,14 @@ def start(pid: str, work) -> dict:
                 job.update(status='error', error=str(error) or error.__class__.__name__,
                            detail='Could not build.')
 
+    # Snapshot *before* the thread starts. Taking it afterwards raced the worker: a
+    # build that fails instantly (a missing script or SRT) could already be in its
+    # error state when the caller read the answer, so the same POST returned either
+    # "queued" or "error" depending on thread timing. Both are true statements, but a
+    # response that changes run to run is not something a caller can rely on.
+    started = snapshot(pid)
     threading.Thread(target=run, daemon=True, name=f'beat-build-{pid}').start()
-    return snapshot(pid)
+    return started
 
 
 def snapshot(pid: str) -> dict:

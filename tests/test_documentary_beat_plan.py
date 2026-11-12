@@ -194,6 +194,33 @@ class NarrationGapTest(unittest.TestCase):
         self.assertEqual(gap['source_out_ms'] - gap['source_in_ms'], 5000)
         self.assertGreaterEqual(gap['source_in_ms'], 4000)
 
+    def test_each_hole_is_offered_different_footage(self):
+        """Every hole used to be handed the same stretch, so the build rejected its own plan.
+
+        Measured on a real 15-gap production script, this produced 105 overlapping
+        pairs and the user could not accept the proposal at all: "Proposed gap footage
+        overlaps another gap." Each hole must claim a fresh piece of picture.
+        """
+        # Narration speaks 0-4s, silences 4-5s, speaks 5-6s, silences to 7s.
+        # Two holes therefore need picture: 4-5s and 6-7s.
+        beats = [beat(1, 'narration', 0, 4000, (0, 4000)),
+                 beat(2, 'narration', 4000, 5000, (5000, 6000))]
+        report = proposal({'assets': ASSETS, 'voiceover': {'duration': 7}}, beats)
+        gaps = report['narration_gaps']
+        self.assertEqual([(g['narration_in_ms'], g['narration_out_ms']) for g in gaps],
+                         [(4000, 5000), (6000, 7000)])
+        # Before the fix both were offered the same stretch starting at 0, which the
+        # build then rejected as "Proposed gap footage overlaps another gap".
+        self.assertEqual([(g['source_in_ms'], g['source_out_ms']) for g in gaps],
+                         [(5000, 6000), (6000, 7000)])
+        for i, gap in enumerate(gaps):
+            for other in gaps[:i]:
+                if gap['source_file'] == other['source_file']:
+                    self.assertFalse(
+                        gap['source_in_ms'] < other['source_out_ms'] and
+                        gap['source_out_ms'] > other['source_in_ms'],
+                        f"gaps are offered the same footage: {other} and {gap}")
+
     def test_no_spare_footage_is_reported_not_invented(self):
         beats = [beat(1, 'narration', 0, 4000, (0, 4000))]
         report = proposal({'assets': ASSETS, 'voiceover': {'duration': 80}}, beats)

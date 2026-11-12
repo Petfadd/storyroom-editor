@@ -246,6 +246,12 @@ def narration_gaps(project, beats, frame_limit=None):
     files = {a.get('original_name') or a.get('name'): a
              for a in (project.get('assets') or []) if isinstance(a, dict)}
     proposed, issues = [], []
+    # Footage already promised to an earlier hole. Without this, every hole was
+    # proposed the same spare stretch -- typically the very start of the first file --
+    # and the build then rejected its own proposal with "Proposed gap footage overlaps
+    # another gap." Measured on a real 15-gap script: 105 overlapping pairs, and no
+    # way for the user to accept the proposal as offered.
+    claimed = {}
     for start, end in holes:
         need = end - start
         choice = None
@@ -254,15 +260,32 @@ def narration_gaps(project, beats, frame_limit=None):
             if not asset:
                 continue
             limit = _limit_ms(asset, frame_limit)
-            spare = sorted(((a, b) for a, b in unused_ranges(beats, name, limit) if b - a >= need),
-                           key=lambda r: r[1] - r[0])
+            taken = claimed.setdefault(name, [])
+            spare = []
+            for a, b in unused_ranges(beats, name, limit):
+                if b - a < need:
+                    continue
+                # Walk past every stretch an earlier hole already claimed, so each
+                # proposal is a genuinely different piece of picture.
+                cursor = a
+                for ta, tb in sorted(taken):
+                    if tb <= cursor or ta >= b:
+                        continue
+                    if ta - cursor >= need:
+                        break
+                    cursor = max(cursor, tb)
+                if b - cursor >= need:
+                    spare.append((cursor, b))
+            spare.sort(key=lambda r: r[1] - r[0])
             if spare:
                 choice = (name, spare[0])
                 break
         if choice:
+            name, (a, b) = choice
+            claimed.setdefault(name, []).append((a, a + need))
             proposed.append({'narration_in_ms': start, 'narration_out_ms': end,
-                             'source_file': choice[0], 'source_in_ms': choice[1][0],
-                             'source_out_ms': choice[1][0] + need})
+                             'source_file': name, 'source_in_ms': a,
+                             'source_out_ms': a + need})
         else:
             issues.append(
                 f'Narration from {start/1000:.3f}s to {end/1000:.3f}s ({(need)/1000:.3f}s) has no Beat, and the '

@@ -82,6 +82,27 @@ Narration Clock: 00:00:01,200 --> 00:00:02,000
    self.assertIn('100.050s',joined)
    self.assertIn('+7.050s',joined)
 
+ def test_a_pause_between_narration_beats_is_reported_as_a_pause(self):
+  """Those few hundred milliseconds are where the sound bites go.
+
+  Measured on a real script: 14 pauses of 100-700ms between narration beats, one at
+  every one of its 15 bites. They were reported as "Narration gap ... No narration was
+  trimmed", which reads as a fault in the script and sent the reader looking for one.
+  """
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);(root/'sources').mkdir();(root/'sources'/'S01.mp4').write_bytes(b'video')
+   first=self._beat('001',0,4000,'VOICE OVER',0)
+   # narration 0-4000ms, then 400ms of silence where a bite sits, then 4400-8400ms
+   second=self._beat('002',4000,8400,'VOICE OVER',4400)
+   p={'edit_mode':'documentary','production_script':{'text':first+second},
+      'voiceover':{'duration':8.8},
+      'assets':[{'id':'a1','name':'S01.mp4','original_name':'S01.mp4','path':'sources/S01.mp4','kind':'video','duration':173.8}]}
+   joined=' '.join(diagnose(p,root)['build_issues'])
+   self.assertIn('Narration pause between Beat 001 and Beat 002',joined)
+   self.assertIn('400 ms',joined)
+   self.assertIn('covers this pause',joined)
+   self.assertNotIn('Narration gap',joined)
+
  def test_documentary_readiness_does_not_claim_automatic_assembly(self):
   p={'edit_mode':'documentary','srt':{'blocks':[]},'voiceover':{'name':'n'},'assets':[{}],'production_script':{'text':'example'},'scenes':[],'auto_assemble_uploads':True}
   r=automatic_readiness(p);self.assertEqual(r['status'],'paused');self.assertIn('not implemented',r['detail'])

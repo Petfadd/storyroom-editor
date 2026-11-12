@@ -103,6 +103,7 @@ function beatProposalHTML(){
  const d=beatProposal;if(!d)return '<p>Loading the Beat picture plan…</p>';
  return `<p class="small">Every scripted Beat keeps its own narration clock. Where the scripted picture range cannot cover that clock, the change is listed below and saved with the storyboard. Nothing is re-used outside the file the script names unless you choose it.</p>
  <p>Planned picture: <strong>${(d.planned_ms/60000).toFixed(3)} min</strong> · original narration ${(d.narration_ms/60000).toFixed(3)} min</p>
+ ${d.replaces_beat_timeline?`<div class="notice warn"><strong>This replaces the saved Beat timeline.</strong><p class="small">${d.beat_timeline_stale?'The production script changed after that timeline was built, which is why it can no longer be played or exported.':'The saved timeline is being rebuilt for the current script.'} Building replaces its saved sound bites and its picture slots; the script, narration, SRT and footage are not changed.</p></div>`:''}
  ${d.issues.length?`<div class="notice warn"><strong>${d.issues.length} Beat(s) need your decision</strong><ul class="issues">${d.issues.map(x=>`<li>${E(x)}</li>`).join('')}</ul>
  <label>Use a different uploaded video for Beat ${E(beatBlocker())}<select onchange="beatPickSource(this.value)"><option value="">Choose a video…</option>${d.assets.map(a=>`<option value="${E(a.name)}" ${beatProposalFocus===a.name?'selected':''}>${E(a.name)} · ${a.duration.toFixed(1)}s</option>`).join('')}</select></label></div>`:
  `<div class="notice"><strong>Every Beat fits inside an uploaded file.</strong><p class="small">Review the adjustments below, then build.</p></div>`}
@@ -112,7 +113,7 @@ function beatProposalHTML(){
  ${d.consecutive_bites.length?`<details open><summary>Sound bites with no narration between them</summary><p class="small">Beat ${d.consecutive_bites.map(p=>p.join(' and ')).join(', ')} sit at the same pause. They will play back to back.</p></details>`:''}
  <label class="check-label"><input type="checkbox" id="beat-confirm" ${d.issues.length?'disabled':''}> I have read these picture-range changes and the repeated-footage list.</label>
  <div id="beat-build-state" aria-live="polite"></div>
- <p><button type="button" onclick="buildBeatStoryboard()" ${d.issues.length?'disabled':''}>Build the Beat timeline</button> <button type="button" onclick="openDocumentary()">Open the documentary tools</button></p>
+ <p><button type="button" onclick="buildBeatStoryboard()" ${d.issues.length?'disabled':''}>${d.replaces_beat_timeline?'Rebuild the Beat timeline':'Build the Beat timeline'}</button> <button type="button" onclick="openDocumentary()">Open the documentary tools</button></p>
  <p class="small">This builds a review timeline only. Content, identity, speaker and reuse rights still need your review, and nothing is exported yet.</p>`;
 }
 async function openBeatProposal(){
@@ -185,7 +186,8 @@ async function buildBeatStoryboard(){
  if(holder)holder.innerHTML=beatBuildHTML({percent:0,detail:'Reading the scripted Beats'});
  try{
   const job=await api(`/api/projects/${P.id}/documentary-beat-storyboard`,'POST',{
-   confirmed:true,project_version:beatProposal.project_version,plan_revision:0,script_sha256:beatProposal.script_sha256,
+   confirmed:true,project_version:beatProposal.project_version,plan_revision:beatProposal.plan_revision||0,script_sha256:beatProposal.script_sha256,
+   replace_beat_timeline:beatProposal.replaces_beat_timeline===true,
    approved_gaps:beatProposal.narration_gaps||[],approved_overlaps:beatProposal.repeated_ranges,allow_silent_tail:false,
    approve_consecutive_bites:beatProposal.consecutive_bites.length>0,
    scripted_review_beat:(beatProposal.issues.length?beatBlocker():null)||null,

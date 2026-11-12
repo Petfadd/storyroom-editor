@@ -41,7 +41,10 @@ def diagnose(project,root):
         # Match the whole stated line before splitting on the arrow. Searching for
         # a clock pair anywhere in the line made "PAUSED at 00:00:32,000" read as
         # the start of a narration span, which corrupted the beat before it.
-        stated=re.search(r'^Narration Clock:\s*([^\r\n]*)$',body,re.M|re.I)
+        # Either label. The beat reader accepts "Narration Clock" and "VO Clock", so
+        # this reader must too, or a script written with VO Clock was reported as
+        # having no narration at all and every check downstream went quiet.
+        stated=re.search(r'^(?:Narration Clock|VO Clock):\s*([^\r\n]*)$',body,re.M|re.I)
         if stated:
             span=re.fullmatch(r'\s*'+CLOCK+r'\s*(?:-->|→|->)\s*'+CLOCK+r'\s*',_strip_prefix(stated.group(1)))
             if span:
@@ -49,11 +52,28 @@ def diagnose(project,root):
                 except ValueError:issues.append(f'Beat {h.group(1)} contains an invalid narration timecode.')
     if intervals:issues.append('Script names missing or ambiguous source files: '+', '.join(intervals)+'. Filenames must match uploaded files exactly; no substitution was made.')
     if narration:
-        if narration[0][1]>0:issues.append(f'Narration before Beat {narration[0][0]} is not assigned: 0.000–{narration[0][1]/1000:.3f}s.')
+        # A pause between two narration beats is where a sound bite goes. Those pauses
+        # are the plan working, not a fault, so they are reported as notes with the
+        # bite that fills them. Calling them issues sent the reader hunting for a
+        # problem in a script that was already correct.
+        def bite_at(point):
+            return [b for b in (locals().get('bite_pauses') or []) if abs(b[0]-point)<1]
+        if narration[0][1]>0:
+            issues.append(f'Narration before Beat {narration[0][0]} is not assigned: '
+                          f'0.000\u2013{narration[0][1]/1000:.3f}s. If a sound bite opens the film this is '
+                          f'expected; otherwise the first narration clock should start at zero.')
         for previous,current in zip(narration,narration[1:]):
             if current[1]!=previous[2]:
-                kind='gap' if current[1]>previous[2] else 'overlap'
-                issues.append(f'Narration {kind} between Beat {previous[0]} and Beat {current[0]}: {previous[2]/1000:.3f}s to {current[1]/1000:.3f}s. No narration was trimmed or retimed.')
+                if current[1]>previous[2]:
+                    issues.append(f'Narration pause between Beat {previous[0]} and Beat {current[0]}: '
+                                  f'{previous[2]/1000:.3f}s to {current[1]/1000:.3f}s '
+                                  f'({(current[1]-previous[2]):.0f} ms). A sound bite at '
+                                  f'{previous[2]/1000:.3f}s covers this pause on the finished timeline. '
+                                  f'Nothing was trimmed or retimed.')
+                else:
+                    issues.append(f'Narration overlap between Beat {previous[0]} and Beat {current[0]}: '
+                                  f'{previous[2]/1000:.3f}s to {current[1]/1000:.3f}s. '
+                                  f'No narration was trimmed or retimed; fix the two clocks in the script.')
         duration=(project.get('voiceover') or {}).get('duration')
         # A few milliseconds is encoder rounding between the narration file and
         # the SRT it came from, not an unaccounted passage of speech.

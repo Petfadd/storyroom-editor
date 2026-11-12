@@ -81,10 +81,14 @@ def plan(project, root, sound_plan, decisions=None):
             result['burn_captions'] = burn_captions
             if not burn_captions:
                 continue
-            # On-screen text belongs to narration only. A sound bite and ordinary
-            # footage carry picture and their own sound, never burned-in words:
-            # not the words spoken in the bite and not the script's caption label.
-            if event['kind'] != 'narration' or not event['caption']:
+            # The script's own On-screen Caption field is what the writer asked to
+            # appear on screen, and the supplied production workflow says the editor
+            # reads that field as a caption -- for a sound bite as much as for a
+            # narration beat. A bite used to be skipped outright, so a script that
+            # named its speaker on every bite rendered with no name on any of them.
+            # The words SPOKEN inside the bite are still never transcribed here; this
+            # only shows the caption the writer wrote for that beat.
+            if not event['caption']:
                 continue
             if (result['captions'] and result['captions'][-1]['text'] == event['caption']
                 and result['captions'][-1]['timeline_out_ms'] == event['timeline_in_ms']):

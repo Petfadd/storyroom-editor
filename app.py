@@ -435,7 +435,15 @@ def check(p,final=False):
  from production import document
  from edl import signature
  if p['scenes'] and (p.get('picture_plan') or p.get('assembly_signature')) and p.get('assembly_signature')!=signature(p):errors.append('Editing inputs changed. Rebuild the storyboard to apply the current SRT block map / production script.')
- if p.get('production_script') and p['scenes'] and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
+ # A Beat storyboard records the script it was built to inside its own review record,
+ # and that record travels with the scenes. The generic hash below covers the whole
+ # document (brief, SRT, assets, scenes) and is recalculated every time anything is
+ # saved, so for a Beat storyboard it disagrees with itself as soon as a bite is
+ # moved or a scene is approved. It was blocking export with "Production script
+ # changed" on a timeline nobody had edited. For this storyboard type the Beat
+ # record is authoritative; a genuinely stale script is reported as a warning by the
+ # frame audit, which names the beats that moved.
+ if p.get('production_script') and p['scenes'] and not p.get('documentary_beat_review') and p.get('edit_script_hash')!=hashlib.sha256(document(p).encode()).hexdigest():errors.append('Production script changed. Rebuild the storyboard to apply the new instructions.')
  # Narration is optional. A programme may be carried by its text alone; what is not
  # allowed is a narration track whose length disagrees with the picture it sits under.
  if not p['scenes']:errors.append('Build the storyboard from the imported SRT.' if p.get('srt') else 'Import an SRT and build the storyboard.')
@@ -2375,7 +2383,18 @@ def documentary_beat_proposal(pid):
    from documentary_beat_plan import frame_limits
    data=proposal(p,beats,request.args.get('scripted_review_beat'),request.args.get('scripted_review_source'),frame_limits(folder(pid),p['assets']))
   except ValueError as e:raise BadRequest(str(e))
+  # The client used to send plan_revision:0 for every project. Once a plan holds
+  # bites its revision is never 0, so every rebuild was refused as "the plan
+  # changed; review the proposal again" -- with the proposal it had just shown --
+  # and a script edited after a build could never be rebuilt at all. Report the
+  # revision the build will be checked against and let the client echo it back.
+  from documentary import load_plan
+  current=load_plan(folder(pid))
+  recorded=(p.get('documentary_beat_review') or {}).get('script_sha256') or ''
+  changed=bool(recorded) and recorded!=hashlib.sha256(script.encode()).hexdigest()
   return jsonify({'project_version':p.get('updated'),'script_sha256':hashlib.sha256(script.encode()).hexdigest(),
+                  'plan_revision':current['revision'],'replaces_beat_timeline':bool(current['bites']),
+                  'beat_timeline_stale':changed,
                   'assets':[{'name':a.get('original_name') or a.get('name'),'duration':a.get('duration')} for a in p.get('assets',[])],
                   **data})
 
@@ -2396,7 +2415,12 @@ def _documentary_beat_build_work(pid, root, data, report):
  if not p.get('voiceover'):raise ValueError('Upload the narration before building the Beat timeline.')
  current=load_plan(root)
  if data.get('project_version')!=p.get('updated') or data.get('plan_revision')!=current['revision']:raise ValueError('The project or sound-bite plan changed; review the proposal again.')
- if current['bites']:raise ValueError('Existing sound bites will not be replaced automatically.')
+ # A rebuild replaces this project's own Beat timeline. Refusing whenever any bite
+ # existed meant a script corrected after a build could never be rebuilt and the
+ # storyboard stayed blocked for good. Only an unrelated saved plan is refused.
+ record=p.get('documentary_beat_review') or {}
+ if current['bites'] and not record:raise ValueError('Existing sound bites will not be replaced automatically; remove them in the documentary tools first.')
+ if current['bites'] and data.get('replace_beat_timeline') is not True:raise ValueError(f"This rebuild replaces the saved Beat timeline and its {len(current['bites'])} sound bites. Confirm the replacement in the Beat picture plan first.")
  script=(p.get('production_script') or {}).get('text','')
  if data.get('script_sha256')!=hashlib.sha256(script.encode()).hexdigest():raise ValueError('The production script changed; review the proposal again.')
  from documentary_beats import read_beats
@@ -2410,7 +2434,23 @@ def _documentary_beat_build_work(pid, root, data, report):
  if issues:raise ValueError(' '.join(issues))
  report('fit',1.0)
  fitted={b['label']:{'source_file':b['source_file'],'source_in_ms':b['source_in_ms'],'source_out_ms':b['source_out_ms']} for b in beats}
- staged,plan=prepare(p,root,data.get('approved_gaps'),data.get('approved_overlaps'),data.get('allow_silent_tail') is True,lambda path:probe(path)['has_audio'],beats=beats,allow_consecutive_bites=data.get('approve_consecutive_bites') is True,fitted_ranges=fitted)
+ # A confirmed replacement starts from an empty picture plan. `prepare` refuses to
+ # overwrite an existing storyboard on its own, which is right for an accidental
+ # build and wrong here: the user has just confirmed this exact replacement, and
+ # without clearing it the rebuild could never run. The old scenes are kept in
+ # memory (`previous`) and put back if anything below fails, so a failed rebuild
+ # never leaves the project without its timeline.
+ previous={'scenes':p.get('scenes') or [],'review':p.get('documentary_beat_review')}
+ replacing=current['bites'] and data.get('replace_beat_timeline') is True
+ if replacing:
+  p['scenes']=[];p.pop('documentary_beat_review',None)
+ try:
+  staged,plan=prepare(p,root,data.get('approved_gaps'),data.get('approved_overlaps'),data.get('allow_silent_tail') is True,lambda path:probe(path)['has_audio'],beats=beats,allow_consecutive_bites=data.get('approve_consecutive_bites') is True,fitted_ranges=fitted)
+ except Exception:
+  if replacing:
+   p['scenes']=previous['scenes']
+   if previous['review'] is not None:p['documentary_beat_review']=previous['review']
+  raise
  staged['documentary_beat_adjustments']=list(adjustments)+list(staged.get('documentary_beat_adjustments') or [])
  report('prepare',1.0)
  assets={(a.get('original_name') or a.get('name')):a for a in p['assets']}
@@ -2585,8 +2625,10 @@ def documentary_beat_playback_schedule(pid):
    # deterministic for a given project version, so a second request must not pay
    # for the same walk again -- the browser asks again on every reload.
    cached=SCHEDULE_CACHE.get(pid)
+   notes=[]
    if cached and cached[0]==key:
     events=cached[1]
+    notes=list(cached[2] if len(cached)>2 else [])
    else:
     # The audit walks every source frame (~16s here). Keeping it only in memory
     # meant every server restart paid for it again, and the browser asks on each
@@ -2594,10 +2636,23 @@ def documentary_beat_playback_schedule(pid):
     # the project and reused across restarts.
     events=_schedule_from_disk(pid,key)
     if events is None:
-     events=playback_schedule(p,root,plan)
+     events=playback_schedule(p,root,plan,notes)
      _schedule_to_disk(pid,key,events)
-    SCHEDULE_CACHE[pid]=(key,events)
-   return jsonify({'project_version':p.get('updated'),'plan_revision':plan['revision'],'events':events})
+    SCHEDULE_CACHE[pid]=(key,events,notes)
+   # A schedule served from disk or memory was not audited again, so its notes are
+   # rebuilt from the cheap part only: comparing the recorded script hash. The frame
+   # walk is what took a minute and it cannot change the note.
+   if not notes:
+    try:
+     from documentary_frame_audit import stale_script_message
+     record=p.get('documentary_beat_review') or {}
+     text=(p.get('production_script') or {}).get('text','')
+     recorded=record.get('script_sha256')
+     if text and recorded and recorded!=hashlib.sha256(text.encode()).hexdigest():
+      notes=[stale_script_message(p,record,text)]
+    except (ValueError,OSError,KeyError,TypeError):
+     notes=[]
+   return jsonify({'project_version':p.get('updated'),'plan_revision':plan['revision'],'events':events,'warnings':notes})
   except (ValueError,OSError,KeyError,TypeError) as e:raise BadRequest(str(e))
 
 @app.post('/api/projects/<pid>/documentary-review-preview')
@@ -2690,8 +2745,20 @@ _DOCUMENTARY_DRAFT_BLOCKER='This is a script review draft, not a finished edit. 
 
 def documentary_final_errors(p,root,plan):
  from documentary_cue_groups import groups
- errors=[]
- if not p.get('documentary_beat_review'):return ['Final documentary export currently supports script-driven Beat storyboards only.']
+ errors=[];notes=[]
+ if not p.get('documentary_beat_review'):return (['Final documentary export currently supports script-driven Beat storyboards only.'],notes)
+ # A script edited after the build is not a broken storyboard: the saved timeline is
+ # internally consistent and can be played and checked. Say so as a warning naming
+ # the beats that moved, so the reader can rebuild when they mean to, instead of
+ # discovering it only as an unexplained failure at the very end of the workflow.
+ record=p.get('documentary_beat_review') or {}
+ _text=(p.get('production_script') or {}).get('text','')
+ if _text and record.get('script_sha256') and record['script_sha256']!=hashlib.sha256(_text.encode()).hexdigest():
+  try:
+   from documentary_frame_audit import stale_script_message
+   notes.append(stale_script_message(p,record,_text))
+  except (ValueError,KeyError,TypeError):
+   notes.append('The production script changed after this Beat timeline was built; rebuild it to put the current script on screen.')
  # A Beat storyboard has its own source-range, cue and sound-bite validation.
  # Do not mutate the draft flag or infer approvals from it.
  errors.extend(e for e in check(p,True)['errors'] if e!=_DOCUMENTARY_DRAFT_BLOCKER)
@@ -2708,7 +2775,7 @@ def documentary_final_errors(p,root,plan):
   if not a:errors.append('A used picture or sound-bite source is missing.');continue
   review=a.get('reuse_review') or {}
   if review.get('decision')!='approved' or review.get('attested') is not True or not str(review.get('details') or '').strip():errors.append(f"{a.get('original_name') or a.get('name')}: record explicit reuse-rights approval and details.")
- return list(dict.fromkeys(errors))
+ return list(dict.fromkeys(errors)),list(dict.fromkeys(notes))
 
 @app.get('/api/projects/<pid>/documentary-export-readiness')
 def documentary_export_readiness(pid):
@@ -2719,7 +2786,7 @@ def documentary_export_readiness(pid):
   report=check(p,True);errors=list(report['errors']);warnings=[];frame_preflight=None;implemented=bool(p.get('documentary_beat_review'))
   try:
    plan=annotate_plan(p,root,load_plan(root));build_timeline(p,plan)
-   if implemented:errors=documentary_final_errors(p,root,plan)
+   if implemented:errors,notes=documentary_final_errors(p,root,plan);warnings.extend(notes)
    if not plan['bites']:errors.append('Add at least one sound bite to the documentary plan.')
    if p.get('documentary_beat_review'):
     frame_preflight=documentary_frame_preflight(pid,copy.deepcopy(p),root,copy.deepcopy(plan))
@@ -2788,8 +2855,8 @@ def start_documentary_final(pid,p,data):
  if data.get('omit_fade') is not True and data.get('fade') is not True:
   raise BadRequest('Choose whether this export includes the scripted fade.')
  try:
-  plan=annotate_plan(p,root,load_plan(root));errors=documentary_final_errors(p,root,plan)
-  if errors:return jsonify({'errors':errors}),400
+  plan=annotate_plan(p,root,load_plan(root));errors,_warnings=documentary_final_errors(p,root,plan)
+  if errors:return jsonify({'errors':errors,'warnings':_warnings}),400
   width,height=output_size(p.get('format','landscape'),p.get('size'))
   burn_srt=data.get('srt_subtitles') is True;subtitle_ass=None;adjusted=None
   if burn_srt:
